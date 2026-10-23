@@ -73,8 +73,4 @@ Use the MCP target dropdown in the chat bar to choose **Roblox Studio** or a con
 - Control play-testing
 - **Remember your project across sessions** persistent project memory saved inside your place
 
----
 
-Credit: the idea for connecting other MCP servers (Blender, Sketchfab, etc.) alongside Roblox Studio came from [javnpa](https://github.com/javnpa).
-
-Credit: macOS/Linux support contributed by [archivealf](https://github.com/archivealf).
