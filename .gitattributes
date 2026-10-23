@@ -1,0 +1,5 @@
+# Shell launchers MUST keep LF endings: a CRLF checkout makes bash fail on
+# macOS/Linux with "$'\r': command not found". The repo is developed on
+# Windows (autocrlf), so pin these explicitly.
+*.command text eol=lf
+*.sh       text eol=lf
