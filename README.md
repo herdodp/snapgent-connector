@@ -9,8 +9,6 @@ Control Roblox Studio with AI directly from your browser - read/edit scripts, ru
 
 Nine AI providers are supported: **DeepSeek** (chat.deepseek.com, recommended), **ChatGPT** (chatgpt.com), **Claude** (claude.ai), **Google Gemini** (gemini.google.com), **Kimi** (kimi.ai, Moonshot AI), **GLM** (chat.z.ai, Z.ai), **Qwen** (chat.qwen.ai), **Arena** (arena.ai, a multi-model playground) and **Meta AI** (meta.ai). On ChatGPT and Claude, screenshots and image input are disabled in this integration. Gemini and Kimi can be unstable: Gemini tends to stop using the Roblox tools in long sessions, and Kimi sometimes uses its own native tools instead of the Roblox commands. On Arena, use **Direct** mode (snapgentV3 only supports Direct; it blocks Start in Battle / Side-by-Side / Agent modes). DeepSeek is the recommended provider.
 
-> 💬 **Stuck? Join the [Discord community](https://discord.gg/9aNyZsMWcb)** get help, share feedback, and follow updates.
-
 > *Also known as: snapgentV3 Roblox, snapgentV3 free download, Roblox ChatGPT agent, Roblox DeepSeek agent, Roblox Gemini agent, Roblox Kimi agent, Roblox GLM agent, Roblox Qwen agent, Roblox Arena agent, Roblox Meta AI agent, Roblox Studio AI automation, Luau AI, MCP Roblox, lemonade alternative free, lemonade.gg alternative, free Roblox AI agent, free lemonade roblox alternative*
 
 ## ⚠️ snapgentV3 is Free Beware of Paid Copycats
@@ -28,8 +26,6 @@ AI chat (ChatGPT / DeepSeek / Gemini / Kimi / GLM / Qwen / Arena / Meta AI, in y
 The extension runs inside the chat page (ChatGPT, DeepSeek, Gemini, Kimi, GLM, Qwen, Arena or Meta AI). When you type a request, it sends commands to the Bridge running on your PC, which drives Roblox Studio through the built-in MCP server.
 
 ## Setup
-
-> 📺 **Lost? Watch the [setup tutorial on YouTube](https://youtu.be/kPKiZLZ9_Ps) it covers every step below.**
 
 ### 1. Download the zip and install the extension
 
@@ -51,8 +47,6 @@ Open Studio and load a Place, then enable MCP (first time only):
 - Click **Manage MCP Servers**
 - Click **Enable Studio as MCP Server**
 
-> Not sure where to find these options? The [video tutorial](https://youtu.be/kPKiZLZ9_Ps) shows exactly where to click.
-
 ### 3. Run the Bridge
 
 - **Windows:** double-click `start.bat` inside the extracted folder.
@@ -69,10 +63,6 @@ Use the MCP target dropdown in the chat bar to choose **Roblox Studio** or a con
 > Only works on chat.deepseek.com, chatgpt.com, claude.ai, gemini.google.com, kimi.ai, chat.z.ai, chat.qwen.ai, arena.ai and meta.ai - it will not work on any other site.
 > On Arena, keep the mode dropdown on **Direct** - snapgentV3 blocks Start in Battle / Side-by-Side / Agent modes (it only drives a single Direct reply).
 > Gemini and Kimi can be unstable (model behavior, not the extension): Gemini may stop using the Roblox tools after a while, and Kimi may use its own native tools instead. If the AI starts answering in plain text instead of acting, remind it to use the commands or start a new session.
-### 5. Watch the setup tutorial
-
-[Watch the setup tutorial on YouTube](https://youtu.be/kPKiZLZ9_Ps)
-
 ## What the AI can do
 
 - Read and edit scripts
@@ -116,10 +106,6 @@ See [CHANGELOG.md](CHANGELOG.md) for older releases.
 - Roblox Studio (MCP support built-in)
 - Microsoft Edge or Chrome
 - Python 3.9+ (installed automatically on Windows, or install it yourself on macOS - see [python.org/downloads](https://www.python.org/downloads/))
-
-## Support
-
-snapgentV3 is free. If it saves you time: [Ko-fi](https://ko-fi.com/sebattfg) - Robux tip passes available in the extension panel
 
 ---
 

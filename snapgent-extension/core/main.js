@@ -78,18 +78,8 @@
     }, EXPECT);
   }
 
-  // Ko-fi tip link.
-  const KOFI_URL = "https://ko-fi.com/sebattfg";
   // GitHub releases page - where users download the Bridge + start.bat.
   const GITHUB_URL = "https://github.com/herdodp/snapgent-connector";
-  // Roblox "tip" Game Passes - the native currency for the audience.
-  const ROBUX_PASSES = [
-    { robux: 30, id: 1865342947 },
-    { robux: 100, id: 1866782815 },
-    { robux: 300, id: 1869176990 },
-    { robux: 1000, id: 1865192973 },
-  ];
-  const passUrl = (id) => `https://www.roblox.com/game-pass/${id}`;
   // AI chat sites snapgentV3 works on. Keep in sync with manifest.json
   // content_scripts and background.js PROVIDER_URLS when adding a provider.
   const AI_SITES = [
@@ -2825,10 +2815,6 @@
         sites += current
           ? `<div class="zs-site-opt zs-site-here">${label}<span class="zs-site-badge">active</span></div>`
           : `<button class="zs-site-opt" data-u="${s.url}">${label}<span class="zs-site-go">&rarr;</span></button>`;
-      }
-      let passes = "";
-      for (const p of ROBUX_PASSES) {
-        passes += `<button class="zs-tip-opt zs-tip-rbx" data-u="${passUrl(p.id)}"><span class="zs-rbx-cur">R$</span>${p.robux}</button>`;
       }
       const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
       const mergedServers = mergedMcpServers();

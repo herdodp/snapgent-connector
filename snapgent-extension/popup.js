@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const KOFI_URL = "https://ko-fi.com/sebattfg";
 const SUPPORTED_HOSTS = [
   "chat.deepseek.com", "deepseek.com", "chatgpt.com", "chat.openai.com", "claude.ai",
   "gemini.google.com", "www.kimi.ai", "kimi.ai",
@@ -45,13 +44,9 @@ document.getElementById("restart").addEventListener("click", (e) => {
     setTimeout(refresh, 600);
   });
 });
-document.getElementById("kofi").addEventListener("click", () => {
-  chrome.tabs.create({ url: KOFI_URL });
-});
 document.getElementById("settings").addEventListener("click", () => {
-  // Same mechanism as the Ko-fi button (chrome.tabs), but tries the in-page
-  // panel on an already-open supported AI tab first, so opening it doesn't
-  // require a conversation to already be started there.
+  // Tries the in-page panel on an already-open supported AI tab first, so
+  // opening it doesn't require a conversation to already be started there.
   chrome.tabs.query({}, (tabs) => {
     const active = tabs.find((t) => t.active && t.url && SUPPORTED_HOSTS.some((h) => t.url.includes(h)));
     const anySupported = active || tabs.find((t) => t.url && SUPPORTED_HOSTS.some((h) => t.url.includes(h)));

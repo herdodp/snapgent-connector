@@ -24,8 +24,6 @@ Use the **MCP target** selector in the chat bar to choose Roblox Studio, VS Code
 6. Click **Start session** in the snapgentV3 panel
 7. Type what you want to build
 
-📺 [Watch the setup tutorial](https://youtu.be/kPKiZLZ9_Ps)
-
 ## Architecture (for contributors)
 
 The extension is split between a provider-agnostic core and per-AI-site providers:
@@ -74,6 +72,3 @@ Smoke tests (plain Node, no dependencies - run them from this directory):
 
 Both print `PASS`/`FAIL` per case and exit non-zero on failure.
 
-## Support
-
-☕ [Ko-fi](https://ko-fi.com/sebattfg) - Robux tip passes available in the extension panel
