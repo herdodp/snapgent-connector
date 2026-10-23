@@ -12,11 +12,11 @@ Use the **MCP target** selector in the chat bar to choose Roblox Studio, VS Code
 1. Go to `edge://extensions` (Edge) or `chrome://extensions` (Chrome)
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select the `zeroscript-extension` folder
+4. Select the `snapgent-extension` folder
 5. The extension is now active
 
 **Then set up the Bridge:**
-1. **Download the Bridge** from the [GitHub releases page](https://github.com/sebattfg/ZeroScript-Free)
+1. **Download the Bridge** from the [GitHub releases page](https://github.com/herdodp/snapgent-connector/releases)
 2. **Open Roblox Studio** and load a Place
 3. **Enable the MCP server in Roblox Studio** (first time only): click **Assistant AI** in the top bar, then **...** > **Manage MCP Servers** > **Enable Studio as MCP Server**
 4. **Run the Bridge** - double-click `start.bat` (Windows) or `MacOS_Start.command` (macOS); a small window opens, the Bridge is running. On macOS, the first launch shows a Gatekeeper warning (normal for any downloaded script): click **Done**, then **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**.
