@@ -124,6 +124,9 @@ The MCP target selector can also connect to VS Code or another MCP server after 
 
 **③ Start the bridge**
 
+- Copy `config.example.json` to `config.json` and replace the example paths with
+  the MCP server paths and project folder on your computer. `config.json` is
+  local-only and is not tracked by Git.
 - **Windows** — double-click `start.bat`.
 - **macOS** — double-click `MacOS_Start.command`.
 
@@ -184,7 +187,8 @@ snapgent-full/
 │   ├── manifest.json          # Manifest V3 configuration
 │   └── test-*.js              # Smoke tests
 ├── assets/                    # Project images
-├── config.json                # Local MCP server configuration
+├── config.example.json        # Template for your local MCP configuration
+├── config.json                # Your local configuration (not tracked by Git)
 ├── start.bat                  # Windows bridge launcher
 ├── MacOS_Start.command        # macOS bridge launcher
 ├── bridge.exe                 # Windows local bridge

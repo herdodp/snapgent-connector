@@ -3,6 +3,7 @@ Compressed/
 Deprecated/
 ExtensionPresentation/
 presentation/
+config.json
 
 # Zip files
 *.zip

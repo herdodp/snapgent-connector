@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "roblox": {
+      "command": "C:/path/to/Roblox/Versions/version-<version>/StudioMCP.exe",
+      "args": ["--stdio"]
+    },
+    "vscode": {
+      "command": "vscode_mcp.exe",
+      "args": [],
+      "env": {
+        "VSCODE_WORKSPACE_PATH": "C:/path/to/your/project"
+      }
+    }
+  }
+}
