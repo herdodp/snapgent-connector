@@ -2,20 +2,10 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
-## [1.5.5] - 2026-09-10
+## [3.0.0] - 2026-10-25
 
-### Fixed
-- **DeepSeek: the agent starts again on DeepSeek's new unified model.**
-  DeepSeek merged Instant, Expert and Vision into a single model and removed
-  the model picker from the chat box. snapgentV3 waited for one of those tabs
-  to be selected before starting, so "Start Roblox agent" stopped with
-  "DeepSeek mode not ready". A chat box with no model picker is now recognised
-  as the unified model: snapgentV3 switches Search off as before, leaves
-  DeepThink on, and starts.
-- **DeepSeek: screenshots work on every chat.** Images used to need the Vision
-  tab, which no longer exists, so `screen_capture` was refused. The unified
-  model reads images, and snapgentV3 now sends them - one capture or several
-  in a row. Older conversations still marked Instant or Expert stay text-only.
+### Changed
+- Align the extension version with the SnapgentV3 release line.
 
 ## [1.5.4] - 2026-09-06
 

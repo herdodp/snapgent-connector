@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "snapgentV3 × Roblox Studio Agent",
-  "version": "1.5.5",
+  "version": "3.0.0",
   "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Kimi, GLM, Qwen, Arena, Meta AI or Ptero into a Roblox Studio agent that drives Studio through a local bridge.",
   "permissions": ["storage"],
   "host_permissions": [
