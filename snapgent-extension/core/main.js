@@ -2560,7 +2560,7 @@
       // One consolidated status bar, anchored just above the site's composer
       // (positioned every frame by placeBar). It carries everything: live status,
       // the primary action (Start / Stop) and a "more"
-      // menu (other AI sites, custom prompt, support, Discord). No floating panel,
+      // menu (other AI sites and options). No floating panel,
       // no overlay on the input - the composer stays fully usable for plain chat.
       root.innerHTML = `
         <div id="zs-bar">
@@ -2574,7 +2574,7 @@
             </select>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </label>
-          <button id="zs-switch" aria-label="Switch AI and options" title="Switch AI, custom prompt, support"><span id="zs-switch-name"></span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <button id="zs-switch" aria-label="Switch AI and options" title="Switch AI and options"><span id="zs-switch-name"></span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
         </div>
         <div id="zs-menu" hidden></div>
         ${P.unstableWarning ? `<button id="zs-unstable" aria-label="Provider may be unstable" hidden>⚠ unstable</button>` : ""}
@@ -2632,9 +2632,8 @@
           // Rebuild on every open, not just once at page load: the initial
           // buildMenu() call runs before the bridge status (server list/health)
           // has arrived, so the very first render always shows an empty/stale
-          // MCP servers section otherwise - nothing ever refreshed it after.
+          // target selector otherwise - nothing ever refreshed it after.
           buildMenu();
-          syncMenuPrompt();
           // On a FRESH open, menuEl has no max-height yet - that's only applied by
           // placeBar()'s positioning pass, which runs on the next rAF tick (it's a
           // separate loop, not synchronous with this click). Without it the panel
@@ -2678,43 +2677,28 @@
       chrome.storage.local.get("zsCustomPrompt", (r) => {
         if (r && typeof r.zsCustomPrompt === "string") {
           customPrompt = r.zsCustomPrompt;
-          syncMenuPrompt();
         }
       });
     } catch {}
     function getCustomPrompt() { return customPrompt; }
-    // Reflect the saved value back into the menu textarea (unless being edited).
-    function syncMenuPrompt() {
-      const ta = root && root.querySelector("#zs-set-text");
-      if (ta && document.activeElement !== ta) ta.value = customPrompt;
-    }
 
     // ── Custom MCP servers (addons) ─────────────────────────────────────────
-    // User-added MCP servers shown at the very bottom of the menu. These are
-    // ADDONS: the Roblox server stays primary and is never in this list. Each
-    // entry is { id, name, command } - `command` is the raw string the user
-    // typed (split into command+args when sent to the bridge). The bridge writes
-    // them to config.json and restarts to load them; this local list only drives
-    // the menu UI and is kept in sync with the bridge's server health.
+    // Cached names for user-added MCP servers. The bridge remains the source of
+    // truth; this cache keeps addon names available in the target selector.
     let customMcpServers = [];
     try {
       chrome.storage.local.get("zsCustomMcpServers", (r) => {
         if (r && Array.isArray(r.zsCustomMcpServers)) {
           customMcpServers = r.zsCustomMcpServers;
-          if (!menuEl.hidden) buildMenu();
         }
       });
     } catch {}
-    function getCustomMcpServers() { return customMcpServers; }
     function saveCustomMcpServers() {
       try { chrome.storage.local.set({ zsCustomMcpServers: customMcpServers }); } catch {}
     }
     // The bridge (config.json + live health) is the SOURCE OF TRUTH for which
-    // addon servers actually exist - chrome.storage.local is just a display-name
-    // cache, and the two CAN drift (e.g. storage cleared, or config.json edited
-    // by hand). Rendering from the bridge's live list means an addon never
-    // "disappears" from the menu while still running - and self-heals the local
-    // cache the moment we see a server it didn't know about.
+    // addon servers actually exist. Self-heal the local display-name cache when
+    // a configured server isn't already known.
     function mergedMcpServers() {
       const live = ((A.bridge && A.bridge.servers) || []).filter((sv) => sv.id !== "roblox");
       const byId = new Map(customMcpServers.map((s) => [s.id, s]));
@@ -2771,41 +2755,8 @@
       targetSelect.value = id;
       targetSelect.disabled = !!(A.started || A.starting || A.running);
     }
-    // Derive a config-safe server id from a display name (roblox is reserved).
-    function mcpSlug(name) {
-      let s = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-      if (!s || s === "roblox") s = `addon-${s || "server"}`;
-      let id = s, n = 2;
-      while (customMcpServers.some((x) => x.id === id)) id = `${s}-${n++}`;
-      return id;
-    }
-    // Split a raw "command with args" string into command + args (shell-lite:
-    // whitespace-separated, honouring "double" and 'single' quotes).
-    function splitCommand(raw) {
-      const parts = String(raw || "").match(/"[^"]*"|'[^']*'|\S+/g) || [];
-      const clean = parts.map((p) => p.replace(/^["']|["']$/g, ""));
-      return { command: clean[0] || "", args: clean.slice(1) };
-    }
-    // Wait for the bridge to come back after its restart (config reload). Resolves
-    // true once reconnected (optionally once `id` shows up in server health).
-    async function waitForBridgeBack(id, timeoutMs = 15000) {
-      const t0 = Date.now();
-      // Give the bridge a moment to actually drop before we start polling, so we
-      // don't instantly match the pre-restart "connected" state.
-      await new Promise((r) => setTimeout(r, 1200));
-      while (Date.now() - t0 < timeoutMs) {
-        const s = await bg({ type: "status" });
-        if (s && s.connected) {
-          if (!id || (Array.isArray(s.servers) && s.servers.some((x) => x.id === id))) return true;
-        }
-        await new Promise((r) => setTimeout(r, 700));
-      }
-      return false;
-    }
-
     // ── The "more" menu (⋯) ─────────────────────────────────────────────────
-    // One popover holding every secondary control: other AI sites, the custom
-    // prompt, and support (Ko-fi + Robux). Opens above the bar.
+    // One popover holding every secondary control. Opens above the bar.
     function buildMenu() {
       const here = (P.displayName || "").toLowerCase();
       const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
@@ -2817,114 +2768,15 @@
           ? `<div class="zs-site-opt zs-site-here">${label}<span class="zs-site-badge">active</span></div>`
           : `<button class="zs-site-opt" data-u="${s.url}">${label}<span class="zs-site-go">&rarr;</span></button>`;
       }
-      const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-      const mergedServers = mergedMcpServers();
-      // Roblox always heads the list - greyed out, no health dot (its status
-      // is already shown in the main bar) and no remove button (it's
-      // the primary server, protected bridge-side too).
-      let mcpList =
-        `<div class="zs-mcp-item zs-mcp-item-primary"><div class="zs-mcp-info"><span class="zs-mcp-name">Roblox Studio</span><span class="zs-mcp-url">primary</span></div></div>`;
-      mergedServers.forEach((s, i) => {
-        // alive === undefined -> the bridge hasn't reported this server's health
-        // yet (just added/removed, still restarting) - shown neutral, not red.
-        const healthClass = s.alive === true ? "on" : s.alive === false ? "off" : "unknown";
-        const healthTitle = s.alive === true ? `${s.tools || 0} tools available` : s.alive === false ? "offline" : "status unknown";
-        mcpList += `<div class="zs-mcp-item"><span class="zs-mcp-health zs-mcp-health-${healthClass}" title="${healthTitle}"></span><div class="zs-mcp-info"><span class="zs-mcp-name">${esc(s.name)}</span><span class="zs-mcp-url">${esc(s.command || s.id)}</span></div><button class="zs-mcp-remove" data-id="${esc(s.id)}" title="Remove">✕</button></div>`;
-      });
       menuEl.innerHTML =
         `<div class="zs-menu-head"><span class="zs-menu-logo">snapgentV3</span></div>
          <section class="zs-menu-sec">
            <div class="zs-sec-label"><span>Switch AI</span></div>
            ${sites}
-         </section>
-         <section class="zs-menu-sec">
-           <div class="zs-sec-label"><span>Custom prompt</span></div>
-           <div class="zs-menu-note">Appended to each new session.</div>
-           <textarea id="zs-set-text" rows="4" placeholder="Extra instructions..."></textarea>
-           <div class="zs-set-row"><button id="zs-set-save">Save</button><span id="zs-set-status"></span></div>
-         </section>
-         <section class="zs-menu-sec">
-           <div class="zs-sec-label"><span>MCP servers</span></div>
-           <div class="zs-menu-note">Roblox Studio is primary. Extra servers restart the bridge briefly.</div>
-           ${mcpList}
-           <div class="zs-mcp-sep"></div>
-           <input id="zs-mcp-name" class="zs-mcp-field" placeholder="Name" />
-           <input id="zs-mcp-url" class="zs-mcp-field" placeholder="Start command" />
-           <div class="zs-set-row"><button id="zs-mcp-add">Add server</button><span id="zs-mcp-status"></span></div>
          </section>`;
       const open = (url) => { try { window.open(url, "_blank", "noopener"); } catch {} menuEl.hidden = true; };
       menuEl.querySelectorAll("button.zs-site-opt, .zs-tip-opt").forEach((b) =>
         b.addEventListener("click", () => open(b.dataset.u)));
-      const ta = menuEl.querySelector("#zs-set-text");
-      const saveBtn = menuEl.querySelector("#zs-set-save");
-      const status = menuEl.querySelector("#zs-set-status");
-      ta.value = customPrompt;
-      saveBtn.addEventListener("click", () => {
-        customPrompt = ta.value;
-        try { chrome.storage.local.set({ zsCustomPrompt: customPrompt }); } catch {}
-        status.textContent = "Saved ✓";
-        setTimeout(() => { status.textContent = ""; }, 1600);
-      });
-      const mcpNameEl = menuEl.querySelector("#zs-mcp-name");
-      const mcpUrlEl = menuEl.querySelector("#zs-mcp-url");
-      const mcpStatus = menuEl.querySelector("#zs-mcp-status");
-      const mcpAddBtn = menuEl.querySelector("#zs-mcp-add");
-      // Disable every add/remove control and show the restart spinner. Adding or
-      // removing a server rewrites config.json and restarts the whole bridge, so
-      // no other server edit may run until it is back.
-      let mcpBusy = false;
-      function setMcpBusy(on, label) {
-        mcpBusy = on;
-        mcpAddBtn.disabled = on;
-        menuEl.querySelectorAll(".zs-mcp-remove").forEach((b) => (b.disabled = on));
-        mcpStatus.innerHTML = on
-          ? `<span class="zs-mcp-spin-row"><span class="zs-mcp-spin"></span>${label || "Restarting bridge…"}</span>`
-          : "";
-      }
-
-      menuEl.querySelectorAll(".zs-mcp-remove").forEach((b) =>
-        b.addEventListener("click", async () => {
-          if (mcpBusy) return;
-          const id = b.dataset.id;
-          if (!id) return;
-          setMcpBusy(true, "Restarting bridge…");
-          const r = await bg({ type: "remove_server", server_id: id });
-          if (!r || !r.ok) {
-            setMcpBusy(false);
-            mcpStatus.textContent = (r && r.error) || "Couldn't remove server";
-            setTimeout(() => { if (!mcpBusy) mcpStatus.textContent = ""; }, 2400);
-            return;
-          }
-          customMcpServers = customMcpServers.filter((s) => s.id !== id);
-          saveCustomMcpServers();
-          await waitForBridgeBack(null);
-          buildMenu(); // rebuilds with the spinner cleared
-        }));
-
-      mcpAddBtn.addEventListener("click", async () => {
-        if (mcpBusy) return;
-        const name = mcpNameEl.value.trim();
-        const command = mcpUrlEl.value.trim();
-        if (!name || !command) {
-          mcpStatus.textContent = "Fill both fields";
-          setTimeout(() => { if (!mcpBusy) mcpStatus.textContent = ""; }, 1800);
-          return;
-        }
-        const id = mcpSlug(name);
-        const { command: cmd, args } = splitCommand(command);
-        setMcpBusy(true, "Restarting bridge…");
-        const r = await bg({ type: "add_server", server_id: id, command: cmd, args });
-        if (!r || !r.ok) {
-          setMcpBusy(false);
-          mcpStatus.textContent = (r && r.error) || "Couldn't add server";
-          setTimeout(() => { if (!mcpBusy) mcpStatus.textContent = ""; }, 2400);
-          return;
-        }
-        customMcpServers.push({ id, name, command });
-        saveCustomMcpServers();
-        await waitForBridgeBack(id);
-        buildMenu(); // rebuilds with the new server listed + spinner cleared
-      });
     }
 
     // ── First-time onboarding card (bridge missing) ─────────────────────────
@@ -3847,7 +3699,7 @@
     }
 
     build();
-    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, getCustomMcpServers, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
+    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
   })();
 
   // ── Live token + timer, shown ONLY on a tool call's chip detail. The
@@ -4102,7 +3954,7 @@
       ui.setStatus({ connected: msg.connected, mcpAlive: msg.mcpAlive, studio: msg.studio, studioApp: msg.studioApp, studioProc: msg.studioProc, tools: msg.tools, servers: msg.servers });
     }
     if (msg && msg.type === "zs-open-menu") {
-      ui.openMenu(false); // from the popup's Settings button — opens at the top (Switch AI / custom prompt)
+      ui.openMenu(false); // from the popup's Settings button — opens at the top (Switch AI)
     }
   });
 
