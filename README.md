@@ -124,10 +124,9 @@ The MCP target selector can also connect to VS Code or another MCP server after 
 
 **③ Start the bridge**
 
-- Copy `config.example.json` to `config.json` and replace the example paths with
-  the MCP server paths and project folder on your computer. `config.json` is
-  local-only and is not tracked by Git.
-- **Windows** — double-click `start.bat`.
+- **Windows** — double-click `start.bat`. It detects Roblox Studio MCP and
+  creates or updates the local `config.json` automatically. Existing optional
+  MCP server entries are preserved.
 - **macOS** — double-click `MacOS_Start.command`.
 
 A window opens and stays open while the bridge runs. On macOS, the first launch may show a Gatekeeper warning; select **Done**, then allow the script under **System Settings → Privacy & Security**.
@@ -187,8 +186,8 @@ snapgent-full/
 │   ├── manifest.json          # Manifest V3 configuration
 │   └── test-*.js              # Smoke tests
 ├── assets/                    # Project images
-├── config.example.json        # Template for your local MCP configuration
-├── config.json                # Your local configuration (not tracked by Git)
+├── setup-config.ps1           # Detects Roblox Studio MCP on Windows
+├── config.json                # Generated locally by start.bat (not tracked)
 ├── start.bat                  # Windows bridge launcher
 ├── MacOS_Start.command        # macOS bridge launcher
 ├── bridge.exe                 # Windows local bridge

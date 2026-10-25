@@ -16,6 +16,18 @@ if not exist "%~dp0bridge.exe" (
     exit /b 1
 )
 
+echo.
+echo   Detecting Roblox Studio MCP...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-config.ps1"
+if errorlevel 1 (
+    echo.
+    echo   ERROR: Could not configure the Roblox Studio MCP connection.
+    echo   Check the message above, then run start.bat again.
+    echo.
+    pause
+    exit /b 1
+)
+
 REM Free the bridge port if a previous instance is still listening.
 set "OLDPID="
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :17613 ^| findstr LISTENING 2^>nul') do (
