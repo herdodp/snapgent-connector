@@ -1,10 +1,10 @@
 <div align="center">
 
 <a href="https://github.com/herdodp/snapgent-connector">
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=600&height=90&lines=snapgentV3;%3E+AI+agent+for+Roblox+Studio" alt="snapgentV3" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+AI+agent+for+Roblox+%26+VS+Code" alt="snapgentV3: AI agent for Roblox Studio and VS Code" />
 </a>
 
-<p><b>Turn any AI chat into an agent that builds your Roblox game.</b></p>
+<p><b>Turn any AI chat into an agent for Roblox Studio, VS Code, and other MCP tools.</b></p>
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
@@ -23,13 +23,13 @@ herdo@snapgent:~$ snapgentV3
   ███████║██║ ╚████║██║  ██║██║     ╚██████╔╝███████╗██║ ╚████║   ██║
   ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
 
-  > browser extension + local bridge for Roblox Studio
+  > browser extension + local bridge for Roblox Studio, VS Code, and MCP
   > no API key · no terminal · no copy-paste
 ```
 
-snapgentV3 is a browser extension plus a local bridge that lets a normal AI chat **read, edit, run, and inspect your Roblox project** through Roblox Studio's built-in MCP server. Describe what you want in plain language — the extension forwards the AI's commands to the bridge on your computer, and the results go straight back into the chat.
+snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to **Roblox Studio, VS Code, and other configured MCP servers**. Use Roblox Studio's built-in MCP integration to read, edit, run, and inspect a Roblox project, or select a configured VS Code MCP server to work with a code workspace. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
 
-**Free and open source — no API key, subscription, or sign-in required.** DeepSeek is the recommended provider. VS Code and other MCP servers can also be used as optional configured targets.
+**Free and open source — no API key, subscription, or sign-in required.** DeepSeek is the recommended provider. Roblox Studio is the built-in MCP target; VS Code and other MCP servers can be added as configured targets. Available actions depend on the selected MCP server.
 
 ---
 
@@ -37,20 +37,20 @@ snapgentV3 is a browser extension plus a local bridge that lets a normal AI chat
 <tr>
 <td width="33%" valign="top">
 
-### 📖 Read & Edit
-Read and update scripts in your Roblox place directly from an AI conversation.
+### 🎮 Roblox Studio
+Read and update scripts, run Luau, generate assets, and inspect your Roblox place.
 
 </td>
 <td width="33%" valign="top">
 
-### ⚡ Build & Run
-Run Luau, generate assets, and control play-testing in Roblox Studio.
+### 💻 VS Code
+Connect a configured VS Code MCP server to work with a code workspace from AI chat.
 
 </td>
 <td width="33%" valign="top">
 
-### 🔍 Inspect
-Explore instances, inspect Studio state, and search your game from chat.
+### 🔌 Other MCP servers
+Select other MCP servers configured in the local bridge.
 
 </td>
 </tr>
@@ -62,18 +62,18 @@ Explore instances, inspect Studio state, and search your game from chat.
 
 ```
 ┌─────────────┐     plain-text      ┌──────────────────┐    WebSocket    ┌────────────┐    MCP    ┌────────────────┐
-│  AI chat    │ ───  commands  ───▶ │ snapgentV3       │ ──────────────▶ │  Bridge    │ ────────▶ │ Roblox Studio  │
-│  (browser)  │ ◀──  results   ───  │ browser extension│ ◀────────────── │ (local)    │ ◀──────── │  + MCP         │
+│  AI chat    │ ───  commands  ───▶ │ snapgentV3       │ ──────────────▶ │  Bridge    │ ────────▶ │ Selected MCP   │
+│  (browser)  │ ◀──  results   ───  │ browser extension│ ◀────────────── │ (local)    │ ◀──────── │ target         │
 └─────────────┘                     └──────────────────┘                 └────────────┘           └────────────────┘
 ```
 
 1. **You** describe a task in a supported AI chat.
 2. The **AI** replies with a snapgentV3 command.
 3. The **extension** detects the command and forwards it to the local bridge.
-4. The **bridge** runs it against Roblox Studio through MCP.
+4. The **bridge** routes it to the selected MCP server, such as Roblox Studio or VS Code.
 5. The **result** is sent back into chat, and the AI continues working.
 
-The MCP target selector can also connect to VS Code or another MCP server after it has been configured in the bridge. Roblox Studio is the built-in integration; VS Code is an optional MCP target.
+Choose the target in the snapgentV3 bar before starting a session. Roblox Studio is the built-in integration; VS Code and other servers must be configured in the local bridge first.
 
 ---
 
@@ -99,7 +99,8 @@ The MCP target selector can also connect to VS Code or another MCP server after 
 ## `03` &nbsp; Requirements
 
 - **Microsoft Edge** or **Google Chrome** (Manifest V3).
-- **Roblox Studio** with its built-in MCP server enabled.
+- **Roblox Studio** with its built-in MCP server enabled when using the Roblox target.
+- A **VS Code MCP server** configured in the local bridge when using the VS Code target.
 - **Windows** or **macOS** for the bridge.
 - **Python 3.9+** on macOS. The Windows release includes the bridge executable.
 - The bridge running while you use the agent.
@@ -116,11 +117,11 @@ The MCP target selector can also connect to VS Code or another MCP server after 
 4. Click **Load unpacked** and select the `snapgent-extension` folder.
 5. The snapgentV3 icon appears in your browser toolbar.
 
-**② Enable Roblox Studio MCP**
+**② Set up the MCP target**
 
-1. Open a place in Roblox Studio.
-2. Open **Assistant AI** from the top bar.
-3. Select **…** → **Manage MCP Servers** → **Enable Studio as MCP Server**.
+For Roblox Studio, open a place and enable **Assistant AI → … → Manage MCP Servers → Enable Studio as MCP Server**.
+
+For VS Code or another MCP server, add its server configuration to your local `config.json`. Keep machine-specific executable and workspace paths in this local file; do not publish them.
 
 **③ Start the bridge**
 
@@ -134,7 +135,7 @@ A window opens and stays open while the bridge runs. On macOS, the first launch 
 **④ Start a session**
 
 1. Open a supported AI chat site and start a new chat.
-2. Select **Roblox Studio** from the snapgentV3 MCP target menu.
+2. Select **Roblox Studio**, **VS Code**, or another configured server from the snapgentV3 MCP target menu.
 3. Click **Start** and describe what you want to make.
 
 ---
