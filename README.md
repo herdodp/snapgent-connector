@@ -4,7 +4,7 @@
 <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+AI+agent+for+Roblox+%26+VS+Code" alt="snapgentV3: AI agent for Roblox Studio and VS Code" />
 </a>
 
-<p><b>Turn any AI chat into an agent for Roblox Studio, VS Code, and other MCP tools.</b></p>
+<p><b>Turn any AI chat into an agent for Roblox Studio and VS Code.</b></p>
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
@@ -27,9 +27,9 @@ herdo@snapgent:~$ snapgentV3
   > no API key · no terminal · no copy-paste
 ```
 
-snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to **Roblox Studio, VS Code, and other configured MCP servers**. Use Roblox Studio's built-in MCP integration to read, edit, run, and inspect a Roblox project, or select a configured VS Code MCP server to work with a code workspace. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
+snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to **Roblox Studio and VS Code**. Use Roblox Studio's built-in MCP integration to read, edit, run, and inspect a Roblox project, or select the VS Code MCP server to work with a code workspace. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
 
-**Free and open source — no API key, subscription, or sign-in required.** DeepSeek is the recommended provider. Roblox Studio is the built-in MCP target; VS Code and other MCP servers can be added as configured targets. Available actions depend on the selected MCP server.
+**Free and open source — no API key, subscription, or sign-in required.** DeepSeek is the recommended provider. Roblox Studio is the built-in MCP target; VS Code is an optional configured target. Available actions depend on the selected target.
 
 ---
 
@@ -49,8 +49,8 @@ Connect a configured VS Code MCP server to work with a code workspace from AI ch
 </td>
 <td width="33%" valign="top">
 
-### 🔌 Other MCP servers
-Select other MCP servers configured in the local bridge.
+### 💬 One chat workflow
+Switch between the Roblox Studio and VS Code targets from the chat bar.
 
 </td>
 </tr>
@@ -70,10 +70,10 @@ Select other MCP servers configured in the local bridge.
 1. **You** describe a task in a supported AI chat.
 2. The **AI** replies with a snapgentV3 command.
 3. The **extension** detects the command and forwards it to the local bridge.
-4. The **bridge** routes it to the selected MCP server, such as Roblox Studio or VS Code.
+4. The **bridge** routes it to the selected Roblox Studio or VS Code MCP server.
 5. The **result** is sent back into chat, and the AI continues working.
 
-Choose the target in the snapgentV3 bar before starting a session. Roblox Studio is the built-in integration; VS Code and other servers must be configured in the local bridge first.
+Choose the target in the snapgentV3 bar before starting a session. Roblox Studio is the built-in integration; configure the VS Code MCP server in the local bridge before selecting it.
 
 ---
 
@@ -121,13 +121,13 @@ Choose the target in the snapgentV3 bar before starting a session. Roblox Studio
 
 For Roblox Studio, open a place and enable **Assistant AI → … → Manage MCP Servers → Enable Studio as MCP Server**.
 
-For VS Code or another MCP server, add its server configuration to your local `config.json`. Keep machine-specific executable and workspace paths in this local file; do not publish them.
+For VS Code, add its MCP server configuration to your local `config.json`. Keep machine-specific executable and workspace paths in this local file; do not publish them.
 
 **③ Start the bridge**
 
 - **Windows** — double-click `start.bat`. It detects Roblox Studio MCP and
   creates or updates the local `config.json` automatically. Existing optional
-  MCP server entries are preserved.
+  Existing local bridge settings are preserved.
 - **macOS** — double-click `MacOS_Start.command`.
 
 A window opens and stays open while the bridge runs. On macOS, the first launch may show a Gatekeeper warning; select **Done**, then allow the script under **System Settings → Privacy & Security**.
@@ -135,7 +135,7 @@ A window opens and stays open while the bridge runs. On macOS, the first launch 
 **④ Start a session**
 
 1. Open a supported AI chat site and start a new chat.
-2. Select **Roblox Studio**, **VS Code**, or another configured server from the snapgentV3 MCP target menu.
+2. Select **Roblox Studio** or **VS Code** from the snapgentV3 MCP target menu.
 3. Click **Start** and describe what you want to make.
 
 ---
@@ -153,7 +153,7 @@ The AI sends commands, snapgentV3 runs them in Studio, and the results appear in
 **Tips**
 
 - Keep the bridge window open — closing it disconnects the agent.
-- Choose **VS Code** or another configured MCP target from the bar when you want to use a server other than Roblox Studio.
+- Choose **VS Code** from the bar when you want to work with a code workspace instead of Roblox Studio.
 - On **Arena**, use **Direct** mode.
 - If **Gemini** or **Kimi** stops using tools in a long session, remind it to use the Roblox commands or start a new chat.
 
@@ -172,7 +172,7 @@ background.js               WebSocket connection to the local bridge
 manifest.json               browser permissions and content scripts
 ```
 
-The bridge connects to Roblox Studio's MCP server and can route commands to other configured MCP servers as well.
+The bridge routes commands to the Roblox Studio or VS Code MCP server selected in the chat bar.
 
 ---
 
@@ -231,7 +231,7 @@ Each test prints `PASS`/`FAIL` and exits with a non-zero status if a case fails.
 
 ## `10` &nbsp; Credits
 
-- The idea of connecting additional MCP servers alongside Roblox Studio was inspired by [javnpa](https://github.com/javnpa).
+- The idea of connecting VS Code alongside Roblox Studio was inspired by [javnpa](https://github.com/javnpa).
 - macOS/Linux support contributions by [archivealf](https://github.com/archivealf).
 
 ---
