@@ -76,7 +76,7 @@ ok("salvage handles escaped quotes", cutEsc && cutEsc.tool === "execute_luau" &&
 const dsmlFull = [
   '<|DSML|>tool_calls>',
   '<|DSML|>invoke name="script_read">',
-  '<|DSML|>parameter name="target_file" string="true">game.ServerStorage.ZeroScript.Memory</|DSML|>parameter>',
+  '<|DSML|>parameter name="target_file" string="true">game.ServerStorage.snapgentV3.Memory</|DSML|>parameter>',
   '</|DSML|>invoke>',
   '</|DSML|>tool_calls>',
 ].join("\n");
