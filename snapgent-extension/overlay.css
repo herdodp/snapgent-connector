@@ -238,17 +238,6 @@ html.zs-light #zs-unstable {
 }
 #zs-stop[data-state="stopping"]:hover { background: #b45309; }
 
-/* bar controls: one neutral icon-button family (Discord, support, switch) */
-#zs-discord, #zs-support {
-  flex: none; width: 28px; height: 28px; padding: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(255, 255, 255, 0.06); color: #b8b8bf;
-  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px;
-  cursor: pointer; text-decoration: none;
-  transition: background 0.14s ease, color 0.14s ease;
-}
-#zs-discord:hover, #zs-support:hover { background: rgba(255, 255, 255, 0.11); color: #ededf0; }
-
 /* Target and model selectors follow the Snapgent header pill style. */
 .zs-target-wrap {
   flex: none; position: relative; display: inline-flex; align-items: center;
@@ -310,11 +299,9 @@ html.zs-light #zs-unstable {
   }
   #zs-target { max-width: 100%; min-width: 0; font-size: 11px; }
   #zs-switch { font-size: 11px; }
-  #zs-discord, #zs-support { width: 32px; height: 32px; }
 }
 
 @media (max-width: 400px) {
-  #zs-discord, #zs-support { display: none !important; }
   #zs-bar { gap: 5px; padding: 5px 6px; }
   .zs-target-wrap, #zs-switch { max-width: 42%; }
 }
@@ -407,27 +394,6 @@ button.zs-site-opt:hover .zs-site-go { opacity: 1; transform: translateX(0); }
 }
 #zs-set-save:hover, #zs-mcp-add:hover { background: rgba(255, 255, 255, 0.15); }
 #zs-set-status, #zs-mcp-status { font-size: 11px; color: #8a8a92; font-weight: 500; }
-
-/* support actions: neutral rows, differentiated by the aside text, not colour */
-.zs-tip-opt {
-  width: 100%; margin: 5px 0; padding: 9px 11px;
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
-  color: #e4e4e8; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left;
-  transition: background 0.13s ease;
-}
-.zs-tip-opt:hover { background: rgba(255, 255, 255, 0.09); }
-.zs-tip-sub { font-size: 10px; font-weight: 400; color: #7a7a82; white-space: normal; text-align: right; }
-.zs-rbx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.zs-tip-rbx {
-  justify-content: center; gap: 3px; margin: 0; padding: 8px 6px;
-  font-size: 12px; font-weight: 500; color: #c8c8ce;
-}
-.zs-rbx-cur { color: #7a7a82; font-weight: 400; }
-.zs-tip-sep {
-  font-size: 10px; color: #6b6b73; margin: 11px 0 8px; text-align: center;
-}
 
 /* ── custom MCP servers list (add-your-own, same shell as Custom prompt) ── */
 .zs-mcp-item {
@@ -972,15 +938,11 @@ html.zs-light #zs-state { color: #4b5563; }
 html.zs-light #zs-state b { color: #4f46e5; }
 html.zs-light #zs-state.zs-state-warn { color: #b91c1c; }
 html.zs-light #zs-bar.tone-active #zs-state b { color: #059669; }
-html.zs-light #zs-discord,
-html.zs-light #zs-support,
 html.zs-light #zs-switch,
 html.zs-light .zs-target-wrap {
   background: rgba(0, 0, 0, 0.05); color: #4b5563;
   border-color: rgba(180, 130, 10, 0.55);
 }
-html.zs-light #zs-discord:hover,
-html.zs-light #zs-support:hover,
 html.zs-light #zs-switch:hover { background: rgba(0, 0, 0, 0.09); color: #1f2430; }
 html.zs-light #zs-action:disabled {
   background: rgba(0, 0, 0, 0.05); color: rgba(0, 0, 0, 0.35); border-color: rgba(0, 0, 0, 0.08);
@@ -1029,16 +991,10 @@ html.zs-light button.zs-site-opt:hover { background: rgba(0, 0, 0, 0.05); }
 html.zs-light .zs-site-badge { color: #6b7280; border-color: rgba(0, 0, 0, 0.14); }
 html.zs-light .zs-site-go { color: #9ca3af; }
 html.zs-light #zs-set-save,
-html.zs-light #zs-mcp-add,
-html.zs-light .zs-tip-opt {
+html.zs-light #zs-mcp-add {
   background: rgba(0, 0, 0, 0.05); color: #1f2430; border-color: rgba(0, 0, 0, 0.12);
 }
 html.zs-light #zs-set-save:hover,
-html.zs-light #zs-mcp-add:hover,
-html.zs-light .zs-tip-opt:hover { background: rgba(0, 0, 0, 0.09); }
+html.zs-light #zs-mcp-add:hover { background: rgba(0, 0, 0, 0.09); }
 html.zs-light #zs-set-status,
-html.zs-light #zs-mcp-status,
-html.zs-light .zs-tip-sub,
-html.zs-light .zs-rbx-cur,
-html.zs-light .zs-tip-sep { color: #6b7280; }
-html.zs-light .zs-tip-rbx { color: #374151; }
+html.zs-light #zs-mcp-status { color: #6b7280; }
