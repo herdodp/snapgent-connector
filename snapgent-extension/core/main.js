@@ -92,6 +92,7 @@
     { name: "Qwen", url: "https://chat.qwen.ai/" },
     { name: "Arena", url: "https://arena.ai/text/direct" },
     { name: "Meta AI", url: "https://www.meta.ai/" },
+    { name: "Ptero", url: "https://ptero.pro/" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
   let selectedTargetId = "roblox";
