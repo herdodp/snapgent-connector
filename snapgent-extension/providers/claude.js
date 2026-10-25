@@ -20,9 +20,13 @@ const ZSProvider = (() => {
       'div[contenteditable="true"]',
     ].join(","),
     send: [
+      'button[data-testid*="send"]',
       'button[data-testid="send-button"]',
-      'button[aria-label="Send message"]',
-      'button[aria-label="Send"]',
+      'button[aria-label*="Send"]',
+      'button[aria-label*="send"]',
+      '[role="button"][data-testid*="send"]',
+      '[role="button"][aria-label*="Send"]',
+      '[role="button"][aria-label*="send"]',
     ].join(","),
     stop: [
       'button[data-testid="stop-button"]',
@@ -149,6 +153,29 @@ const ZSProvider = (() => {
       grewAt = now;
     }
   }
+  const hasSendLabel = (el) => {
+    if (!el) return false;
+    const label = [
+      el.getAttribute("aria-label"),
+      el.getAttribute("data-testid"),
+      el.textContent,
+      el.innerText,
+    ].filter(Boolean).join(" ");
+    return /(\bSend\b|\bKirim\b|send message|send\s+message)/i.test(label);
+  };
+  const sendButton = () => {
+    const candidates = [...document.querySelectorAll("button, [role='button']")]
+      .filter((el) => !el.closest("#zs-root"))
+      .filter((el) => visible(el));
+    for (const candidate of candidates) {
+      if (candidate.matches(S.send) || hasSendLabel(candidate)) {
+        const ariaDisabled = candidate.getAttribute("aria-disabled");
+        const disabled = candidate.disabled || ariaDisabled === "true";
+        if (!disabled) return candidate;
+      }
+    }
+    return null;
+  };
   const stopButton = () => [...document.querySelectorAll(S.stop)].find(visible) || null;
   const isHardGenerating = () => !!stopButton();
   const isGenerating = () => {
@@ -205,7 +232,6 @@ const ZSProvider = (() => {
     }
     if (locked) editor.setAttribute("contenteditable", "false");
   }
-  const sendButton = () => [...document.querySelectorAll(S.send)].find(visible) || null;
   async function typeAndSend(text) {
     const editor = getEditor();
     if (!editor) throw new Error("Claude input box not found");
