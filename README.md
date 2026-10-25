@@ -1,76 +1,134 @@
-# snapgentV3 - Free AI Agent for Roblox Studio
+<div align="center">
+  <img src="snapgent-extension/icon.png" alt="snapgentV3 logo" width="132">
+  <h1>snapgentV3</h1>
+  <p><strong>Your AI chat, connected to Roblox Studio.</strong></p>
+  <p>Build and edit Roblox experiences by describing what you want. snapgentV3 connects supported AI chat sites to Roblox Studio through a local bridge and MCP.</p>
+  <p>
+    <a href="https://github.com/herdodp/snapgent-connector/releases"><img src="https://img.shields.io/github/v/release/herdodp/snapgent-connector?display_name=tag&style=for-the-badge&color=7c3aed" alt="Latest release"></a>
+    <img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge" alt="GPL-3.0 license">
+    <img src="https://img.shields.io/badge/Windows%20%7C%20macOS-supported-2563eb?style=for-the-badge" alt="Windows and macOS">
+  </p>
+  <p>
+    <a href="https://github.com/herdodp/snapgent-connector/releases">Download</a> ·
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#supported-ai-providers">AI providers</a> ·
+    <a href="#for-contributors">Contributing</a>
+  </p>
+</div>
 
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)
-![License](https://img.shields.io/badge/license-GPL--3.0-blue)
+---
 
-**snapgentV3** is a free browser extension that turns ChatGPT, Claude, DeepSeek, Gemini, Kimi, GLM, Qwen, Arena, Meta AI, or Ptero into a Roblox Studio AI agent.
-Control Roblox Studio with AI directly from your browser - read/edit scripts, run Luau, generate assets, all from a normal AI chat. No API key, no terminal, no coding needed.
+## What is snapgentV3?
 
+snapgentV3 is a free, open-source browser extension and local bridge that lets you control Roblox Studio from an AI conversation. Ask an AI to build a feature, inspect your game, or update a script—the extension sends the AI's commands to the bridge on your computer, which connects to Roblox Studio's MCP server.
 
-Ten AI providers are supported: **DeepSeek** (chat.deepseek.com, recommended), **ChatGPT** (chatgpt.com), **Claude** (claude.ai), **Google Gemini** (gemini.google.com), **Kimi** (kimi.ai, Moonshot AI), **GLM** (chat.z.ai, Z.ai), **Qwen** (chat.qwen.ai), **Arena** (arena.ai, a multi-model playground), **Meta AI** (meta.ai), and **Ptero** (ptero.pro). On ChatGPT and Claude, screenshots and image input are disabled in this integration. Gemini and Kimi can be unstable: Gemini tends to stop using the Roblox tools in long sessions, and Kimi sometimes uses its own native tools instead of the Roblox commands. On Arena, use **Direct** mode (snapgentV3 only supports Direct; it blocks Start in Battle / Side-by-Side / Agent modes). DeepSeek is the recommended provider.
+**No API key, subscription, or coding required to get started.** DeepSeek is the recommended provider; the other supported providers are available from the bar inside each chat.
 
-> *Also known as: snapgentV3 Roblox, snapgentV3 free download, Roblox ChatGPT agent, Roblox DeepSeek agent, Roblox Gemini agent, Roblox Kimi agent, Roblox GLM agent, Roblox Qwen agent, Roblox Arena agent, Roblox Meta AI agent, Roblox Studio AI automation, Luau AI, MCP Roblox, lemonade alternative free, lemonade.gg alternative, free Roblox AI agent, free lemonade roblox alternative*
-
-## ⚠️ snapgentV3 is Free Beware of Paid Copycats
-
-snapgentV3 is 100% free and open-source. It always has been, and it always will be. There is no official paid version, no subscription, and no sign-in required to use the extension.
-
-If you come across a site or extension using the snapgentV3 name that asks for payment or account creation, it is **not** this project. The only official links are the ones listed at the top of this README.
-
-## How it works
-
+```text
+Your prompt → AI chat → snapgentV3 extension → Local bridge → Roblox Studio
 ```
-AI chat (ChatGPT / Claude / DeepSeek / Gemini / Kimi / GLM / Qwen / Arena / Meta AI / Ptero, in your browser) -> snapgentV3 Extension -> Bridge (your PC) -> Roblox Studio
+
+## What you can do
+
+- Read and edit scripts in Roblox Studio
+- Run Luau code and inspect the game tree
+- Generate models, meshes, and materials
+- Browse and insert Creator Store assets
+- Start and control play-testing
+- Keep project memory across sessions, saved inside your place
+- Connect to Roblox Studio or another configured MCP server from the chat bar
+
+## Supported AI providers
+
+| Provider | Chat site | Notes |
+| --- | --- | --- |
+| **DeepSeek** | [chat.deepseek.com](https://chat.deepseek.com) | Recommended |
+| **ChatGPT** | [chatgpt.com](https://chatgpt.com) | Image input and screenshots are disabled in this integration |
+| **Claude** | [claude.ai](https://claude.ai) | Image input and screenshots are disabled in this integration |
+| **Google Gemini** | [gemini.google.com](https://gemini.google.com) | May stop using tools during long sessions |
+| **Kimi** | [kimi.ai](https://kimi.ai) | May prefer its own native tools over Roblox commands |
+| **GLM** | [chat.z.ai](https://chat.z.ai) | |
+| **Qwen** | [chat.qwen.ai](https://chat.qwen.ai) | |
+| **Arena** | [arena.ai](https://arena.ai) | Use **Direct** mode; other modes are not supported |
+| **Meta AI** | [meta.ai](https://meta.ai) | |
+| **Ptero** | [ptero.pro](https://ptero.pro) | |
+
+> Gemini and Kimi behavior can vary by model and session. If a provider stops using Roblox tools, remind it to use the commands or start a new session.
+
+## Quick start
+
+### 1. Download and install the extension
+
+Download the latest release and extract the archive. In Microsoft Edge or Google Chrome:
+
+1. Open `edge://extensions` or `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. Select **Load unpacked**.
+4. Choose the extracted `snapgent-extension` folder.
+
+### 2. Enable Roblox Studio's MCP server
+
+Open a place in Roblox Studio, then enable its MCP server (first-time setup):
+
+1. Open **Assistant AI** from the top bar.
+2. Select **…** → **Manage MCP Servers**.
+3. Select **Enable Studio as MCP Server**.
+
+### 3. Start the local bridge
+
+- **Windows:** double-click `start.bat` from the extracted release folder.
+- **macOS:** double-click `MacOS_Start.command`.
+
+On the first macOS launch, Gatekeeper may show a warning. Select **Done**, then open **System Settings → Privacy & Security** and choose **Open Anyway** for the blocked script.
+
+### 4. Start an AI session
+
+Open one of the supported chat sites above. The snapgentV3 bar appears above the chat input. Choose **Roblox Studio** from the MCP target selector, then select **Start session** and describe what you want to build.
+
+The bridge must remain running while you use the extension. In the bar, a green status means Studio is ready; yellow means the bridge is connected but Studio still needs attention; grey means the bridge is offline.
+
+## Requirements
+
+- Windows or macOS
+- Roblox Studio with its built-in MCP support
+- Microsoft Edge or Google Chrome
+- Python 3.9+ (installed automatically on Windows; install separately on macOS from [python.org](https://www.python.org/downloads/))
+
+## About this project
+
+snapgentV3 is free and open source under the GPL-3.0 license. Get official downloads from [GitHub Releases](https://github.com/herdodp/snapgent-connector/releases). There is no official paid version of this project.
+
+## For contributors
+
+The extension has a provider-independent core and a separate adapter for each AI chat site:
+
+```text
+snapgent-extension/
+├── core/
+│   ├── config.js       Shared configuration and prompts
+│   ├── parser.js       Command parsing
+│   └── main.js         UI and agent loop
+├── providers/          Site-specific DOM and chat integrations
+├── background.js       Connection to the local bridge
+└── manifest.json       Extension permissions and content scripts
 ```
 
-The extension runs inside the chat page (ChatGPT, DeepSeek, Gemini, Kimi, GLM, Qwen, Arena or Meta AI or Ptero). When you type a request, it sends commands to the Bridge running on your PC, which drives Roblox Studio through the built-in MCP server.
+Each provider exposes the `ZSProvider` interface used by the core. To add a provider, implement that interface, register its content script and host permissions in `manifest.json`, and add its URL to `PROVIDER_URLS` in `background.js`.
 
-## Setup
+Run the extension's smoke tests from `snapgent-extension`:
 
-### 1. Download the zip and install the extension
+```sh
+node test-parser.js
+node test-chatgpt.js
+```
 
-Download the latest zip from the **Releases** page and extract it. The zip contains both the **Bridge** and the **extension folder**.
+## Credits
 
-To load the extension:
+- The idea of connecting additional MCP servers alongside Roblox Studio was inspired by [javnpa](https://github.com/javnpa).
+- macOS/Linux support contributions by [archivealf](https://github.com/archivealf).
 
-- Go to `edge://extensions` (Edge) or `chrome://extensions` (Chrome)
-- Enable **Developer mode** (top right toggle)
-- Click **Load unpacked**
-- Select the `snapgent-extension` folder from the extracted zip
+---
 
-### 2. Start Roblox Studio and enable MCP
-
-Open Studio and load a Place, then enable MCP (first time only):
-
-- Click **Assistant AI** in the top bar
-- Click **...** (top right of the Assistant panel)
-- Click **Manage MCP Servers**
-- Click **Enable Studio as MCP Server**
-
-### 3. Run the Bridge
-
-- **Windows:** double-click `start.bat` inside the extracted folder.
-- **macOS:** double-click `MacOS_Start.command` inside the extracted folder. The first time, macOS will show a security warning ("could not verify... free of malware") - this is normal for any script downloaded outside the App Store, click **Done**, then go to **System Settings > Privacy & Security**, scroll to the bottom, and click **Open Anyway**. You only need to do this once.
-
-A small window opens, that means the Bridge is running.
-
-### 4. Start a session
-
-Go to https://chat.deepseek.com (recommended), https://chatgpt.com, https://claude.ai, https://gemini.google.com, https://www.kimi.ai, https://chat.z.ai, https://chat.qwen.ai, https://arena.ai or https://www.meta.ai and open a new chat. The snapgentV3 bar appears above the input box. Click **Start session**. Type what you want to build.
-
-Use the MCP target dropdown in the chat bar to choose **Roblox Studio** or a configured server such as **VS Code** before starting a session. The provider dropdown opens the supported AI chat sites.
-
-> Only works on chat.deepseek.com, chatgpt.com, claude.ai, gemini.google.com, kimi.ai, chat.z.ai, chat.qwen.ai, arena.ai and meta.ai - it will not work on any other site.
-> On Arena, keep the mode dropdown on **Direct** - snapgentV3 blocks Start in Battle / Side-by-Side / Agent modes (it only drives a single Direct reply).
-> Gemini and Kimi can be unstable (model behavior, not the extension): Gemini may stop using the Roblox tools after a while, and Kimi may use its own native tools instead. If the AI starts answering in plain text instead of acting, remind it to use the commands or start a new session.
-## What the AI can do
-
-- Read and edit scripts
-- Run Luau code directly in Studio
-- Inspect the game tree and instances
-- Generate meshes, materials, and models
-- Browse and insert from the Creator Store
-- Control play-testing
-- **Remember your project across sessions** persistent project memory saved inside your place
-
-
+<div align="center">
+  <sub>Built for creators who want to spend more time making.</sub>
+</div>
