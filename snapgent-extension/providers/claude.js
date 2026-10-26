@@ -14,10 +14,10 @@ const ZSProvider = (() => {
     user: '[data-testid="user-message"]',
     assistant: '[data-testid="assistant-message"]',
     editor: [
-      '[data-testid="chat-input"] [contenteditable="true"]',
-      '[contenteditable="true"][data-placeholder]',
-      '.ProseMirror[contenteditable="true"]',
-      'div[contenteditable="true"]',
+      '[data-testid="chat-input"] [contenteditable]',
+      '[contenteditable][data-placeholder]',
+      '.ProseMirror[contenteditable]',
+      'div[contenteditable]',
     ].join(","),
     send: [
       'button[data-testid*="send"]',
@@ -206,7 +206,7 @@ const ZSProvider = (() => {
   }
 
   function setInputLock(on) {
-    const editor = on ? getEditor() : (lockedEditor || getEditor());
+    const editor = on ? getEditor() : (visible(lockedEditor) ? lockedEditor : getEditor());
     locked = on;
     lockedEditor = on ? editor : null;
     if (editor) editor.setAttribute("contenteditable", on ? "false" : "true");
