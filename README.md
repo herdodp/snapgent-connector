@@ -229,13 +229,6 @@ Each test prints `PASS`/`FAIL` and exits with a non-zero status if a case fails.
 
 ---
 
-## `10` &nbsp; Credits
-
-- The idea of connecting VS Code alongside Roblox Studio was inspired by [javnpa](https://github.com/javnpa).
-- macOS/Linux support contributions by [archivealf](https://github.com/archivealf).
-
----
-
 <div align="center">
 
 **Built for creators who want to spend more time making.**
