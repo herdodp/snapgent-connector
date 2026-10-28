@@ -188,33 +188,7 @@ snapgent-full/
 
 ---
 
-## `08` &nbsp; Development
-
-Plain Node, no extra dependencies. Run the extension checks from `snapgent-extension/`:
-
-```bash
-node test-parser.js
-node test-chatgpt.js
-node test-meta.js
-```
-
-Run the VS Code MCP tests from the repository root:
-
-```bash
-python -m unittest test_vscode_mcp.py
-```
-
-The Node smoke tests print `PASS`/`FAIL`; all test commands exit non-zero on failure.
-
-**Notes**
-
-- Keep site-specific DOM logic in `providers/`; the core should use `ZSProvider`.
-- The bridge listens on local port **17613**.
-- Provider URLs must stay in sync across `manifest.json` and `PROVIDER_URLS` in `background.js`.
-
----
-
-## `09` &nbsp; Troubleshooting
+## `08` &nbsp; Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
