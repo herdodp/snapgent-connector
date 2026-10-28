@@ -2760,6 +2760,7 @@
     function getTargetName(id = selectedTargetId) {
       if (id === "roblox") return "Roblox Studio";
       if (id === "vscode") return "VS Code";
+      if (id === "effectcraft") return "EffectCraft";
       const server = mergedMcpServers().find((item) => item.id === id);
       return server ? server.name : id;
     }
@@ -2771,9 +2772,10 @@
       const options = [
         { id: "vscode", name: "VS Code" },
         { id: "roblox", name: "Roblox Studio" },
+        { id: "effectcraft", name: "EffectCraft" },
         ...mergedMcpServers()
-          .filter((server) => server.id !== "vscode")
-          .map((server) => ({ id: server.id, name: server.name })),
+          .filter((server) => !["vscode", "roblox", "effectcraft"].includes(server.id))
+          .map((server) => ({ id: server.id, name: getTargetName(server.id) })),
       ];
       if (!options.some((option) => option.id === id)) {
         options.push({ id, name: id });

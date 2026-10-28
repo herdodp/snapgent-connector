@@ -121,6 +121,18 @@ For VS Code, open the project folder you want to work on before clicking **Start
 
 A window opens and stays open while the bridge runs. On macOS, the first launch may show a Gatekeeper warning; select **Done**, then allow the script under **System Settings → Privacy & Security**.
 
+**Optional: connect EffectCraft (Windows)**
+
+If EffectCraft is installed in a standard Windows location, `start.bat`
+detects its CLI, adds it to the local MCP configuration, and starts the app's
+control channel automatically. No manual `config.json` editing is needed.
+If EffectCraft is already open without the control channel, save your work,
+close EffectCraft, then run `start.bat` again. When the bridge connects, choose
+**EffectCraft** in the MCP target selector on the chat bar.
+
+For a custom installation path, add the EffectCraft CLI path to
+`mcpServers.effectcraft.command` in the local, Git-ignored `config.json`.
+
 **④ Start a session**
 
 1. Open a supported AI chat site and start a new chat.

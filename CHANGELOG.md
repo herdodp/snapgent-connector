@@ -2,6 +2,15 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.2] - 2026-10-29
+
+### Added
+- **Optional EffectCraft MCP support on Windows.** The chat bar includes
+  EffectCraft as a selectable target. `start.bat` detects EffectCraft in common
+  install locations, configures its local MCP entry, and starts the app's
+  control channel automatically. Custom install locations can still be set in
+  the local, Git-ignored `config.json`.
+
 ## [3.0.0] - 2026-10-25
 
 ### Changed

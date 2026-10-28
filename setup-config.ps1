@@ -102,6 +102,61 @@ elseif ($configuration.mcpServers.PSObject.Properties["roblox"] -and
     $configuration.mcpServers.PSObject.Properties.Remove("roblox")
 }
 
+$effectcraftCandidates = @()
+$configuredEffectCraft = $configuration.mcpServers.effectcraft
+if ($configuredEffectCraft -and -not [string]::IsNullOrWhiteSpace($configuredEffectCraft.command)) {
+    $effectcraftCandidates += $configuredEffectCraft.command
+}
+
+$programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+$effectcraftCandidates += @(
+    (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\EffectCraft\effectcraft-cli.exe"),
+    (Join-Path $env:ProgramFiles "ArtCraft\EffectCraft\effectcraft-cli.exe"),
+    (Join-Path $programFilesX86 "ArtCraft\EffectCraft\effectcraft-cli.exe"),
+    (Join-Path $env:ProgramFiles "EffectCraft\effectcraft-cli.exe"),
+    (Join-Path $programFilesX86 "EffectCraft\effectcraft-cli.exe")
+)
+
+$uninstallKeys = @(
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+foreach ($key in $uninstallKeys) {
+    $installations = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like "*EffectCraft*" -and $_.InstallLocation }
+    foreach ($installation in $installations) {
+        $effectcraftCandidates += Join-Path $installation.InstallLocation "effectcraft-cli.exe"
+        $effectcraftCandidates += Join-Path $installation.InstallLocation "EffectCraft\effectcraft-cli.exe"
+    }
+}
+
+$effectcraftCli = $effectcraftCandidates |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+    Select-Object -First 1
+
+if ($effectcraftCli) {
+    $effectcraftServer = [pscustomobject]@{
+        command = $effectcraftCli
+        args = @("mcp", "--bridge", "9877")
+        env = [pscustomobject]@{}
+    }
+    if ($configuration.mcpServers.PSObject.Properties["effectcraft"]) {
+        $configuration.mcpServers.effectcraft = $effectcraftServer
+    }
+    else {
+        $configuration.mcpServers | Add-Member -MemberType NoteProperty -Name effectcraft -Value $effectcraftServer
+    }
+    Write-Host "EffectCraft MCP detected: $effectcraftCli"
+}
+elseif ($configuredEffectCraft) {
+    Write-Host "Configured EffectCraft MCP executable was not found: $($configuredEffectCraft.command)"
+    Write-Host "Update mcpServers.effectcraft.command in config.json to match your installation."
+}
+else {
+    Write-Host "EffectCraft not found; VS Code and Roblox MCP remain available."
+}
+
 $json = ConvertTo-Json -InputObject $configuration -Depth 20
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ConfigPath, "$json`n", $utf8WithoutBom)
