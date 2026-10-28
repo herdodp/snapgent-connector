@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "snapgentV3 × Roblox Studio Agent",
   "version": "3.0.0",
-  "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Kimi, GLM, Qwen, Arena, Meta AI or Ptero into a Roblox Studio agent that drives Studio through a local bridge.",
+  "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Grok, Kimi, GLM, Qwen, Arena, Meta AI or Ptero into a Roblox Studio agent that drives Studio through a local bridge.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://chat.deepseek.com/*",
@@ -19,6 +19,7 @@
     "https://www.meta.ai/*",
     "https://meta.ai/*",
     "https://ptero.pro/*",
+    "https://grok.com/*",
     "http://127.0.0.1/*",
     "ws://127.0.0.1/*"
   ],
@@ -97,6 +98,12 @@
     {
       "matches": ["https://ptero.pro/*"],
       "js": ["core/config.js", "core/parser.js", "providers/ptero.js", "core/main.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://grok.com/*"],
+      "js": ["core/config.js", "core/parser.js", "providers/grok.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },

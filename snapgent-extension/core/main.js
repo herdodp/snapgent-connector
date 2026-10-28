@@ -93,6 +93,7 @@
     { name: "Arena", url: "https://arena.ai/text/direct" },
     { name: "Meta AI", url: "https://www.meta.ai/" },
     { name: "Ptero", url: "https://ptero.pro/" },
+    { name: "Grok", url: "https://grok.com/" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
   let selectedTargetId = "roblox";
