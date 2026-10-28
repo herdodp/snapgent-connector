@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MacOS_Start.command
 # ---------------------------------------------------------------------------
-#  Self-contained macOS/Linux launcher for the Snapgent bridge.
+#  Self-contained macOS launcher for the Snapgent bridge.
 #  Double-clickable in Finder (that is why it is a .command, not a .sh: a .sh
 #  opens in an editor instead of running). It has NO dependency on start.py -
 #  it finds Python, ensures the one required library is installed, frees a
@@ -39,21 +39,20 @@ echo "  === Snapgent Bridge ==="
 echo
 log "===== MacOS_Start.command launched ====="
 
-# --- 0. bridge.py must be next to us ---------------------------------------
-# If the user ran this out of a half-extracted download, bridge.py is missing
-# and Python would fail with a confusing error. Say the real thing instead.
+# --- 0. Find a macOS-compatible bridge -------------------------------------
+# bridge.exe is a Windows PE binary and cannot run on macOS. Prefer an optional
+# native build, then use the cross-platform Python bridge shipped in the source.
 BRIDGE_BIN=""
 if [ -x "./bridge" ]; then BRIDGE_BIN="./bridge"; fi
-if [ -z "$BRIDGE_BIN" ] && [ -x "./bridge.exe" ]; then BRIDGE_BIN="./bridge.exe"; fi
 if [ -z "$BRIDGE_BIN" ] && [ ! -f "bridge.py" ]; then
-    echo "  ERROR: no bridge binary or bridge.py found next to this launcher."
-    echo "  Extract the WHOLE download, then run MacOS_Start.command from that folder."
-    log "FATAL: bridge missing next to launcher."
+    echo "  ERROR: no macOS-compatible Snapgent bridge was found."
+    echo "  Extract the complete release, including bridge.py, then run this launcher again."
+    log "FATAL: no native bridge or bridge.py; refusing to run bridge.exe on macOS."
     pause_and_exit 1
 fi
 
 # --- 1. Find a usable Python (3.9+ with a working pip) ----------------------
-echo "  [1/3] Looking for Python 3.9+..."
+echo "  [1/4] Looking for Python 3.9+..."
 PY=""
 py_ok() {
     command -v "$1" >/dev/null 2>&1 || return 1
@@ -78,7 +77,7 @@ echo "        Found: $PY ($PY_VER)"
 log "Python found: $PY ($PY_VER)"
 
 # --- 2. Ensure the websockets library is installed --------------------------
-echo "  [2/3] Checking websockets library..."
+echo "  [2/4] Checking websockets library..."
 if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
     echo "        Installing websockets - first time only..."
     log "websockets missing, installing via pip --user."
@@ -102,8 +101,21 @@ fi
 echo "        OK"
 log "websockets library OK."
 
-# --- 3. Replace any previous bridge holding the port ------------------------
-echo "  [3/3] Starting bridge..."
+# --- 3. Configure MCP servers and start optional EffectCraft ----------------
+if [ -f "./setup-config.py" ]; then
+    echo "  [3/4] Detecting VS Code, Roblox Studio, and EffectCraft..."
+    if ! "$PY" "./setup-config.py"; then
+        echo "  ERROR: MCP configuration failed. See the message above."
+        log "MCP auto-configuration failed."
+        pause_and_exit 1
+    fi
+else
+    echo "  [3/4] MCP auto-configuration is unavailable in this package."
+    log "MCP setup script not found; skipping automatic MCP configuration."
+fi
+
+# --- 4. Replace any previous bridge holding the port ------------------------
+echo "  [4/4] Starting bridge..."
 # lsof ships with macOS and most Linux distros. A previous bridge left running
 # (e.g. this launcher double-clicked twice) would keep the port bound and the
 # new instance would fail to bind - free it first.

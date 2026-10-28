@@ -8,7 +8,7 @@
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
-[![Release](https://img.shields.io/badge/RELEASE-V3-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3)
+[![Release](https://img.shields.io/badge/RELEASE-V3.3-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.3)
 [![MCP](https://img.shields.io/badge/PROTOCOL-MCP-FACC15?style=flat-square&labelColor=111111&logo=modelcontextprotocol&logoColor=FACC15)](https://modelcontextprotocol.io/)
 
 </div>
@@ -90,8 +90,8 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 - **Microsoft Edge** or **Google Chrome** (Manifest V3).
 - **VS Code** for the default target. Keep the workspace you want to use open in VS Code.
-- **Windows** or **macOS** for the bridge.
-- **Python 3.9+** on macOS. The Windows release includes the bridge executable.
+- **Windows**, **macOS**, or **Linux** for the bridge.
+- **Python 3.9+** on macOS and Linux. Windows includes the bridge executable.
 - The bridge running while you use the agent.
 
 ---
@@ -100,7 +100,7 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 **① Load the extension**
 
-1. Download and extract the [SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3).
+1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.3).
 2. Open `edge://extensions` (Edge) or `chrome://extensions` (Chrome).
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select the `snapgent-extension` folder.
@@ -115,23 +115,42 @@ For VS Code, open the project folder you want to work on before clicking **Start
 - **Windows** — double-click `start.bat`. It configures VS Code MCP automatically.
   You can start the bridge before VS Code.
   Machine-specific settings are written to the ignored local `config.json`.
-- **macOS** — double-click `MacOS_Start.command`. The current macOS launcher
-  does not auto-configure the VS Code MCP server; configure that server in the
-  local `config.json` before using the default VS Code target.
+- **macOS** — double-click `MacOS_Start.command`. It detects the bundled
+  VS Code MCP server, Roblox Studio's MCP executable, and an installed
+  EffectCraft CLI, then writes their machine-specific paths to the ignored
+  local `config.json`. This launcher uses `bridge.py`; it does not run the
+  Windows-only `bridge.exe`.
+- **Linux** — open a terminal in the extracted release folder and run
+  `bash Linux_Start.sh`. It detects the bundled VS Code MCP server and
+  installed EffectCraft CLI, then writes
+  machine-specific paths to the ignored local `config.json`. It uses
+  `bridge.py`; the first launch installs `websockets` for your user, or creates
+  a local Python environment if your distribution blocks user installs.
 
-A window opens and stays open while the bridge runs. On macOS, the first launch may show a Gatekeeper warning; select **Done**, then allow the script under **System Settings → Privacy & Security**.
+Keep the terminal window open while the bridge runs. On macOS, the first
+launch may show a Gatekeeper warning; select **Done**, then allow the script
+under **System Settings → Privacy & Security**.
 
-**Optional: connect EffectCraft (Windows)**
+**Optional: connect EffectCraft**
 
-If EffectCraft is installed in a standard Windows location, `start.bat`
-detects its CLI, adds it to the local MCP configuration, and starts the app's
-control channel automatically. No manual `config.json` editing is needed.
-If EffectCraft is already open without the control channel, save your work,
-close EffectCraft, then run `start.bat` again. When the bridge connects, choose
+On Windows, `start.bat` detects EffectCraft in common install locations and
+starts its control channel automatically. On macOS, install the separate
+EffectCraft CLI release and put `effectcraft-cli` on your `PATH`; the launcher
+detects it and starts the app's control channel when EffectCraft is installed
+in `/Applications` or `~/Applications`. On Linux, install the EffectCraft CLI
+and put `effectcraft-cli` on your `PATH`; the launcher detects it and starts
+EffectCraft when its executable is available on `PATH` or in a common
+installation location. On any system, save your work and close EffectCraft
+before restarting the launcher if EffectCraft is already open without the
+control channel. When the bridge connects, choose
 **EffectCraft** in the MCP target selector on the chat bar.
 
-For a custom installation path, add the EffectCraft CLI path to
-`mcpServers.effectcraft.command` in the local, Git-ignored `config.json`.
+On macOS, Roblox Studio MCP is detected at
+`/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP`; set
+`ZS_STUDIO_MCP_PATH` before launching if it is installed elsewhere.
+Linux does not auto-detect Roblox Studio MCP. If you have a compatible Linux
+MCP executable, set `ZS_STUDIO_MCP_PATH` to its path before running the
+launcher; Roblox Studio itself may not be available on your Linux distribution.
 
 **④ Start a session**
 
@@ -173,7 +192,9 @@ background.js               WebSocket connection to the local bridge
 manifest.json               browser permissions and content scripts
 ```
 
-The bridge routes commands to the VS Code MCP server.
+The bridge routes commands to the configured MCP servers. Windows uses the
+bundled `bridge.exe`; macOS and Linux run the cross-platform `bridge.py` with
+Python.
 
 ---
 
@@ -188,13 +209,18 @@ snapgent-full/
 │   ├── manifest.json          # Manifest V3 configuration
 │   └── test-*.js              # Smoke tests
 ├── assets/                    # Project images
-├── setup-config.ps1           # Configures VS Code MCP
-├── config.json                # Generated locally by start.bat (not tracked)
+├── setup-config.ps1           # Configures Windows MCP servers
+├── setup-config.py            # Detects MCP servers on macOS and Linux
+├── config.json                # Generated locally by launchers (not tracked)
 ├── start.bat                  # Windows bridge launcher
 ├── MacOS_Start.command        # macOS bridge launcher
+├── Linux_Start.sh             # Linux bridge launcher
 ├── bridge.exe                 # Windows local bridge
+├── bridge.py                  # Cross-platform Python MCP bridge
 ├── vscode_mcp.exe             # Default VS Code MCP server (24 workspace tools)
 ├── vscode_mcp.py              # VS Code MCP server source
+├── test_bridge.py             # MCP bridge protocol tests
+├── test_setup_config.py       # MCP setup helper tests
 └── vscode_mcp.spec            # PyInstaller build recipe
 ```
 
@@ -205,7 +231,7 @@ snapgent-full/
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | snapgentV3 bar is missing | Extension is disabled or site access is blocked | Check the extension is enabled and allowed on the current AI chat site, then reload the tab |
-| Bridge is offline | Bridge is not running | Start `start.bat` (Windows) or `MacOS_Start.command` (macOS) |
+| Bridge is offline | Bridge is not running | Start `start.bat` (Windows), `MacOS_Start.command` (macOS), or run `bash Linux_Start.sh` (Linux) |
 | AI replies without using tools | Provider/model stopped following commands | Remind it to use snapgentV3 commands or start a new chat |
 | VS Code target is unavailable | The bridge is offline or the release is incomplete | Run `start.bat` from the extracted release folder and keep the project open in VS Code |
 
@@ -215,6 +241,6 @@ snapgent-full/
 
 **Built for creators who want to spend more time making.**
 
-[Release V3](https://github.com/herdodp/snapgent-connector/releases/tag/V3) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
+[Latest release V3.3](https://github.com/herdodp/snapgent-connector/releases/tag/V3.3) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
 
 </div>

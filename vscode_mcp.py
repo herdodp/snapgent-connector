@@ -26,7 +26,7 @@ SAFE_PROJECT_SCRIPTS = {"build", "check", "format", "lint", "test", "typecheck"}
 
 
 def _vscode_active_folder() -> Optional[Path]:
-    if os.name == "nt":
+    if sys.platform == "win32":
         result = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq Code.exe", "/NH"],
             capture_output=True,
@@ -41,40 +41,58 @@ def _vscode_active_folder() -> Optional[Path]:
         if "Code.exe" not in result.stdout:
             return None
 
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
-        return None
-    storage_path = Path(appdata) / "Code" / "User" / "globalStorage" / "storage.json"
-    if not storage_path.is_file():
-        return None
-    try:
-        data = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Could not read VS Code workspace state: {error}") from error
-
-    windows_state = data.get("windowsState") or {}
-    uris = []
-    last_folder = (windows_state.get("lastActiveWindow") or {}).get("folder")
-    if last_folder:
-        uris.append(last_folder)
-    uris.extend(
-        folder
-        for window in (windows_state.get("openedWindows") or [])
-        if (folder := (window or {}).get("folder"))
-    )
-
-    for uri in uris:
-        try:
-            parsed = urlparse(uri)
-            path = unquote(parsed.path)
-            if os.name == "nt" and re.match(r"^/[A-Za-z]:/", path):
-                path = path[1:]
-            candidate = Path(path).resolve()
-        except (OSError, ValueError):
+    for storage_path in _vscode_storage_paths():
+        if not storage_path.is_file():
             continue
-        if candidate.is_dir():
-            return candidate
+        try:
+            data = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Could not read VS Code workspace state: {error}") from error
+
+        windows_state = data.get("windowsState") or {}
+        uris = []
+        last_folder = (windows_state.get("lastActiveWindow") or {}).get("folder")
+        if last_folder:
+            uris.append(last_folder)
+        uris.extend(
+            folder
+            for window in (windows_state.get("openedWindows") or [])
+            if (folder := (window or {}).get("folder"))
+        )
+
+        for uri in uris:
+            try:
+                parsed = urlparse(uri)
+                path = unquote(parsed.path)
+                if sys.platform == "win32" and re.match(r"^/[A-Za-z]:/", path):
+                    path = path[1:]
+                candidate = Path(path).resolve()
+            except (OSError, ValueError):
+                continue
+            if candidate.is_dir():
+                return candidate
     return None
+
+
+def _vscode_storage_paths() -> List[Path]:
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return []
+        return [Path(appdata) / "Code" / "User" / "globalStorage" / "storage.json"]
+
+    if sys.platform == "linux":
+        config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        return [
+            config / product / "User" / "globalStorage" / "storage.json"
+            for product in ("Code", "Code - Insiders", "VSCodium")
+        ]
+
+    support = Path.home() / "Library" / "Application Support"
+    return [
+        support / product / "User" / "globalStorage" / "storage.json"
+        for product in ("Code", "Code - Insiders", "VSCodium")
+    ]
 
 
 def get_root() -> Path:

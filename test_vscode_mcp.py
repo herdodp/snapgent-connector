@@ -22,6 +22,22 @@ class VscodeMcpTests(unittest.TestCase):
         self.assertEqual(len(names), 24)
         self.assertEqual(len(set(names)), 24)
 
+    def test_vscode_storage_paths_include_macos_installations(self):
+        with patch.object(vscode_mcp.sys, "platform", "darwin"):
+            paths = vscode_mcp._vscode_storage_paths()
+        self.assertEqual(len(paths), 3)
+        self.assertTrue(all(path.name == "storage.json" for path in paths))
+        self.assertTrue(any("Code - Insiders" in str(path) for path in paths))
+
+    def test_vscode_storage_paths_include_linux_installations(self):
+        with patch.object(vscode_mcp.sys, "platform", "linux"), patch.dict(
+            "os.environ", {"XDG_CONFIG_HOME": "/tmp/vscode-config"}
+        ):
+            paths = vscode_mcp._vscode_storage_paths()
+        self.assertEqual(len(paths), 3)
+        self.assertEqual(paths[0], Path("/tmp/vscode-config/Code/User/globalStorage/storage.json"))
+        self.assertTrue(any("VSCodium" in str(path) for path in paths))
+
     def test_file_operations_stay_in_workspace(self):
         vscode_mcp.create_file("src/app.js", "export function start() {}\n")
         vscode_mcp.create_file(".github/workflows/check.yml", "name: check\n")

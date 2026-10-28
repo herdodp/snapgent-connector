@@ -11,6 +11,26 @@ All notable changes to snapgentV3 Free are documented here.
   control channel automatically. Custom install locations can still be set in
   the local, Git-ignored `config.json`.
 
+## [V3.3] - 2026-10-29
+
+### Added
+- **macOS MCP auto-setup.** The launcher detects the bundled VS Code MCP,
+  Roblox Studio's `StudioMCP`, and an installed EffectCraft CLI, then writes
+  their local configuration and starts EffectCraft's control channel.
+- **macOS VS Code workspace detection.** The VS Code MCP server now reads
+  workspace state from the macOS stable, Insiders, and VSCodium storage paths.
+- **Cross-platform Python bridge for macOS.** The macOS launcher now runs
+  `bridge.py`, which serves the same local WebSocket protocol and manages
+  configured MCP stdio servers independently from the Windows `bridge.exe`.
+- **Linux launcher and MCP setup.** `Linux_Start.sh` uses the Python bridge,
+  detects VS Code and EffectCraft, and writes local MCP configuration.
+- **Linux VS Code workspace detection.** The VS Code MCP server now reads
+  stable, Insiders, and VSCodium workspace state from XDG config locations.
+
+### Fixed
+- **macOS launcher no longer attempts to run `bridge.exe`.** It prefers a
+  native `bridge` binary when present, then falls back to the Python bridge.
+
 ## [3.0.0] - 2026-10-25
 
 ### Changed
