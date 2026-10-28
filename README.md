@@ -1,10 +1,10 @@
 <div align="center">
 
 <a href="https://github.com/herdodp/snapgent-connector">
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+AI+agent+for+Roblox+%26+VS+Code" alt="snapgentV3: AI agent for Roblox Studio and VS Code" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+AI+agent+for+VS+Code" alt="snapgentV3: AI agent for VS Code" />
 </a>
 
-<p><b>Turn any AI chat into an agent for Roblox Studio and VS Code.</b></p>
+<p><b>Turn any AI chat into an agent for VS Code.</b></p>
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
@@ -23,34 +23,22 @@ herdo@snapgent:~$ snapgentV3
   ███████║██║ ╚████║██║  ██║██║     ╚██████╔╝███████╗██║ ╚████║   ██║
   ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
 
-  > browser extension + local bridge for Roblox Studio, VS Code, and MCP
+  > browser extension + local bridge for VS Code and MCP
   > no API key · no terminal · no copy-paste
 ```
 
-snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to **VS Code and Roblox Studio**. VS Code is the default target and automatically uses the currently open workspace; Roblox Studio's built-in MCP integration is available as an alternate target. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
+snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to **VS Code**. It automatically uses the currently open workspace. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
 
-**Free and open source — no API key, subscription, or sign-in required.** DeepSeek is the recommended provider. VS Code is the default MCP target and automatically uses the currently open VS Code workspace. Roblox Studio is also available when its MCP server is installed and running. Available actions depend on the selected target.
+**Free and open source — no API key, subscription, or sign-in required.** snapgentV3 automatically uses the currently open VS Code workspace.
 
 ---
 
 <table>
 <tr>
-<td width="33%" valign="top">
-
-### 🎮 Roblox Studio
-Read and update scripts, run Luau, generate assets, and inspect your Roblox place.
-
-</td>
-<td width="33%" valign="top">
+<td width="100%" valign="top">
 
 ### 💻 VS Code
 The default target. Automatically connects to the workspace currently open in VS Code.
-
-</td>
-<td width="33%" valign="top">
-
-### 💬 One chat workflow
-Switch between the Roblox Studio and VS Code targets from the chat bar.
 
 </td>
 </tr>
@@ -70,10 +58,10 @@ Switch between the Roblox Studio and VS Code targets from the chat bar.
 1. **You** describe a task in a supported AI chat.
 2. The **AI** replies with a snapgentV3 command.
 3. The **extension** detects the command and forwards it to the local bridge.
-4. The **bridge** routes it to the selected Roblox Studio or VS Code MCP server.
+4. The **bridge** routes it to the VS Code MCP server.
 5. The **result** is sent back into chat, and the AI continues working.
 
-Choose the target in the snapgentV3 bar before starting a session. VS Code is selected by default and its MCP server is configured locally by `start.bat`; it detects the open VS Code workspace automatically. Roblox Studio is also available when installed.
+VS Code's MCP server is configured locally by `start.bat`; it detects the open VS Code workspace automatically.
 
 ---
 
@@ -81,7 +69,6 @@ Choose the target in the snapgentV3 bar before starting a session. VS Code is se
 
 | Provider | URL | Status | Notes |
 |---|---|---|---|
-| **DeepSeek** | `chat.deepseek.com` | ✅ Recommended | Best tool adherence |
 | **ChatGPT** | `chatgpt.com` | ✅ Supported | Image input and screenshots are disabled |
 | **Claude** | `claude.ai` | ✅ Supported | Image input and screenshots are disabled |
 | **Google Gemini** | `gemini.google.com` | ✅ Supported | May stop using tools in long sessions |
@@ -101,7 +88,6 @@ Choose the target in the snapgentV3 bar before starting a session. VS Code is se
 
 - **Microsoft Edge** or **Google Chrome** (Manifest V3).
 - **VS Code** for the default target. Keep the workspace you want to use open in VS Code.
-- **Roblox Studio** with its built-in MCP server enabled when using the Roblox target.
 - **Windows** or **macOS** for the bridge.
 - **Python 3.9+** on macOS. The Windows release includes the bridge executable.
 - The bridge running while you use the agent.
@@ -122,12 +108,10 @@ Choose the target in the snapgentV3 bar before starting a session. VS Code is se
 
 For VS Code, open the project folder you want to work on before clicking **Start** in the chat bar. The bridge can be started before VS Code; the agent waits until a workspace is available and does not fall back to the Snapgent release folder.
 
-For Roblox Studio, open a place and enable **Assistant AI → … → Manage MCP Servers → Enable Studio as MCP Server**. Roblox Studio is optional; VS Code remains available without it.
-
 **③ Start the bridge**
 
-- **Windows** — double-click `start.bat`. It configures VS Code MCP automatically,
-  and adds Roblox Studio MCP when installed. You can start the bridge before VS Code.
+- **Windows** — double-click `start.bat`. It configures VS Code MCP automatically.
+  You can start the bridge before VS Code.
   Machine-specific settings are written to the ignored local `config.json`.
 - **macOS** — double-click `MacOS_Start.command`. The current macOS launcher
   does not auto-configure the VS Code MCP server; configure that server in the
@@ -138,7 +122,7 @@ A window opens and stays open while the bridge runs. On macOS, the first launch 
 **④ Start a session**
 
 1. Open a supported AI chat site and start a new chat.
-2. VS Code is selected by default; open a project folder in VS Code before clicking **Start**. Choose **Roblox Studio** from the MCP target menu if you want to work in Studio.
+2. Open a project folder in VS Code before clicking **Start**.
 3. Click **Start** and describe what you want to make.
 
 ---
@@ -147,9 +131,9 @@ A window opens and stays open while the bridge runs. On macOS, the first launch 
 
 Once a session is running, just talk to the AI normally:
 
-> "Inspect the scripts in my place and tell me how the round system works."
+> "Inspect the files in my project and explain how the login flow works."
 
-> "Build a shop UI with buttons for the items in ReplicatedStorage."
+> "Add a search bar to the books page and wire it to the existing API."
 
 The AI sends commands, snapgentV3 runs them in the selected target (VS Code by default), and the results appear in chat. You can give the AI another instruction at any time.
 
@@ -157,9 +141,8 @@ The AI sends commands, snapgentV3 runs them in the selected target (VS Code by d
 
 - Keep the bridge window open — closing it disconnects the agent.
 - Keep your intended project open in VS Code; it is the default MCP target.
-- Choose **Roblox Studio** from the bar when you want to work in Studio instead.
 - On **Arena**, use **Direct** mode.
-- If **Gemini** or **Kimi** stops using tools in a long session, remind it to use the Roblox commands or start a new chat.
+- If **Gemini** or **Kimi** stops using tools in a long session, remind it to use the snapgentV3 commands or start a new chat.
 
 ---
 
@@ -176,7 +159,7 @@ background.js               WebSocket connection to the local bridge
 manifest.json               browser permissions and content scripts
 ```
 
-The bridge routes commands to the Roblox Studio or VS Code MCP server selected in the chat bar.
+The bridge routes commands to the VS Code MCP server.
 
 ---
 
@@ -191,7 +174,7 @@ snapgent-full/
 │   ├── manifest.json          # Manifest V3 configuration
 │   └── test-*.js              # Smoke tests
 ├── assets/                    # Project images
-├── setup-config.ps1           # Configures VS Code MCP and detects Roblox Studio MCP
+├── setup-config.ps1           # Configures VS Code MCP
 ├── config.json                # Generated locally by start.bat (not tracked)
 ├── start.bat                  # Windows bridge launcher
 ├── MacOS_Start.command        # macOS bridge launcher
@@ -235,7 +218,6 @@ The Node smoke tests print `PASS`/`FAIL`; all test commands exit non-zero on fai
 |---|---|---|
 | snapgentV3 bar is missing | Extension is disabled or site access is blocked | Check the extension is enabled and allowed on the current AI chat site, then reload the tab |
 | Bridge is offline | Bridge is not running | Start `start.bat` (Windows) or `MacOS_Start.command` (macOS) |
-| Studio is not ready | No place is open or Studio MCP is disabled | Open a place and enable **Studio as MCP Server** in Assistant settings |
 | AI replies without using tools | Provider/model stopped following commands | Remind it to use snapgentV3 commands or start a new chat |
 | VS Code target is unavailable | The bridge is offline or the release is incomplete | Run `start.bat` from the extracted release folder and keep the project open in VS Code |
 
