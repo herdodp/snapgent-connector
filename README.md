@@ -1,10 +1,10 @@
 <div align="center">
 
 <a href="https://github.com/herdodp/snapgent-connector">
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+AI+agent+for+VS+Code" alt="snapgentV3: AI agent for VS Code" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+Connector+agent+for+VS+Code" alt="snapgentV3: Connector agent for VS Code" />
 </a>
 
-<p><b>Turn any AI chat into an agent for VS Code.</b></p>
+<p><b>Turn any AI chat into a connector agent for VS Code.</b></p>
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
