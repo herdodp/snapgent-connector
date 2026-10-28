@@ -17,11 +17,11 @@ if not exist "%~dp0bridge.exe" (
 )
 
 echo.
-echo   Detecting Roblox Studio MCP...
+echo   Configuring VS Code MCP and detecting Roblox Studio...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-config.ps1"
 if errorlevel 1 (
     echo.
-    echo   ERROR: Could not configure the Roblox Studio MCP connection.
+    echo   ERROR: Could not configure the VS Code MCP connection.
     echo   Check the message above, then run start.bat again.
     echo.
     pause

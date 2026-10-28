@@ -171,8 +171,8 @@ const ZS = (() => {
       siteName = "this AI site",
       customPrompt = "",
       providerNotes = "",
-      targetServer = "roblox",
-      targetName = "Roblox Studio",
+      targetServer = "vscode",
+      targetName = "VS Code",
     } = opts;
 
     if (targetServer !== "roblox") {
@@ -354,7 +354,7 @@ IMPORTANT: Your very first action is to write \`list_commands\` with no params (
   // a tool result every so often so the model does not drift from the exact
   // command names over a long session. It is explicitly framed as an automatic
   // snapgentV3 reminder (NOT a user message and NOT a new command to run).
-  function toolsReminder(tools, targetName = "Roblox Studio", serverId = "roblox") {
+  function toolsReminder(tools, targetName = "VS Code", serverId = "vscode") {
     const toolsString =
       `  list_commands(server: "${serverId}") - list available ${targetName} commands with full parameter details\n` +
       compactTools(tools);

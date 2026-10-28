@@ -96,7 +96,7 @@
     { name: "Grok", url: "https://grok.com/" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
-  let selectedTargetId = "roblox";
+  let selectedTargetId = "vscode";
   try {
     chrome.storage.local.get(TARGET_STORAGE_KEY, (result) => {
       const saved = result && result[TARGET_STORAGE_KEY];
@@ -937,10 +937,12 @@
       const servers = (A.bridge && A.bridge.servers) || [];
       const lines = servers.length
         ? servers.map((sv) => {
-            const label = sv.id === "roblox" ? "Roblox Studio (primary)" : `${sv.id} (addon)`;
+            const label = sv.id === "vscode"
+              ? "VS Code (default target)"
+              : sv.id === "roblox" ? "Roblox Studio" : `${sv.id} (addon)`;
             return `- ${sv.id}: ${label} - ${sv.alive ? `${sv.tools || 0} commands available` : "offline (no tools)"}`;
           })
-        : ["- roblox: Roblox Studio (primary) - unknown (bridge did not report server health)"];
+        : ["- vscode: VS Code (default target) - unknown (bridge did not report server health)"];
       return (
         `Output of 'list_mcp_servers':\n` +
         `Connected MCP servers (${lines.length}):\n${lines.join("\n")}\n` +
@@ -952,7 +954,7 @@
     // if the model explicitly asks via {"server": "<id>"} (see list_mcp_servers).
     if (name === "list_commands" || name === "list_tools") {
       await ensureTools();
-      const requested = (args.server || selectedTargetId || "roblox").trim();
+      const requested = (args.server || selectedTargetId || "vscode").trim();
       // The MCP proxy keeps advertising Roblox's catalogue even with no Studio
       // attached, so list_commands would hand back the full command list and read
       // as "Roblox is fine" - then every command silently fails. When Roblox is
@@ -1845,10 +1847,39 @@
                                // covers the list_commands / list_mcp_servers calls
                                // the model makes seconds later)
       if (!alive()) return;
+      const selectedTools = activeTools();
+      const vscodeServer = (A.bridge && A.bridge.servers || []).find((server) => server.id === "vscode");
+      if (selectedTargetId === "vscode" && A.bridge && A.bridge.connected &&
+          vscodeServer && vscodeServer.alive &&
+          !selectedTools.some((tool) => bareToolName(tool.name) === "list_dir")) {
+        ui.banner("warn", "VS Code workspace required",
+          "Open a project folder in VS Code, then try again.");
+        return;
+      }
       if (!activeTools().length) {
         ui.banner("warn", `${ui.getTargetName()} tools unavailable`,
           `Is the server online?`);
         return;
+      }
+      if (selectedTargetId === "vscode") {
+        const workspaceTool = activeTools().find((tool) => bareToolName(tool.name) === "list_dir");
+        if (!workspaceTool) {
+          ui.banner("warn", "VS Code workspace required",
+            "Open a project folder in VS Code, then try again.");
+          return;
+        }
+        const probe = await bg({
+          type: "call_tool",
+          name: workspaceTool.name,
+          arguments: { path: "." },
+          timeout: 5000,
+        });
+        if (!alive()) return;
+        if (!probe || !probe.ok) {
+          ui.banner("warn", "VS Code workspace required",
+            "Open a project folder in VS Code, then try again.");
+          return;
+        }
       }
       const modeState = await P.ensureComposerReady("startup");
       if (!alive()) return;
@@ -2529,7 +2560,8 @@
     let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl;
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
-    let bridgeOk = false, studioDown = false, placeDown = false, appDown = false, addonOk = false, studioProcUp = false;
+    let bridgeOk = false, workspaceReady = false, workspaceProbePending = false, workspaceProbeAt = 0;
+    let studioDown = false, placeDown = false, appDown = false, addonOk = false, studioProcUp = false;
     let wasConnected = false, bridgeBannerEl = null;
 
     function positionMenu(anchor) {
@@ -2570,8 +2602,8 @@
           <button id="zs-stop" hidden>■ Stop</button>
           <label class="zs-target-wrap" title="Choose which MCP server receives commands">
             <select id="zs-target" aria-label="MCP target">
-              <option value="roblox">Roblox Studio</option>
               <option value="vscode">VS Code</option>
+              <option value="roblox">Roblox Studio</option>
             </select>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </label>
@@ -2596,7 +2628,7 @@
           toast("Choose a target first.");
           return;
         }
-        selectedTargetId = targetSelect.value || "roblox";
+        selectedTargetId = targetSelect.value || "vscode";
         refreshActiveToolNames();
         try {
           chrome.storage.local.set({ [TARGET_STORAGE_KEY]: selectedTargetId });
@@ -2737,8 +2769,8 @@
     function setTarget(id = selectedTargetId) {
       if (!targetSelect) return;
       const options = [
-        { id: "roblox", name: "Roblox Studio" },
         { id: "vscode", name: "VS Code" },
+        { id: "roblox", name: "Roblox Studio" },
         ...mergedMcpServers()
           .filter((server) => server.id !== "vscode")
           .map((server) => ({ id: server.id, name: server.name })),
@@ -2954,13 +2986,22 @@
         // which used to drop into the discouraging "No agent here" branch on a page
         // that is actually empty and startable. "No agent here" is only correct for
         // an EXISTING conversation (one that has turns) we did not start.
-        if (selectedTargetId !== "roblox" && !bridgeOk) {
+        const selectedServer = (A.bridge.servers || []).find((item) => item.id === selectedTargetId);
+        const vscodeWorkspaceMissing = selectedTargetId === "vscode" &&
+          !!A.bridge.connected && !!selectedServer && !!selectedServer.alive &&
+          !(selectedServer.tools > 0);
+        if (selectedTargetId !== "roblox" &&
+            (!bridgeOk || (selectedTargetId === "vscode" && !workspaceReady))) {
           toneClass = "warn"; warn = true;
           msg = !A.bridge.connected
             ? `Run <b>start.bat</b>`
-            : `<b>${targetNameHtml()} unavailable</b>`;
+            : selectedTargetId === "vscode" && (bridgeOk || vscodeWorkspaceMissing)
+              ? workspaceProbePending
+                ? `Checking <b>VS Code workspace</b>…`
+                : `Open a <b>folder in VS Code</b>`
+              : `<b>${targetNameHtml()} unavailable</b>`;
           label = `▶︎ Start`; kind = "start"; disabled = true;
-        } else if (bridgeOk) {
+        } else if (bridgeOk && (selectedTargetId !== "vscode" || workspaceReady)) {
           toneClass = "standby";
           msg = `Ready.`;
           label = `▶︎ Start`; kind = "start";
@@ -3057,7 +3098,9 @@
       const servers = s.servers || [];
       if (selectedTargetId !== "roblox") {
         const selected = servers.find((item) => item.id === selectedTargetId);
-        const ready = !!s.connected && !!selected && !!selected.alive && (selected.tools || 0) > 0;
+        const serverConnected = !!s.connected && !!selected && !!selected.alive;
+        const ready = serverConnected &&
+          ((selected.tools || 0) > 0 || activeTools().length > 0);
         bridgeOk = ready;
         studioDown = false;
         placeDown = false;
@@ -3071,6 +3114,36 @@
         if (s.connected && !setupSeen) {
           setupSeen = true;
           try { chrome.storage.local.set({ zsSetupSeen: true }); } catch {}
+        }
+        if (selectedTargetId === "vscode" && serverConnected && !workspaceProbePending &&
+            Date.now() - workspaceProbeAt >= 5000) {
+          workspaceProbeAt = Date.now();
+          workspaceProbePending = true;
+          ensureTools(false).then(() => {
+            const workspaceTool = activeTools().find((tool) => bareToolName(tool.name) === "list_dir");
+            bridgeOk = serverConnected &&
+              ((selected.tools || 0) > 0 || activeTools().length > 0);
+            if (!workspaceTool) {
+              workspaceReady = false;
+              return;
+            }
+            return bg({
+              type: "call_tool",
+              name: workspaceTool.name,
+              arguments: { path: "." },
+              timeout: 5000,
+            }).then((result) => {
+              workspaceReady = !!(result && result.ok);
+            });
+          }).catch((error) => {
+            workspaceReady = false;
+            console.warn("[snapgentV3] Could not verify VS Code workspace:", error);
+          }).finally(() => {
+            workspaceProbePending = false;
+            renderBar();
+          });
+        } else if (selectedTargetId === "vscode" && !serverConnected) {
+          workspaceReady = false;
         }
         renderBar();
         refreshSetup(s.connected);
