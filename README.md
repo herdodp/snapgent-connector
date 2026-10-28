@@ -195,14 +195,16 @@ snapgent-full/
 ├── start.bat                  # Windows bridge launcher
 ├── MacOS_Start.command        # macOS bridge launcher
 ├── bridge.exe                 # Windows local bridge
-└── vscode_mcp.exe             # Default VS Code MCP server
+├── vscode_mcp.exe             # Default VS Code MCP server (24 workspace tools)
+├── vscode_mcp.py              # VS Code MCP server source
+└── vscode_mcp.spec            # PyInstaller build recipe
 ```
 
 ---
 
 ## `08` &nbsp; Development
 
-Plain Node, no extra dependencies. Run from `snapgent-extension/`:
+Plain Node, no extra dependencies. Run the extension checks from `snapgent-extension/`:
 
 ```bash
 node test-parser.js
@@ -210,7 +212,13 @@ node test-chatgpt.js
 node test-meta.js
 ```
 
-Each test prints `PASS`/`FAIL` and exits with a non-zero status if a case fails.
+Run the VS Code MCP tests from the repository root:
+
+```bash
+python -m unittest test_vscode_mcp.py
+```
+
+The Node smoke tests print `PASS`/`FAIL`; all test commands exit non-zero on failure.
 
 **Notes**
 
