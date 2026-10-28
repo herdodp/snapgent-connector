@@ -32,8 +32,8 @@ snapgentV3 is a browser extension plus a local bridge that connects a normal AI 
 
 ---
 
-Installation : https://youtu.be/eo3sdtPSBso
-Demo : https://youtu.be/HY0YWsHLp34
+- **Installation:** [Watch Installation Video](https://youtu.be/eo3sdtPSBso)
+- **Demo:** [Watch Demo Video](https://youtu.be/HY0YWsHLp34)
 
 <table>
 <tr>
