@@ -86,6 +86,7 @@ Choose the target in the snapgentV3 bar before starting a session. VS Code is se
 | **Claude** | `claude.ai` | ✅ Supported | Image input and screenshots are disabled |
 | **Google Gemini** | `gemini.google.com` | ✅ Supported | May stop using tools in long sessions |
 | **Kimi** | `kimi.ai` | ✅ Supported | May use its native tools in some sessions |
+| **Grok** | `grok.com` | ✅ Supported | Requires signing in to xAI |
 | **GLM (Z.ai)** | `chat.z.ai` | ✅ Supported | |
 | **Qwen** | `chat.qwen.ai` | ✅ Supported | |
 | **Arena** | `arena.ai` | ✅ Supported | Use **Direct** mode |
