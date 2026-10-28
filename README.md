@@ -1,7 +1,7 @@
 <div align="center">
 
 <a href="https://github.com/herdodp/snapgent-connector">
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+Connector+agent+for+VS+Code" alt="snapgentV3: Connector agent for VS Code" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+Connector+agent+VScode" alt="snapgentV3: Connector agent for VS Code" />
 </a>
 
 <p><b>Turn any AI chat into a connector agent for VS Code.</b></p>
