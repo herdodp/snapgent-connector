@@ -4,7 +4,8 @@ const SUPPORTED_HOSTS = [
   "gemini.google.com", "www.kimi.ai", "kimi.ai",
   "chat.z.ai", "chat.qwen.ai", "arena.ai", "www.meta.ai", "meta.ai", "ptero.pro",
 ];
-const DEFAULT_AI_URL = "https://chat.deepseek.com/";
+// const DEFAULT_AI_URL = "https://chat.deepseek.com/"; // DeepSeek hidden (disabled, not deleted)
+const DEFAULT_AI_URL = "https://chatgpt.com/";
 
 
 

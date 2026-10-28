@@ -83,7 +83,7 @@
   // AI chat sites snapgentV3 works on. Keep in sync with manifest.json
   // content_scripts and background.js PROVIDER_URLS when adding a provider.
   const AI_SITES = [
-    { name: "DeepSeek", url: "https://chat.deepseek.com/" },
+    // { name: "DeepSeek", url: "https://chat.deepseek.com/" }, // hidden from UI bar (disabled, not deleted)
     { name: "ChatGPT", url: "https://chatgpt.com/" },
     { name: "Claude", url: "https://claude.ai/new" },
     { name: "Gemini", url: "https://gemini.google.com/app" },
