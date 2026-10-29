@@ -2623,21 +2623,17 @@
       if (swName) swName.textContent = P.displayName || P.id;
       setTarget(selectedTargetId);
       targetSelect.addEventListener("change", () => {
-        if (A.started || A.starting || A.running) {
-          setTarget(selectedTargetId);
-          toast("Choose a target first.");
-          return;
-        }
+        // Switching is always allowed (even while a session is running).
+        // After the new target is persisted, reload the page so the whole
+        // extension restarts cleanly against the newly selected MCP server.
         selectedTargetId = targetSelect.value || "vscode";
-        refreshActiveToolNames();
+        const reloadPage = () => { try { location.reload(); } catch {} };
         try {
-          chrome.storage.local.set({ [TARGET_STORAGE_KEY]: selectedTargetId });
+          chrome.storage.local.set({ [TARGET_STORAGE_KEY]: selectedTargetId }, reloadPage);
         } catch (error) {
           console.error("[snapgentV3] Could not save selected MCP target:", error);
+          reloadPage();
         }
-        lastBarSig = "";
-        renderBar();
-        bg({ type: "status" }).then((status) => status && setStatus(status));
       });
       menuEl = root.querySelector("#zs-menu");
       bar.classList.add(`zs-prov-${P.id}`); // lets CSS tune per-site (e.g. font)
@@ -2788,7 +2784,7 @@
         targetSelect.dataset.optionsKey = optionsKey;
       }
       targetSelect.value = id;
-      targetSelect.disabled = !!(A.started || A.starting || A.running);
+      targetSelect.disabled = false; // never locked: the user may switch MCP target at any time
     }
     // ── The "more" menu (⋯) ─────────────────────────────────────────────────
     // One popover holding every secondary control. Opens above the bar.
