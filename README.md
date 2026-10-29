@@ -36,7 +36,7 @@ snapgentV3 is a browser extension plus a local bridge that connects a normal AI 
 - **Demo:** [Watch Demo Video](https://youtu.be/HY0YWsHLp34)
 
 - **MCP support**
-- <img src="assets/mcpsupport.jpeg" width="300" alt="Logo Project">
+<img src="assets/mcpsupport.jpeg" width="300" alt="Logo Project">
 
 <table>
 <tr>
