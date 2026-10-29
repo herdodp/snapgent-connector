@@ -157,6 +157,47 @@ else {
     Write-Host "EffectCraft not found; VS Code and Roblox MCP remain available."
 }
 
+function Test-ReaNodeVersion {
+    param([string]$NodePath)
+    try { $raw = (& $NodePath --version) } catch { return $false }
+    if (-not ($raw -match '^v(\d+)\.(\d+)\.(\d+)')) { return $false }
+    $major = [int]$Matches[1]
+    $version = [version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3])
+    if ($major -eq 22) { return $version -ge [version]'22.23.4' }
+    if ($major -eq 24) { return $version -ge [version]'24.22.1' }
+    return $version -ge [version]'26.12.1'
+}
+
+$reaNode = Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+$reaScript = $null
+if ($reaNode) {
+    $reaCandidates = @()
+    if ($env:APPDATA) { $reaCandidates += Join-Path $env:APPDATA 'npm\node_modules\rea-agents\scripts\rea.mjs' }
+    $reaCandidates += Join-Path (Split-Path $reaNode.Source -Parent) 'node_modules\rea-agents\scripts\rea.mjs'
+    $reaScript = $reaCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+
+if ($reaNode -and $reaScript -and (Test-ReaNodeVersion $reaNode.Source)) {
+    $reaServer = [pscustomobject]@{
+        command = $reaNode.Source
+        args = @($reaScript, '--mcp')
+        env = [pscustomobject]@{}
+    }
+    if ($configuration.mcpServers.PSObject.Properties['rea']) {
+        $configuration.mcpServers.rea = $reaServer
+    }
+    else {
+        $configuration.mcpServers | Add-Member -MemberType NoteProperty -Name rea -Value $reaServer
+    }
+    Write-Host "REA MCP detected: $reaScript"
+}
+elseif ($reaNode -and $reaScript) {
+    Write-Host "REA found but Node.js is too old (need 22.23.4+, 24.22.1+ or 26.12.1+); REA MCP not configured."
+}
+else {
+    Write-Host "REA not found; install it with: npm install --global rea-agents"
+}
+
 $json = ConvertTo-Json -InputObject $configuration -Depth 20
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ConfigPath, "$json`n", $utf8WithoutBom)
