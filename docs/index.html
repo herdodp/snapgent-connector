@@ -1,201 +1,232 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f2f0e8">
-    <meta name="description" content="Build Roblox experiences from a normal AI chat. snapgentV3 connects ChatGPT, DeepSeek, Gemini, and more to Roblox Studio through MCP.">
-    <meta property="og:title" content="snapgentV3: Build worlds with AI">
-    <meta property="og:description" content="Your AI chat, connected to Roblox Studio. Free, open source, and running on your computer.">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://herdodp.github.io/snapgent-connector/">
-    <title>snapgentV3: Build worlds with AI</title>
-    <link rel="icon" href="assets/icon.png" type="image/png">
-    <link rel="stylesheet" href="styles.css">
-    <script src="script.js" defer></script>
-  <style id="gesso-text-wrap">h1,h2,h3{text-wrap:balance}p,li,figcaption,blockquote{text-wrap:pretty}</style>
-<style id="gesso-font-smoothing">html{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}</style>
-<style id="gesso-image-outline">img:not([data-illustration]):not([data-icon]):not([aria-hidden="true"]){outline:1px solid rgba(0,0,0,0.05);outline-offset:-1px}</style>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>snapgentV3: Use your browser AI chat inside VS Code</title>
+  <meta name="description" content="snapgentV3 is a free, open source browser extension and local bridge. It lets the AI chat you already use read, edit, search and run code in your open VS Code workspace through MCP.">
+  <meta property="og:title" content="snapgentV3: Use your browser AI chat inside VS Code">
+  <meta property="og:description" content="A browser extension and a local bridge that connect a normal AI chat to your open VS Code workspace. Free and open source.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://herdodp.github.io/snapgent-connector/">
+  <meta property="og:image" content="https://herdodp.github.io/snapgent-connector/assets/icon.png">
+  <link rel="icon" href="assets/icon.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.add('js');</script>
+  <script src="script.js" defer></script>
 </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header">
-      <a class="brand" href="#top" aria-label="snapgentV3 home">
-        <img src="assets/icon.png" alt="" width="38" height="38">
-        <span>snapgent<span class="brand-version">V3</span></span>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-row">
+      <a class="brand" href="#top" aria-label="snapgentV3, back to top">
+        <img src="assets/icon.png" alt="" width="36" height="36">
+        <span>snapgent<span class="brand-v">V3</span></span>
       </a>
       <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
-        <span class="menu-icon" aria-hidden="true"></span>
-        <span class="sr-only">Open navigation</span>
+        <span class="menu-label">Menu</span>
       </button>
-      <nav class="site-nav" id="site-nav" aria-label="Main navigation">
+      <nav class="site-nav" id="site-nav" aria-label="Main">
         <a href="#how-it-works">How it works</a>
-        <a href="#providers">AI providers</a>
-        <a href="https://github.com/herdodp/snapgent-connector" target="_blank" rel="noreferrer">Source <span aria-hidden="true">↗</span></a>
-        <a class="nav-download" href="https://github.com/herdodp/snapgent-connector/releases/tag/V3">Get snapgentV3 <span aria-hidden="true">↗</span></a>
+        <a href="#tools">Tools</a>
+        <a href="#providers">Providers</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/herdodp/snapgent-connector" target="_blank" rel="noopener">GitHub</a>
       </nav>
-    </header>
+    </div>
+  </header>
 
-    <main id="main">
-      <section class="hero page-wrap" id="top">
-        <div class="hero-copy">
-          <h1>Make the game<br>you <span>pictured.</span></h1>
-          <p class="hero-description">Give your AI chat a direct line to Roblox Studio. Describe a world, tune a script, or inspect your game. snapgentV3 carries out the work on your computer.</p>
-          <div class="hero-actions">
-            <a class="button button-dark" href="https://github.com/herdodp/snapgent-connector/releases/tag/V3">Download V3 <span aria-hidden="true">↗</span></a>
-            <a class="text-link" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
-          </div>
-          <ul class="hero-facts" aria-label="Highlights">
-            <li>Open source</li>
-            <li>No API key</li>
-            <li>Runs locally</li>
-          </ul>
+  <main id="main">
+    <section class="hero wrap" id="top">
+      <div class="hero-copy">
+        <h1>The AI chat you already use, working inside <mark>VS Code</mark>.</h1>
+        <p class="lead">snapgentV3 is a browser extension and a local bridge. Your chat sends plain-text commands, the bridge runs them on the workspace you have open, and the results go back into the conversation. No API key, no sign-in.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="https://github.com/herdodp/snapgent-connector/releases/latest" target="_blank" rel="noopener">Download the latest release</a>
+          <a class="text-link" href="https://youtu.be/HY0YWsHLp34" target="_blank" rel="noopener">Watch the demo video (YouTube)</a>
         </div>
-
-        <div class="workbench" aria-label="Illustration of snapgentV3 connected to Roblox Studio">
-          <div class="workbench-top">
-            <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span>STUDIO / PLACE 01</span>
-            <span class="connection"><i></i> CONNECTED</span>
-          </div>
-          <div class="scene">
-            <div class="scene-coordinate">WORLD_01 &nbsp; / &nbsp; 0, 24, 0</div>
-            <svg class="build-scene" viewBox="0 0 600 370" role="img" aria-labelledby="scene-title scene-desc">
-              <title id="scene-title">A block-built Roblox world</title>
-              <desc id="scene-desc">A small floating island with a house, a tree, and a stepping-stone path.</desc>
-              <defs>
-                <pattern id="grid" width="28" height="16" patternUnits="userSpaceOnUse" patternTransform="skewY(-28)">
-                  <path d="M 28 0 L 0 0 0 16" fill="none" stroke="#3a4542" stroke-width="1"/>
-                </pattern>
-                <clipPath id="ground-clip">
-                  <path d="M80 238 302 113 526 238 302 364Z"/>
-                </clipPath>
-              </defs>
-              <path d="M80 238 302 113 526 238 302 364Z" fill="#283430" stroke="#70846c" stroke-width="2"/>
-              <path d="M80 238 302 113 526 238 302 364Z" fill="url(#grid)" clip-path="url(#ground-clip)" opacity=".9"/>
-              <path d="M80 238v24l222 126v-24Z" fill="#202a27" stroke="#56695a" stroke-width="2"/>
-              <path d="M302 364v24l224-126v-24Z" fill="#171f1e" stroke="#56695a" stroke-width="2"/>
-              <path d="m156 252 42-24 48 27-42 24Z" fill="#f4c842"/>
-              <path d="m204 279 42-24 48 27-42 24Z" fill="#dcae31"/>
-              <path d="m252 306 42-24 48 27-42 24Z" fill="#f4c842"/>
-              <path d="M348 198v-63l41-23 42 24v63l-42 23Z" fill="#d7dfc7" stroke="#18201d" stroke-width="3"/>
-              <path d="m348 135 41 23 42-22-42-24Z" fill="#f4c842" stroke="#18201d" stroke-width="3"/>
-              <path d="m389 158 42-22v63l-42 22Z" fill="#a9b99a" stroke="#18201d" stroke-width="3"/>
-              <path d="M376 214v-38l14-8 13 8v38" fill="#516653" stroke="#18201d" stroke-width="3"/>
-              <path d="M174 174v-53" stroke="#9b7440" stroke-width="12" stroke-linecap="square"/>
-              <path d="m174 87 34 43h-68Z" fill="#94aa75" stroke="#18201d" stroke-width="3"/>
-              <path d="m174 102 29 38h-58Z" fill="#718b60" stroke="#18201d" stroke-width="3"/>
-              <path d="M100 206h42M458 210h35" stroke="#f4c842" stroke-width="2" stroke-dasharray="5 7" opacity=".8"/>
-              <circle cx="304" cy="206" r="5" fill="#f4c842"/>
-            </svg>
-            <div class="scene-axis"><span>X</span><span>Y</span><span>Z</span><b>24.0</b></div>
-            <div class="scene-caption">A place taking shape, one prompt at a time.</div>
-          </div>
-          <div class="agent-console">
-            <div class="console-heading"><span>SNAPGENT / COMMAND LOG</span><span>SESSION 004</span></div>
-            <div class="console-line"><span class="console-index">01</span><span class="console-command">inspect_instance</span><span class="console-result">done</span></div>
-            <div class="console-line"><span class="console-index">02</span><span class="console-command">multi_edit</span><span class="console-result">3 scripts</span></div>
-            <div class="console-line"><span class="console-index">03</span><span class="console-command">execute_luau</span><span class="console-result">running</span></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="ticker" aria-label="Product highlights">
-        <div class="ticker-track">
-          <span>READ SCRIPTS</span><b>+</b><span>BUILD IN STUDIO</span><b>+</b><span>RUN LUAU</span><b>+</b><span>INSPECT YOUR WORLD</span><b>+</b><span>READ SCRIPTS</span><b>+</b><span>BUILD IN STUDIO</span><b>+</b><span>RUN LUAU</span><b>+</b><span>INSPECT YOUR WORLD</span><b>+</b>
-        </div>
-      </section>
-
-      <section class="how page-wrap section-space" id="how-it-works">
-        <div class="section-heading">
-          <p class="section-label"><span class="label-mark"></span> FROM CHAT TO CREATION</p>
-          <h2>From <span>idea to play.</span></h2>
-        </div>
-        <div class="steps">
-          <article class="step">
-            <span class="step-number">01</span>
-            <div class="step-symbol symbol-chat" aria-hidden="true"><i></i><i></i><i></i></div>
-            <h3>Describe it</h3>
-            <p>Tell your AI what to build in a chat you already use. No special prompt syntax to learn.</p>
-          </article>
-          <article class="step">
-            <span class="step-number">02</span>
-            <div class="step-symbol symbol-bridge" aria-hidden="true"><i></i><i></i><i></i></div>
-            <h3>snapgent gets to work</h3>
-            <p>The extension passes commands through a small local bridge to Roblox Studio MCP.</p>
-          </article>
-          <article class="step">
-            <span class="step-number">03</span>
-            <div class="step-symbol symbol-cube" aria-hidden="true"><i></i><i></i><i></i></div>
-            <h3>Build it together</h3>
-            <p>Studio runs each action and sends the result back to the AI. Refine the world as you go.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="capabilities">
-        <div class="capability-layout page-wrap">
-          <div>
-            <p class="section-label"><span class="label-mark"></span> YOUR STUDIO, WITH A COPILOT</p>
-            <h2>From first part to <span>final playtest.</span></h2>
-          </div>
-          <div class="capability-list">
-            <article><div><h3>Shape the experience</h3><p>Generate models, meshes, and materials. Browse and insert Creator Store assets.</p></div></article>
-            <article><div><h3>Work in the code</h3><p>Read and edit scripts, run Luau, and inspect instances in your place.</p></div></article>
-            <article><div><h3>Test the details</h3><p>Control play-testing and keep durable project notes across AI sessions.</p></div></article>
-          </div>
-        </div>
-      </section>
-
-      <section class="providers page-wrap section-space" id="providers">
-        <div class="provider-intro">
-          <p class="section-label"><span class="label-mark"></span> YOUR CHAT, YOUR CHOICE</p>
-          <h2>Works where <span>you already think.</span></h2>
-          <p>Use the AI conversation you prefer. DeepSeek is our recommended provider; more chats are ready when you need them.</p>
-        </div>
-        <div class="provider-board">
-          <div class="provider-featured"><span class="provider-monogram">D</span><div><b>DeepSeek</b><small>RECOMMENDED</small></div><span class="provider-arrow">↗</span></div>
-          <div class="provider-grid">
-            <span>ChatGPT</span><span>Claude</span><span>Gemini</span><span>Kimi</span><span>GLM</span>
-            <span>Qwen</span><span>Arena <small>DIRECT</small></span><span>Meta AI</span><span>Ptero</span>
-          </div>
-          <p class="provider-note">Provider behavior varies by model. The bridge and Roblox Studio stay on your computer.</p>
-        </div>
-      </section>
-
-      <section class="setup-band">
-        <div class="setup-layout page-wrap">
-          <div class="setup-copy">
-            <p class="section-label"><span class="label-mark"></span> START MAKING</p>
-            <h2>Ready when <span>you are.</span></h2>
-            <p>Install the extension, enable Studio's built-in MCP server, then start the local bridge. You can be in your first session in minutes.</p>
-            <a class="button button-yellow" href="https://github.com/herdodp/snapgent-connector/releases/tag/V3">Get snapgentV3 V3 <span aria-hidden="true">↗</span></a>
-          </div>
-          <ol class="setup-steps">
-            <li><span>01</span><div><b>Load the extension</b><p>Unpack the release and load <code>snapgent-extension</code> in Edge or Chrome.</p></div></li>
-            <li><span>02</span><div><b>Enable Studio MCP</b><p>In Roblox Studio, turn on <em>Enable Studio as MCP Server</em>.</p></div></li>
-            <li><span>03</span><div><b>Run the bridge</b><p>Open <code>start.bat</code> on Windows or <code>MacOS_Start.command</code> on macOS.</p></div></li>
-          </ol>
-        </div>
-      </section>
-
-      <section class="other-target page-wrap">
-        <div class="target-index">VS CODE MCP TARGET</div>
-        <div class="target-title"><h2>VS Code is ready by default</h2><p>Keep VS Code open with a project folder; the agent waits until a workspace is ready. Switch to Roblox Studio from the chat bar whenever you need it.</p></div>
-        <a href="https://github.com/herdodp/snapgent-connector#readme" class="text-link">Read setup notes <span aria-hidden="true">↗</span></a>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <div class="footer-main page-wrap">
-        <a class="brand footer-brand" href="#top">
-          <img src="assets/icon.png" alt="" width="36" height="36">
-          <span>snapgent<span class="brand-version">V3</span></span>
-        </a>
-        <p>Tools for worlds still being imagined.</p>
-        <div class="footer-links"><a href="https://github.com/herdodp/snapgent-connector">GitHub</a><a href="https://github.com/herdodp/snapgent-connector/releases/tag/V3">Release V3</a><a href="https://github.com/herdodp/snapgent-connector/issues">Issues</a></div>
+        <ul class="facts" aria-label="Key facts">
+          <li>Free and open source, GPL-3.0</li>
+          <li>The bridge runs on your computer</li>
+          <li>Edge and Chrome, Manifest V3</li>
+        </ul>
       </div>
-      <div class="footer-bottom page-wrap"><span>FREE & OPEN SOURCE</span><span>GPL-3.0 · BUILT FOR ROBLOX CREATORS</span></div>
-    </footer>
-  </body>
+
+      <figure class="pipeline-fig">
+        <ol class="pipeline">
+          <li><b>AI chat</b><span>in your browser</span></li>
+          <li><b>snapgentV3 extension</b><span>reads the command in the reply</span></li>
+          <li><b>Local bridge</b><span>WebSocket on your machine</span></li>
+          <li><b>VS Code MCP server</b><span>28 workspace tools</span></li>
+          <li class="end"><b>Your open workspace</b><span>files, Git, scripts</span></li>
+        </ol>
+        <figcaption>Commands travel down. Results travel back up into the chat.</figcaption>
+      </figure>
+    </section>
+
+    <section class="section wrap" id="how-it-works" aria-labelledby="how-title">
+      <div class="split">
+        <div class="split-head">
+          <h2 id="how-title">One command at a time, <mark>checked by you</mark> in the chat.</h2>
+          <p class="muted">The AI does not get a remote shell. It writes a command in its reply, and the extension runs that one command and pastes the result back.</p>
+        </div>
+        <div>
+          <ol class="steps">
+            <li><b>You describe a task</b> in a supported AI chat, in plain language.</li>
+            <li><b>The AI replies with a command</b> written as a small JSON block.</li>
+            <li><b>The extension detects it</b> and forwards it to the local bridge.</li>
+            <li><b>The bridge routes it</b> to the VS Code MCP server for your open workspace.</li>
+            <li><b>The result is sent back</b> into the chat, and the AI continues from there.</li>
+          </ol>
+          <p class="caption">This is what a command looks like in a reply:</p>
+<pre class="code" tabindex="0"><code>{"command":"read_file","params":{"path":"README.md"}}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="tools" aria-labelledby="tools-title">
+      <div class="wrap">
+        <h2 id="tools-title"><mark>28 tools</mark> for the workspace you have open.</h2>
+        <p class="muted lede">The VS Code MCP server works inside the open workspace folder. Tools marked new arrived in V3.6.</p>
+        <div class="tool-groups">
+          <section aria-labelledby="g-look">
+            <h3 id="g-look">Look around <small>11</small></h3>
+            <ul>
+              <li>get_workspace_info</li><li>get_project_info</li><li>list_dir</li><li>list_tree</li><li>find_files</li><li>search_files</li><li>read_file</li><li>read_files</li><li>read_file_lines</li><li>get_file_info</li><li>get_file_outline</li>
+            </ul>
+          </section>
+          <section aria-labelledby="g-change">
+            <h3 id="g-change">Change files <small>8</small></h3>
+            <ul>
+              <li>create_file</li><li>write_file</li><li>edit_file</li><li class="new">apply_patch <small>new</small></li><li>create_directory</li><li>move_file</li><li>copy_file</li><li class="new">delete_file <small>new</small></li>
+            </ul>
+          </section>
+          <section aria-labelledby="g-git">
+            <h3 id="g-git">Use Git <small>6</small></h3>
+            <ul>
+              <li>git_status</li><li>git_diff</li><li>git_log</li><li>git_branches</li><li class="new">git_add <small>new</small></li><li class="new">git_commit <small>new</small></li>
+            </ul>
+          </section>
+          <section aria-labelledby="g-run">
+            <h3 id="g-run">Run and test <small>3</small></h3>
+            <ul>
+              <li>run_command</li><li>run_project_script</li><li>run_tests</li>
+            </ul>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="guard-title">
+      <h2 id="guard-title">Where the tools <mark>say no</mark>.</h2>
+      <p class="muted lede">These limits are built into the server, so they hold whatever the AI asks for.</p>
+      <dl class="guards">
+        <div><dt>delete_file</dt><dd>Deletes one file. Directories, the workspace root and anything under <code>.git</code> are refused.</dd></div>
+        <div><dt>apply_patch</dt><dd>Applies several exact replacements to one file. Each <code>old_text</code> must match exactly once, and nothing is written if any edit fails.</dd></div>
+        <div><dt>git_add</dt><dd>Stages the paths you name. Staging the whole workspace is refused.</dd></div>
+        <div><dt>git_commit</dt><dd>Commits what is already staged. It never stages files itself and has no amend option.</dd></div>
+        <div><dt>create_file, move_file, copy_file</dt><dd>Never overwrite an existing destination.</dd></div>
+        <div><dt>edit_file</dt><dd>Replaces an exact snippet, which must be unique unless <code>replace_all</code> is set.</dd></div>
+      </dl>
+    </section>
+
+    <section class="section wrap" id="providers" aria-labelledby="prov-title">
+      <div class="split split-tight">
+        <div class="split-head">
+          <h2 id="prov-title">Ten chats, <mark>your pick</mark>.</h2>
+          <p class="muted">Use whichever AI site you prefer. The extension has a separate integration for each one.</p>
+          <p class="note">Whatever a command returns is pasted into the chat, so the provider you choose can see it. Pick a project you are comfortable sharing with that provider.</p>
+        </div>
+        <div class="table-wrap" role="region" aria-label="Supported AI providers" tabindex="0">
+          <table>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Site</th><th scope="col">Notes</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">ChatGPT</th><td><code>chatgpt.com</code></td><td>Image input and screenshots are disabled</td></tr>
+              <tr><th scope="row">Claude</th><td><code>claude.ai</code></td><td>Image input and screenshots are disabled</td></tr>
+              <tr><th scope="row">Google Gemini</th><td><code>gemini.google.com</code></td><td>May stop using tools in long sessions</td></tr>
+              <tr><th scope="row">Kimi</th><td><code>kimi.ai</code></td><td>May use its native tools in some sessions</td></tr>
+              <tr><th scope="row">Grok</th><td><code>grok.com</code></td><td>Requires signing in to xAI</td></tr>
+              <tr><th scope="row">GLM (Z.ai)</th><td><code>chat.z.ai</code></td><td></td></tr>
+              <tr><th scope="row">Qwen</th><td><code>chat.qwen.ai</code></td><td></td></tr>
+              <tr><th scope="row">Arena</th><td><code>arena.ai</code></td><td>Use Direct mode</td></tr>
+              <tr><th scope="row">Meta AI</th><td><code>meta.ai</code></td><td></td></tr>
+              <tr><th scope="row">Ptero</th><td><code>ptero.pro</code></td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="install" aria-labelledby="install-title">
+      <div class="wrap">
+        <h2 id="install-title">From download to <mark>first command</mark>.</h2>
+        <p class="muted lede">Needs Microsoft Edge or Google Chrome, and VS Code. On macOS and Linux the bridge also needs Python 3.9 or newer. Windows ships the bridge as an executable.</p>
+        <ol class="install-steps">
+          <li>
+            <h3>Load the extension</h3>
+            <p>Download and extract the <a href="https://github.com/herdodp/snapgent-connector/releases/latest" target="_blank" rel="noopener">latest release</a>. Open <code>edge://extensions</code> or <code>chrome://extensions</code>, turn on Developer mode, choose Load unpacked, and select the <code>snapgent-extension</code> folder.</p>
+          </li>
+          <li>
+            <h3>Open your project in VS Code</h3>
+            <p>Open the folder you want to work on. The bridge can start before VS Code. The agent waits until a workspace is open and never falls back to the release folder.</p>
+          </li>
+          <li>
+            <h3>Start the bridge</h3>
+            <p>Keep its window open while you work. Closing it disconnects the agent.</p>
+            <dl class="os">
+              <div><dt>Windows</dt><dd><code>start.bat</code></dd></div>
+              <div><dt>macOS</dt><dd><code>MacOS_Start.command</code></dd></div>
+              <div><dt>Linux</dt><dd><code>bash Linux_Start.sh</code></dd></div>
+            </dl>
+            <p class="note">On macOS the first launch may show a Gatekeeper warning. Choose Done, then allow the script in System Settings, Privacy &amp; Security.</p>
+          </li>
+          <li>
+            <h3>Start a session</h3>
+            <p>Open a supported AI site, start a new chat, click Start in the snapgentV3 bar above the input box, and describe what you want. The <a href="https://youtu.be/eo3sdtPSBso" target="_blank" rel="noopener">installation video</a> walks through it (YouTube).</p>
+          </li>
+        </ol>
+
+        <h3 class="sub">If something is off</h3>
+        <dl class="fixes">
+          <div><dt>The snapgentV3 bar is missing</dt><dd>Check that the extension is enabled and allowed on the current site, then reload the tab.</dd></div>
+          <div><dt>The bridge shows as offline</dt><dd>Start the launcher for your system and keep its window open.</dd></div>
+          <div><dt>The AI answers without using tools</dt><dd>Remind it to use snapgentV3 commands, or start a new chat.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="other-title">
+      <div class="split split-tight">
+        <div class="split-head">
+          <h2 id="other-title">Other targets, <mark>one click</mark> away.</h2>
+        </div>
+        <div>
+          <p>VS Code is the default target. The MCP selector in the chat bar can also point the bridge at Roblox Studio or EffectCraft, and you can switch at any time. After a switch the page reloads, and a running session in that tab has to be started again.</p>
+          <p class="muted">EffectCraft support is optional and needs EffectCraft installed. Roblox Studio needs its built-in MCP server enabled. The <a href="https://github.com/herdodp/snapgent-connector#readme" target="_blank" rel="noopener">README</a> has the detection details for each system.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-row">
+      <div>
+        <a class="brand" href="#top" aria-label="snapgentV3, back to top">
+          <img src="assets/icon.png" alt="" width="32" height="32">
+          <span>snapgent<span class="brand-v">V3</span></span>
+        </a>
+        <p class="muted">Free and open source under GPL-3.0. Latest release: V3.6.</p>
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://github.com/herdodp/snapgent-connector" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://github.com/herdodp/snapgent-connector/releases/latest" target="_blank" rel="noopener">Releases</a></li>
+        <li><a href="https://github.com/herdodp/snapgent-connector/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a></li>
+        <li><a href="https://github.com/herdodp/snapgent-connector/issues" target="_blank" rel="noopener">Issues</a></li>
+        <li><a href="https://github.com/herdodp/snapgent-connector/blob/main/LICENSE" target="_blank" rel="noopener">License</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
 </html>
