@@ -7,12 +7,11 @@
 // SUPPORTED_HOSTS + main.js AI_SITES).
 //
 // ChatGPT DOM notes (re-validated live, 2026-08 - chatgpt.com, logged in, fr-FR):
-//  - React app. One message = a <div data-message-author-role="user|assistant">
-//    carrying a stable data-message-id (a UUID). There is NO <article> wrapper
-//    anymore, so these elements alternate in DOM order and map 1:1 onto the
-//    core's turn expectations. We treat each data-message-author-role div as one
-//    "turn item". Long chats DO get virtualized, so every "is this a new reply"
-//    test goes through the id (itemKey / lastAssistantId), never through counts.
+//  - The classic React app uses one <div data-message-author-role="user|assistant">
+//    per message, with a stable data-message-id. The newer ChatGPT layout renders
+//    assistant replies in a `.DilResponseRoot-*` element without those attributes.
+//    Both are treated as turn items; the newer layout uses the assistant count
+//    fallback to detect a newly rendered reply.
 //  - The reply markdown lives in <div class="markdown">. ChatGPT does NOT prefix
 //    text with a screen-reader label (unlike Gemini), but textContent is still
 //    NOT usable: code blocks are CodeMirror (.cm-line per line, zero "\n" text
@@ -22,9 +21,10 @@
 //    Reasoning (thinking models) renders OUTSIDE .markdown, so reading only the
 //    .markdown naturally excludes drafts the model writes while reasoning.
 //  - The composer is usually a ProseMirror contenteditable: <div
-//    id="prompt-textarea">. Newer/compact layouts can instead expose a controlled
-//    textarea marked [data-mobile-composer-prompt]; use its native value setter
-//    plus an input event in that case.
+//    id="prompt-textarea">. Newer layouts may identify it as a textbox labelled
+//    "Ask ChatGPT"; compact layouts can instead expose a controlled textarea
+//    marked [data-mobile-composer-prompt], which needs its native value setter
+//    plus an input event.
 //  - The send button is #composer-submit-button (data-testid="send-button"); it
 //    appears only once the composer has text. While generating, a stop button
 //    data-testid="stop-button" is present for the ENTIRE generation (including
@@ -63,11 +63,11 @@ const ZSProvider = (() => {
   let diag = () => {}; // injected by core via init()
 
   const S = {
-    msg: "[data-message-author-role]",
+    msg: '[data-message-author-role],[class*="DilResponseRoot"]',
     userRole: "user",
     assistantRole: "assistant",
     reply: ".markdown",
-    editor: '#prompt-textarea,[data-mobile-composer-prompt],textarea[aria-label="Chat with ChatGPT"]',
+    editor: '#prompt-textarea,[data-mobile-composer-prompt],textarea[aria-label="Chat with ChatGPT"],[role="textbox"][aria-label="Ask ChatGPT"]',
     // The ONE submit control; its data-testid says whether it is currently a
     // send or a stop button (see isStopBtn). Id first - it survives testid churn.
     submitBtn: "#composer-submit-button, button[data-testid='send-button'], button[data-testid='stop-button'], button[aria-label='Send message'], button[aria-label*='Stop'], button[aria-label*='stop'], button[aria-label*='Interrompre'], button[aria-label*='Arrêter']",
@@ -117,7 +117,11 @@ const ZSProvider = (() => {
   // ── Turn classification ───────────────────────────────────────────────────
   const role = (item) => (item && item.getAttribute ? item.getAttribute("data-message-author-role") : null);
   const isUserItem = (item) => role(item) === S.userRole;
-  const isAssistantItem = (item) => role(item) === S.assistantRole;
+  const isDilReply = (item) => !!(item && item.matches && item.matches('[class*="DilResponseRoot"]'));
+  const isAssistantItem = (item) => role(item) === S.assistantRole || isDilReply(item);
+  const replyNodes = (item) => isDilReply(item)
+    ? [item]
+    : [...item.querySelectorAll(S.reply)];
 
   // Text extraction that can skip our own chip (and any excluded subtree).
   //
@@ -202,14 +206,14 @@ const ZSProvider = (() => {
     if (!item) return "";
     if (isAssistantItem(item)) {
       // textWithout, never textContent - see the CodeMirror note there.
-      return [...item.querySelectorAll(S.reply)].map((m) => textWithout(m)).join("\n");
+      return replyNodes(item).map((m) => textWithout(m)).join("\n");
     }
     return textWithout(item);
   }
 
   function classifyText(item, excludeSel) {
     if (isAssistantItem(item)) {
-      return [...item.querySelectorAll(S.reply)]
+      return replyNodes(item)
         .filter((m) => !(excludeSel && m.closest(excludeSel)))
         .map((m) => textWithout(m, excludeSel)).join("\n");
     }
@@ -465,7 +469,7 @@ const ZSProvider = (() => {
     try {
       const it = lastAssistant();
       if (!it) return { th: 0, rp: 0 };
-      const md = it.querySelector(S.reply);
+      const md = replyNodes(it)[0];
       return { th: 0, rp: md ? (md.textContent || "").length : 0 };
     } catch { return {}; }
   }
@@ -473,7 +477,7 @@ const ZSProvider = (() => {
   function readAssistant() {
     const item = lastAssistant();
     if (!item) return { present: false, reply: "", thinking: "", item: null };
-    const mds = [...item.querySelectorAll(S.reply)];
+    const mds = replyNodes(item);
     return {
       present: true,
       reply: mds.map((m) => textWithout(m, ".zs-chip")).join("\n").trim(),
@@ -885,7 +889,7 @@ const ZSProvider = (() => {
   const CMD_CLOSE = /###\s*END_(?:LUA|MCP_TOOL)\s*###/i;
 
   function findToolBlockSpot(item /*, chip */) {
-    const replies = [...item.querySelectorAll(S.reply)];
+    const replies = replyNodes(item);
     let hidAny = null;
     const hide = (el, mc) => {
       el.classList.add("zs-tool-hide");

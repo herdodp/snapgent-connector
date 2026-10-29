@@ -14,6 +14,9 @@
 // walks. No jsdom, no npm install: the repo has no dependencies and this test
 // keeps it that way.
 const fs = require("fs");
+const ZSParse = new Function(
+  fs.readFileSync(__dirname + "/core/parser.js", "utf8") + "; return ZSParse;"
+)();
 
 // ── Stub DOM ────────────────────────────────────────────────────────────────
 // el("div", {class, attrs}, children) / txt("…"). Only the members textWithout
@@ -32,7 +35,14 @@ function el(tag, opts, children) {
     childNodes: (children || []).map((c) => (typeof c === "string" ? txt(c) : c)),
     classList: { contains: (c) => classes.includes(c) },
     getAttribute: (n) => (n in attrs ? attrs[n] : null),
-    matches: (sel) => classes.some((c) => sel.split(",").map((s) => s.trim()).includes("." + c)),
+    matches: (sel) => sel.split(",").some((part) => {
+      const s = part.trim();
+      if (s.startsWith(".") && !s.startsWith("[") && classes.includes(s.slice(1))) return true;
+      const classMatch = /^\[class\*=["']([^"']+)["']\]$/.exec(s);
+      if (classMatch && classes.some((c) => c.includes(classMatch[1]))) return true;
+      const attrMatch = /^\[([-\w]+)\]$/.exec(s);
+      return !!attrMatch && attrMatch[1] in attrs;
+    }),
   };
   node.querySelector = (sel) => {
     const hit = (n) => {
@@ -44,11 +54,22 @@ function el(tag, opts, children) {
     for (const c of node.childNodes) { const r = hit(c); if (r) return r; }
     return null;
   };
+  node.querySelectorAll = (sel) => {
+    const hits = [];
+    const walk = (n) => {
+      if (n.nodeType !== 1) return;
+      if (n.matches(sel)) hits.push(n);
+      for (const c of n.childNodes) walk(c);
+    };
+    for (const c of node.childNodes) walk(c);
+    return hits;
+  };
   return node;
 }
 
 // ── Load the provider against the stub globals ──────────────────────────────
 let composerNodes = [];
+let messageNodes = [];
 let submitControl = null;
 class StubTextArea {}
 Object.defineProperty(StubTextArea.prototype, "value", {
@@ -57,7 +78,10 @@ Object.defineProperty(StubTextArea.prototype, "value", {
 });
 global.document = {
   querySelector: (selector) => selector.includes("Send message") ? submitControl : null,
-  querySelectorAll: (selector) => selector.includes("mobile-composer-prompt") ? composerNodes : [],
+  querySelectorAll: (selector) => {
+    if (selector.includes("data-message-author-role") || selector.includes("DilResponseRoot")) return messageNodes;
+    return selector.includes("mobile-composer-prompt") || selector.includes('role="textbox"') ? composerNodes : [];
+  },
   addEventListener: () => {},
   dispatchEvent: () => {},
   documentElement: { classList: { contains: () => false } },
@@ -132,6 +156,33 @@ const withChip = P.textWithout(
   ".zs-chip"
 );
 ok("excluded subtree is skipped", withChip.includes("real reply") && !withChip.includes("execute_luau"));
+
+// ChatGPT's current ProseMirror composer is exposed as an accessible textbox.
+const proseMirrorComposer = {
+  tagName: "DIV",
+  id: "",
+  textContent: "",
+  getAttribute: (name) => ({
+    role: "textbox",
+    "aria-label": "Ask ChatGPT",
+    contenteditable: "true",
+  })[name] || null,
+  getClientRects: () => [{ width: 300, height: 70 }],
+};
+composerNodes = [proseMirrorComposer];
+ok("accessible ChatGPT composer is detected", P.getEditor() === proseMirrorComposer);
+
+// The current ChatGPT layout renders assistant replies in a DilResponseRoot
+// without the classic data-message-author-role/data-message-id attributes.
+const dilReply = el("div", { class: "DilResponseRoot-HfQrEh" }, [
+  el("p", {}, ['{"command":"list_commands","params":{"server":"vscode"}}']),
+]);
+messageNodes = [dilReply];
+ok("DilResponseRoot is counted as an assistant reply", P.assistantCount() === 1);
+const dilReplyText = P.readAssistant().reply;
+ok("DilResponseRoot reply text is readable", dilReplyText.includes('"command":"list_commands"'));
+const dilReplyCalls = ZSParse.parseToolCalls(dilReplyText);
+ok("command in DilResponseRoot reply is parsed", dilReplyCalls.length === 1 && dilReplyCalls[0].tool === "list_commands");
 
 // ChatGPT's newer compact composer is a controlled textarea instead of the
 // ProseMirror #prompt-textarea. It still needs the bar anchor and send path.
