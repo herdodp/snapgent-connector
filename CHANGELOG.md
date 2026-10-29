@@ -2,6 +2,16 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.5] - 2026-10-29
+
+### Changed
+- **MCP target can be switched at any time.** The MCP selector in the chat bar
+  is no longer locked while the agent is starting or running, and the "Choose a
+  target first" guard is gone. After a switch the new target is saved and the
+  page reloads automatically, so the extension restarts against the newly
+  selected MCP server. A running session in that tab stops on reload and must be
+  started again.
+
 ## [V3.4] - 2026-10-29
 
 ### Changed
