@@ -2,6 +2,24 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.6] - 2026-10-29
+
+### Added
+- **Four new VS Code workspace tools, 28 in total.**
+  - `delete_file` deletes one file inside the workspace. Directories, the
+    workspace root, and anything under `.git` are refused.
+  - `apply_patch` applies several exact text replacements to one file in a
+    single call. Each `old_text` must match exactly once, and nothing is written
+    if any edit fails.
+  - `git_add` stages specific paths. Staging the whole workspace is refused.
+  - `git_commit` commits the staged changes with a message. It never stages
+    files on its own and has no amend option.
+- Tests for the 28-tool catalog, `delete_file` safety checks, and the
+  all-or-nothing behavior of `apply_patch`.
+
+### Changed
+- The VS Code MCP server now reports 28 workspace tools instead of 24.
+
 ## [V3.5] - 2026-10-29
 
 ### Changed

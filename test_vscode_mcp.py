@@ -17,10 +17,52 @@ class VscodeMcpTests(unittest.TestCase):
         self.addCleanup(self.root_patch.stop)
         self.addCleanup(self.temp.cleanup)
 
-    def test_catalog_has_24_unique_tools(self):
+    def test_catalog_has_28_unique_tools(self):
         names = [tool["name"] for tool in vscode_mcp.TOOLS]
-        self.assertEqual(len(names), 24)
-        self.assertEqual(len(set(names)), 24)
+        self.assertEqual(len(names), 28)
+        self.assertEqual(len(set(names)), 28)
+        for name in ("delete_file", "apply_patch", "git_add", "git_commit"):
+            self.assertIn(name, names)
+
+    def test_delete_file_refuses_unsafe_targets(self):
+        vscode_mcp.create_file("notes.txt", "x")
+        (self.workspace / "folder").mkdir()
+        (self.workspace / ".git").mkdir()
+        (self.workspace / ".git" / "config").write_text("x", encoding="utf-8")
+        self.assertIn("Deleted", vscode_mcp.delete_file("notes.txt"))
+        self.assertFalse((self.workspace / "notes.txt").exists())
+        with self.assertRaises(IsADirectoryError):
+            vscode_mcp.delete_file("folder")
+        with self.assertRaises(ValueError):
+            vscode_mcp.delete_file(".git/config")
+        with self.assertRaises(ValueError):
+            vscode_mcp.delete_file(".")
+        with self.assertRaises(ValueError):
+            vscode_mcp.delete_file("../outside.txt")
+        with self.assertRaises(FileNotFoundError):
+            vscode_mcp.delete_file("missing.txt")
+
+    def test_apply_patch_is_all_or_nothing(self):
+        vscode_mcp.create_file("app.txt", "alpha beta gamma")
+        vscode_mcp.apply_patch(
+            "app.txt",
+            [
+                {"old_text": "alpha", "new_text": "one"},
+                {"old_text": "gamma", "new_text": "three"},
+            ],
+        )
+        self.assertEqual(vscode_mcp.read_file("app.txt"), "one beta three")
+        with self.assertRaises(ValueError):
+            vscode_mcp.apply_patch(
+                "app.txt",
+                [
+                    {"old_text": "one", "new_text": "1"},
+                    {"old_text": "missing", "new_text": "x"},
+                ],
+            )
+        self.assertEqual(vscode_mcp.read_file("app.txt"), "one beta three")
+        with self.assertRaises(ValueError):
+            vscode_mcp.apply_patch("app.txt", [])
 
     def test_vscode_storage_paths_include_macos_installations(self):
         with patch.object(vscode_mcp.sys, "platform", "darwin"):

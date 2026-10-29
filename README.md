@@ -217,7 +217,7 @@ snapgent-full/
 ├── Linux_Start.sh             # Linux bridge launcher
 ├── bridge.exe                 # Windows local bridge
 ├── bridge.py                  # Cross-platform Python MCP bridge
-├── vscode_mcp.exe             # Default VS Code MCP server (24 workspace tools)
+├── vscode_mcp.exe             # Default VS Code MCP server (28 workspace tools)
 ├── vscode_mcp.py              # VS Code MCP server source
 ├── test_bridge.py             # MCP bridge protocol tests
 ├── test_setup_config.py       # MCP setup helper tests

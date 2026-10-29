@@ -428,6 +428,59 @@ def git_branches() -> str:
     )
 
 
+def delete_file(path: str) -> str:
+    root = get_root()
+    target = normalize_target(path, root)
+    if target == root or ".git" in target.relative_to(root).parts:
+        raise ValueError(f"Refusing to delete protected path: {path}")
+    if target.is_dir():
+        raise IsADirectoryError(f"Not a file (directories are not deleted): {path}")
+    if not target.is_file():
+        raise FileNotFoundError(f"File not found: {path}")
+    target.unlink()
+    return f"Deleted {_relative(target, root)}"
+
+
+def apply_patch(path: str, edits: List[Dict[str, Any]]) -> str:
+    if not isinstance(edits, list) or not edits:
+        raise ValueError("edits must be a non-empty list.")
+    root = get_root()
+    target = normalize_target(path, root)
+    if not target.is_file():
+        raise FileNotFoundError(f"File not found: {path}")
+    content = target.read_text(encoding="utf-8", errors="replace")
+    for index, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict):
+            raise ValueError(f"Edit {index} must be an object with old_text and new_text.")
+        old_text = edit.get("old_text")
+        new_text = edit.get("new_text")
+        if not isinstance(old_text, str) or not old_text or not isinstance(new_text, str):
+            raise ValueError(f"Edit {index} needs a non-empty old_text and a string new_text.")
+        occurrences = content.count(old_text)
+        if occurrences != 1:
+            raise ValueError(f"Edit {index}: old_text occurs {occurrences} times; it must match exactly once. No changes were written.")
+        content = content.replace(old_text, new_text, 1)
+    target.write_text(content, encoding="utf-8")
+    return f"Patched {_relative(target, root)} ({len(edits)} edit(s))"
+
+
+def git_add(paths: List[str]) -> str:
+    if not isinstance(paths, list) or not paths:
+        raise ValueError("paths must be a non-empty list.")
+    root = get_root()
+    relatives = [_relative(normalize_target(item, root), root) for item in paths]
+    if "." in relatives:
+        raise ValueError("Stage specific paths, not the whole workspace.")
+    _run_process(["git", "add", "--", *relatives], root)
+    return f"Staged {len(relatives)} path(s): " + ", ".join(relatives)
+
+
+def git_commit(message: str) -> str:
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("Commit message cannot be empty.")
+    return _run_process(["git", "commit", "-m", message.strip()], get_root(), timeout=120)
+
+
 def run_command(command: str, args: Optional[List[str]] = None) -> str:
     if not command.strip():
         raise ValueError("Command cannot be empty.")
@@ -520,6 +573,10 @@ TOOLS = [
     _tool("run_command", "Run a command with the workspace as its working directory.", {"command": STR, "args": {"type": "array", "items": STR}}, ["command"]),
     _tool("run_project_script", "Run a named safe script (build, check, format, lint, test, typecheck) from package.json.", {"script": STR}, ["script"]),
     _tool("run_tests", "Run the workspace test script, pytest, or .NET tests when configured.", {}),
+    _tool("delete_file", "Delete one file inside the workspace; directories, the workspace root, and .git are refused.", {"path": STR}, ["path"]),
+    _tool("apply_patch", "Apply several exact text replacements to one file; each old_text must match exactly once and nothing is written if any edit fails.", {"path": STR, "edits": {"type": "array", "items": {"type": "object", "properties": {"old_text": STR, "new_text": STR}, "required": ["old_text", "new_text"]}}}, ["path", "edits"]),
+    _tool("git_add", "Stage specific workspace paths; staging the whole workspace is refused.", {"paths": {"type": "array", "items": STR}}, ["paths"]),
+    _tool("git_commit", "Commit the currently staged changes with a message; no auto-staging and no amend.", {"message": STR}, ["message"]),
 ]
 
 
@@ -549,6 +606,10 @@ def tool_dispatch(name: str, args: Dict[str, Any]) -> Any:
         "run_command": lambda: run_command(args["command"], args.get("args", [])),
         "run_project_script": lambda: run_project_script(args["script"]),
         "run_tests": lambda: run_tests(),
+        "delete_file": lambda: delete_file(args["path"]),
+        "apply_patch": lambda: apply_patch(args["path"], args["edits"]),
+        "git_add": lambda: git_add(args["paths"]),
+        "git_commit": lambda: git_commit(args["message"]),
     }
     handler = handlers.get(name)
     if handler is None:
