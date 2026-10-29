@@ -2,6 +2,21 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.4] - 2026-10-29
+
+### Changed
+- **Extension renamed to snapgentV3.** The extension name and description no
+  longer refer to a Roblox Studio agent; they now describe a VS Code agent
+  connected through the local bridge.
+- **ChatGPT: supports the newer chatgpt.com layout.** Assistant replies rendered
+  in a `DilResponseRoot` element (without `data-message-author-role`) are now
+  counted and read as replies, and the composer is also detected as the
+  accessible "Ask ChatGPT" textbox. The classic layout keeps working.
+
+### Added
+- Tests for the new ChatGPT layout: composer detection, reply counting, reply
+  text, and command parsing from a `DilResponseRoot` reply.
+
 ## [V3.2] - 2026-10-29
 
 ### Added
