@@ -113,6 +113,32 @@
     console.warn("[snapgentV3] Could not load selected MCP target:", error);
   }
 
+  // ── MCP enable/disable toggles ──────────────────────────────────────────
+  // Persisted map { serverId: boolean }. A server that was never toggled counts
+  // as enabled. Disabled servers are hidden from the target dropdown AND are
+  // filtered out of everything the AI reads (tool lists, list_mcp_servers,
+  // list_commands) so their tool schemas never cost tokens.
+  const MCP_ENABLED_KEY = "zsMcpEnabled";
+  let mcpEnabled = {};
+  try {
+    chrome.storage.local.get(MCP_ENABLED_KEY, (result) => {
+      const saved = result && result[MCP_ENABLED_KEY];
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+        mcpEnabled = saved;
+        if (typeof ui !== "undefined" && ui.setTarget) ui.setTarget(selectedTargetId);
+      }
+    });
+  } catch (error) {
+    console.warn("[snapgentV3] Could not load MCP toggles:", error);
+  }
+  function isMcpEnabled(id) {
+    return mcpEnabled[id] !== false;
+  }
+  function setMcpEnabled(id, on) {
+    mcpEnabled = { ...mcpEnabled, [id]: !!on };
+    try { chrome.storage.local.set({ [MCP_ENABLED_KEY]: mcpEnabled }); } catch {}
+  }
+
   const A = {
     running: false,
     stop: false,
@@ -866,6 +892,7 @@
   const TOOLS_TTL_MS = 30000;
 
   function activeTools() {
+    if (!isMcpEnabled(selectedTargetId)) return [];
     return A.toolList.filter((tool) => (tool.server || "roblox") === selectedTargetId);
   }
 
@@ -934,7 +961,7 @@
     // merged tool count - a dead server must not borrow another's numbers).
     if (name === "list_mcp_servers") {
       await ensureTools();
-      const servers = (A.bridge && A.bridge.servers) || [];
+      const servers = ((A.bridge && A.bridge.servers) || []).filter((sv) => isMcpEnabled(sv.id));
       const lines = servers.length
         ? servers.map((sv) => {
             const label = sv.id === "vscode"
@@ -955,6 +982,9 @@
     if (name === "list_commands" || name === "list_tools") {
       await ensureTools();
       const requested = (args.server || selectedTargetId || "vscode").trim();
+      if (!isMcpEnabled(requested)) {
+        return `Output of '${name}':\nERROR: MCP server "${requested}" is disabled by the user. Do NOT use it. Tell the user to enable it in the MCP settings if it is needed.`;
+      }
       // The MCP proxy keeps advertising Roblox's catalogue even with no Studio
       // attached, so list_commands would hand back the full command list and read
       // as "Roblox is fine" - then every command silently fails. When Roblox is
@@ -2558,6 +2588,7 @@
   // ════════════════════════════════════════════════════════════════════════
   const ui = (() => {
     let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl;
+    let targetBtn, targetMenuEl;
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
     let bridgeOk = false, workspaceReady = false, workspaceProbePending = false, workspaceProbeAt = 0;
@@ -2600,16 +2631,18 @@
           <span id="zs-state"></span>
           <button id="zs-action"></button>
           <button id="zs-stop" hidden>■ Stop</button>
-          <label class="zs-target-wrap" title="Choose which MCP server receives commands">
-            <select id="zs-target" aria-label="MCP target">
+          <div class="zs-target-wrap" title="Choose which MCP server receives commands">
+            <select id="zs-target" aria-label="MCP target" hidden tabindex="-1">
               <option value="vscode">VS Code</option>
               <option value="roblox">Roblox Studio</option>
             </select>
+            <button id="zs-target-btn" type="button" aria-haspopup="listbox" aria-label="Choose MCP target"><span id="zs-target-name"></span></button>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-          </label>
+          </div>
           <button id="zs-switch" aria-label="Switch AI and options" title="Switch AI and options"><span id="zs-switch-name"></span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
         </div>
         <div id="zs-menu" hidden></div>
+        <div id="zs-target-menu" hidden></div>
         ${P.unstableWarning ? `<button id="zs-unstable" aria-label="Provider may be unstable" hidden>⚠ unstable</button>` : ""}
       `;
       document.documentElement.appendChild(root);
@@ -2618,6 +2651,8 @@
       actionBtn = root.querySelector("#zs-action");
       stopBtn = root.querySelector("#zs-stop");
       targetSelect = root.querySelector("#zs-target");
+      targetBtn = root.querySelector("#zs-target-btn");
+      targetMenuEl = root.querySelector("#zs-target-menu");
       switchBtn = root.querySelector("#zs-switch");
       const swName = root.querySelector("#zs-switch-name");
       if (swName) swName.textContent = P.displayName || P.id;
@@ -2636,6 +2671,27 @@
         }
       });
       menuEl = root.querySelector("#zs-menu");
+      // Custom MCP target dropdown (same look as the Switch AI menu). The hidden
+      // <select> stays the data source so the existing change handler is reused.
+      const targetTick = () => {
+        if (targetMenuEl.hidden) return;
+        positionTargetMenu();
+        requestAnimationFrame(targetTick);
+      };
+      targetBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (menuEl) menuEl.hidden = true;
+        targetMenuEl.hidden = !targetMenuEl.hidden;
+        if (!targetMenuEl.hidden) {
+          renderTargetMenu();
+          positionTargetMenu();
+          requestAnimationFrame(targetTick);
+        }
+      });
+      document.addEventListener("click", (e) => {
+        if (targetMenuEl.hidden) return;
+        if (!targetMenuEl.contains(e.target) && !targetBtn.contains(e.target)) targetMenuEl.hidden = true;
+      }, true);
       bar.classList.add(`zs-prov-${P.id}`); // lets CSS tune per-site (e.g. font)
       // Provider hook on <html> so overlay.css can tune site-specific CHIP layout
       // (not just the bar). Meta's turn root is full-width with the reply in a
@@ -2676,7 +2732,7 @@
           });
         }
       };
-      switchBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(false); });
+      switchBtn.addEventListener("click", (e) => { e.stopPropagation(); if (targetMenuEl) targetMenuEl.hidden = true; toggleMenu(false); });
       openMenuFn = (toSupport) => { if (menuEl.hidden) toggleMenu(toSupport); };
       document.addEventListener("click", (e) => {
         if (menuEl.hidden) return;
@@ -2772,7 +2828,7 @@
         ...mergedMcpServers()
           .filter((server) => !["vscode", "roblox", "effectcraft"].includes(server.id))
           .map((server) => ({ id: server.id, name: getTargetName(server.id) })),
-      ];
+      ].filter((option) => isMcpEnabled(option.id));
       if (!options.some((option) => option.id === id)) {
         options.push({ id, name: id });
       }
@@ -2785,9 +2841,106 @@
       }
       targetSelect.value = id;
       targetSelect.disabled = false; // never locked: the user may switch MCP target at any time
+      const nameEl = root && root.querySelector("#zs-target-name");
+      if (nameEl) nameEl.textContent = (options.find((option) => option.id === id) || { name: id }).name;
+      if (targetMenuEl && !targetMenuEl.hidden) renderTargetMenu();
+    }
+
+    function renderTargetMenu() {
+      if (!targetMenuEl || !targetSelect) return;
+      const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const rows = [...targetSelect.options].map((o) => {
+        const cur = o.value === selectedTargetId;
+        return `<button type="button" class="zs-site-opt zs-target-opt${cur ? " zs-target-cur" : ""}" data-id="${esc(o.value)}"><span class="zs-site-name"><span>${esc(o.textContent)}</span></span>${cur ? `<span class="zs-site-badge">active</span>` : ""}</button>`;
+      }).join("");
+      targetMenuEl.innerHTML =
+        `<section class="zs-menu-sec"><div class="zs-sec-label"><span>MCP target</span></div>${rows}</section>`;
+      targetMenuEl.querySelectorAll(".zs-target-opt").forEach((b) =>
+        b.addEventListener("click", () => {
+          targetMenuEl.hidden = true;
+          if (b.dataset.id === selectedTargetId) return;
+          targetSelect.value = b.dataset.id;
+          targetSelect.dispatchEvent(new Event("change"));
+        }));
+    }
+
+    function positionTargetMenu() {
+      if (!targetMenuEl || targetMenuEl.hidden || !targetBtn) return;
+      const a = targetBtn.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth || window.innerWidth;
+      const vh = document.documentElement.clientHeight || window.innerHeight;
+      const w = Math.min(targetMenuEl.offsetWidth || 220, vw - 16);
+      const left = Math.max(8, Math.min(a.left, vw - w - 8));
+      const spaceAbove = a.top - 16;
+      targetMenuEl.style.left = `${Math.round(left)}px`;
+      targetMenuEl.style.right = "auto";
+      if (spaceAbove >= 160 || spaceAbove >= vh - a.bottom - 16) {
+        targetMenuEl.style.top = "auto";
+        targetMenuEl.style.bottom = `${Math.round(vh - a.top + 6)}px`;
+        targetMenuEl.style.maxHeight = `${Math.max(100, Math.min(spaceAbove, vh - 16))}px`;
+      } else {
+        const top = Math.min(vh - 108, a.bottom + 6);
+        targetMenuEl.style.top = `${Math.round(top)}px`;
+        targetMenuEl.style.bottom = "auto";
+        targetMenuEl.style.maxHeight = `${Math.max(100, vh - top - 8)}px`;
+      }
     }
     // ── The "more" menu (⋯) ─────────────────────────────────────────────────
     // One popover holding every secondary control. Opens above the bar.
+    // ── MCP settings popup (toggle which servers are enabled) ───────────────
+    function allMcpOptions() {
+      const base = [
+        { id: "vscode", name: "VS Code" },
+        { id: "roblox", name: "Roblox Studio" },
+        { id: "effectcraft", name: "EffectCraft" },
+      ];
+      const extra = mergedMcpServers()
+        .filter((s) => !base.some((b) => b.id === s.id))
+        .map((s) => ({ id: s.id, name: getTargetName(s.id) }));
+      return [...base, ...extra];
+    }
+
+    function openMcpSettings() {
+      const old = document.getElementById("zs-mcp-pop");
+      if (old) old.remove();
+      const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const servers = mergedMcpServers();
+      const rows = allMcpOptions().map((o) => {
+        const sv = servers.find((s) => s.id === o.id);
+        const meta = sv && sv.tools ? `${sv.tools} tools` : "";
+        return `<label class="zs-mcp-row"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">${esc(o.name)}</span><span class="zs-mcp-row-meta">${esc(meta)}</span></span><input type="checkbox" class="zs-mcp-check" data-id="${esc(o.id)}" ${isMcpEnabled(o.id) ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>`;
+      }).join("");
+      const pop = document.createElement("div");
+      pop.id = "zs-mcp-pop";
+      pop.innerHTML =
+        `<div class="zs-mcp-pop-card" role="dialog" aria-label="MCP settings">` +
+          `<div class="zs-mcp-pop-head"><span>MCP servers</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
+          `<div class="zs-mcp-pop-note">Only enabled servers appear in the dropdown and are read by the AI. Disabled servers cost no tokens.</div>` +
+          `<div class="zs-mcp-pop-list">${rows}</div>` +
+        `</div>`;
+      document.documentElement.appendChild(pop);
+
+      const close = () => {
+        pop.remove();
+        // If the active target was just disabled, move to the first enabled one
+        // and reload so the whole extension restarts against it.
+        if (!isMcpEnabled(selectedTargetId)) {
+          const next = allMcpOptions().find((o) => isMcpEnabled(o.id));
+          if (next) {
+            selectedTargetId = next.id;
+            const reloadPage = () => { try { location.reload(); } catch {} };
+            try { chrome.storage.local.set({ [TARGET_STORAGE_KEY]: selectedTargetId }, reloadPage); } catch { reloadPage(); }
+            return;
+          }
+        }
+        setTarget(selectedTargetId);
+      };
+      pop.addEventListener("click", (e) => { if (e.target === pop) close(); });
+      pop.querySelector(".zs-mcp-pop-close").addEventListener("click", close);
+      pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
+        box.addEventListener("change", () => setMcpEnabled(box.dataset.id, box.checked)));
+    }
+
     function buildMenu() {
       const here = (P.displayName || "").toLowerCase();
       const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
@@ -2802,12 +2955,14 @@
       menuEl.innerHTML =
         `<div class="zs-menu-head"><span class="zs-menu-logo">snapgentV3</span></div>
          <section class="zs-menu-sec">
-           <div class="zs-sec-label"><span>Switch AI</span></div>
-           ${sites}
+           <div class="zs-sec-label zs-sec-label-row"><span>Switch AI</span><button id="zs-mcp-settings" class="zs-gear" title="MCP settings" aria-label="MCP settings">&#9881;</button></div>
+           <div class="zs-site-grid">${sites}</div>
          </section>`;
       const open = (url) => { try { window.open(url, "_blank", "noopener"); } catch {} menuEl.hidden = true; };
       menuEl.querySelectorAll("button.zs-site-opt, .zs-tip-opt").forEach((b) =>
         b.addEventListener("click", () => open(b.dataset.u)));
+      const gear = menuEl.querySelector("#zs-mcp-settings");
+      if (gear) gear.addEventListener("click", (e) => { e.stopPropagation(); menuEl.hidden = true; openMcpSettings(); });
     }
 
     // ── First-time onboarding card (bridge missing) ─────────────────────────

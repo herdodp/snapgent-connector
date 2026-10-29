@@ -226,17 +226,20 @@ html.zs-light #zs-unstable {
 
 /* stop button (replaces the action button while the agent is busy) */
 #zs-stop {
-  flex: none; padding: 7px 13px;
-  background: #ef4444; color: #fff; border: 0; border-radius: 9px;
-  font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  height: 32px; padding: 0 14px;
+  background: #eab308; color: #000; border: 1px solid rgba(234, 179, 8, 0.75); border-radius: 18px;
+  font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  transition: background 0.14s ease;
 }
-#zs-stop:hover { background: #dc2626; }
+#zs-stop[hidden] { display: none; }
+#zs-stop:hover { background: #facc15; }
 /* Winding-down state: the loop is finishing its in-flight step after a Stop
    click. Dimmed + not-allowed so it reads as "registered, please wait". */
 #zs-stop[data-state="stopping"] {
-  background: #b45309; cursor: progress; opacity: 0.85;
+  background: #eab308; color: #000; cursor: progress; opacity: 0.6;
 }
-#zs-stop[data-state="stopping"]:hover { background: #b45309; }
+#zs-stop[data-state="stopping"]:hover { background: #eab308; }
 
 /* Target and model selectors follow the Snapgent header pill style. */
 .zs-target-wrap {
@@ -253,6 +256,33 @@ html.zs-light #zs-unstable {
 }
 #zs-target option { color: #1f2937; background: #fff; }
 #zs-target:disabled { opacity: 0.65; cursor: not-allowed; }
+#zs-target-btn {
+  max-width: min(130px, 30vw); padding: 0 16px 0 0;
+  color: inherit; background: transparent; border: 0; outline: 0;
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+#zs-target-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.4); outline-offset: 4px; border-radius: 6px; }
+
+/* MCP target dropdown: same shell as the Switch AI menu */
+#zs-target-menu {
+  position: fixed; z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(220px, calc(100vw - 16px)); min-width: 0; overflow-y: auto;
+  padding: 0 0 6px;
+  background: #161618; color: #ececee;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  font-size: 12px; animation: zs-pop 0.16s ease-out;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.22) transparent;
+}
+#zs-target-menu[hidden] { display: none; }
+#zs-target-menu .zs-target-opt { width: 100%; }
+#zs-target-menu .zs-target-cur { cursor: default; }
+html.zs-light #zs-target-menu {
+  background: #ffffff; color: #1f2937; border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.18); scrollbar-color: rgba(0,0,0,0.25) transparent;
+}
 .zs-target-wrap svg { position: absolute; right: 8px; pointer-events: none; opacity: 0.65; }
 
 /* model switcher: names the current AI and opens the provider menu */
@@ -289,6 +319,7 @@ html.zs-light #zs-unstable {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  #zs-stop { height: auto; padding: 0 12px; border-radius: 18px; }
   .zs-target-wrap, #zs-switch {
     max-width: 38%;
     min-width: 0;
@@ -310,7 +341,7 @@ html.zs-light #zs-unstable {
 #zs-menu {
   position: fixed;
   box-sizing: border-box;
-  width: min(274px, calc(100vw - 16px)); min-width: 0; overflow-y: auto;
+  width: min(520px, calc(100vw - 16px)); min-width: 0; overflow-y: auto;
   padding: 0 0 6px;
   background: #161618;
   color: #ececee;
@@ -350,6 +381,17 @@ html.zs-light #zs-menu::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); b
 }
 .zs-menu-note { font-size: 10.5px; color: #6b6b73; line-height: 1.45; margin: 0 0 9px; }
 
+/* AI sites: 3 columns side by side instead of one long vertical list */
+.zs-site-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
+}
+.zs-site-grid .zs-site-opt { margin: 0; padding: 7px 8px; min-width: 0; }
+.zs-site-grid .zs-site-name { flex: 1; }
+.zs-site-grid .zs-site-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 400px) {
+  .zs-site-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* AI site rows: plain list, subtle surface on hover */
 .zs-site-opt {
   width: 100%; box-sizing: border-box; margin: 1px 0; padding: 8px 10px;
@@ -377,6 +419,68 @@ button.zs-site-opt:hover .zs-site-go { opacity: 1; transform: translateX(0); }
   flex: none; font-size: 10px; font-weight: 500; color: #7a7a82;
   border: 1px solid rgba(255, 255, 255, 0.12); padding: 1px 7px; border-radius: 5px;
 }
+
+/* ── gear button + MCP settings popup ─────────────────────────────────────── */
+.zs-sec-label-row { display: flex; align-items: center; justify-content: space-between; }
+.zs-gear {
+  border: 0; background: transparent; color: #9a9aa3; cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 3px 6px; border-radius: 6px;
+  transition: background 0.13s ease, color 0.13s ease;
+}
+.zs-gear:hover { background: rgba(255, 255, 255, 0.08); color: #ededf0; }
+
+#zs-mcp-pop {
+  position: fixed; inset: 0; z-index: 2147483647;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.zs-mcp-pop-card {
+  box-sizing: border-box; width: min(360px, calc(100vw - 24px)); max-height: calc(100vh - 48px);
+  display: flex; flex-direction: column;
+  background: #161618; color: #ececee;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  font-size: 12px; animation: zs-pop 0.16s ease-out;
+}
+.zs-mcp-pop-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; font-size: 13px; font-weight: 700; color: #f4f4f6;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.zs-mcp-pop-close {
+  border: 0; background: transparent; color: #9a9aa3; cursor: pointer;
+  font-size: 13px; padding: 3px 6px; border-radius: 6px;
+}
+.zs-mcp-pop-close:hover { background: rgba(255, 255, 255, 0.08); color: #ededf0; }
+.zs-mcp-pop-note { padding: 10px 14px 4px; font-size: 10.5px; color: #82828b; line-height: 1.45; }
+.zs-mcp-pop-list { padding: 6px 10px 12px; overflow-y: auto; }
+.zs-mcp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 8px; border-radius: 8px; cursor: pointer;
+}
+.zs-mcp-row:hover { background: rgba(255, 255, 255, 0.05); }
+.zs-mcp-row-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.zs-mcp-row-name { font-size: 12.5px; font-weight: 600; color: #ededf0; }
+.zs-mcp-row-meta { font-size: 10px; color: #6b6b73; }
+.zs-mcp-check { position: absolute; opacity: 0; pointer-events: none; }
+.zs-mcp-toggle {
+  flex: none; position: relative; width: 34px; height: 19px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16); transition: background 0.15s ease;
+}
+.zs-mcp-toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+  border-radius: 50%; background: #fff; transition: transform 0.15s ease;
+}
+.zs-mcp-check:checked + .zs-mcp-toggle { background: #34d399; }
+.zs-mcp-check:checked + .zs-mcp-toggle::after { transform: translateX(15px); }
+.zs-mcp-check:focus-visible + .zs-mcp-toggle { outline: 2px solid rgba(255, 255, 255, 0.5); outline-offset: 2px; }
+html.zs-light .zs-mcp-pop-card { background: #ffffff; color: #1f2937; border-color: rgba(0, 0, 0, 0.1); }
+html.zs-light .zs-mcp-pop-head, html.zs-light .zs-mcp-row-name { color: #111827; }
+html.zs-light .zs-mcp-pop-head { border-bottom-color: rgba(0, 0, 0, 0.07); }
+html.zs-light .zs-mcp-pop-note, html.zs-light .zs-mcp-row-meta { color: #6b7280; }
+html.zs-light .zs-mcp-row:hover, html.zs-light .zs-gear:hover, html.zs-light .zs-mcp-pop-close:hover { background: rgba(0, 0, 0, 0.05); }
+html.zs-light .zs-gear, html.zs-light .zs-mcp-pop-close { color: #6b7280; }
+html.zs-light .zs-mcp-toggle { background: rgba(0, 0, 0, 0.18); }
 
 #zs-set-text {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 58px;
@@ -779,26 +883,38 @@ ol.flex-col-reverse > div.w-full:not(.mx-auto) > .zs-chip {
 
 /* ── banner (errors / limits) ──────────────────────────────── */
 .zs-banner {
-  position: fixed; right: 18px; top: 18px; width: 320px;
-  padding: 14px 16px; border-radius: 12px;
-  background: #161618; color: #ececee;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  position: fixed; left: 50%; top: 18px; transform: translateX(-50%);
+  width: min(360px, calc(100vw - 24px)); box-sizing: border-box;
+  padding: 16px 18px; border-radius: 14px;
+  background: #0b0b0c; color: #ececee;
+  border: 1px solid rgba(234, 179, 8, 0.75);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(234, 179, 8, 0.12);
   font-size: 13px; z-index: 2147483601;
+  animation: zs-banner-in 0.2s ease-out;
 }
-/* semantic state kept, but as a thin muted stripe rather than a bright bar */
-.zs-banner.limit { border-left: 2px solid rgba(239, 68, 68, 0.55); }
-.zs-banner.warn { border-left: 2px solid rgba(251, 191, 36, 0.5); }
-.zs-banner-t { font-weight: 600; color: #f4f4f6; margin-bottom: 6px; }
-.zs-banner-m { color: #9a9aa2; line-height: 1.5; margin-bottom: 12px; }
+@keyframes zs-banner-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.zs-banner.limit, .zs-banner.warn { border-left: 1px solid rgba(234, 179, 8, 0.75); }
+.zs-banner-t { font-weight: 700; color: #eab308; margin-bottom: 6px; font-size: 13.5px; }
+.zs-banner-m { color: #b4b4bc; line-height: 1.5; margin-bottom: 14px; }
 .zs-banner-acts { display: flex; gap: 8px; }
 .zs-banner-acts button {
-  flex: 1; padding: 7px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
-  cursor: pointer; font-size: 12px; font-weight: 600;
-  background: transparent; color: #a0a0a8; transition: background 0.13s ease;
+  flex: 1; height: 34px; padding: 0 12px; border: 1px solid rgba(234, 179, 8, 0.75); border-radius: 18px;
+  cursor: pointer; font-size: 12px; font-weight: 700;
+  background: #eab308; color: #000; transition: background 0.14s ease;
 }
-.zs-banner-x { background: transparent; color: #a0a0a8; }
-.zs-banner-x:hover { background: rgba(255, 255, 255, 0.06); }
+.zs-banner-acts button:hover { background: #facc15; }
+.zs-banner-acts .zs-banner-x { background: transparent; color: #eab308; }
+.zs-banner-acts .zs-banner-x:hover { background: rgba(234, 179, 8, 0.12); }
+html.zs-light .zs-banner {
+  background: #fffbeb; color: #1f2937; border-color: #eab308;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.18);
+}
+html.zs-light .zs-banner-t { color: #a16207; }
+html.zs-light .zs-banner-m { color: #4b5563; }
+html.zs-light .zs-banner-acts .zs-banner-x { color: #a16207; }
 /* ── first-time onboarding card (bridge missing; pinned top-right) ───────── */
 #zs-setup {
   position: fixed;

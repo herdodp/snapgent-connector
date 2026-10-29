@@ -2,6 +2,25 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.7] - 2026-10-30
+
+### Added
+- **MCP settings popup.** A gear button next to "Switch AI" opens a popup with a
+  toggle for each MCP server. Disabled servers disappear from the target
+  dropdown and are filtered out of `list_mcp_servers` and `list_commands`, so
+  their tool schemas are never sent to the AI and cost no tokens. Servers that
+  were never toggled stay enabled.
+
+### Changed
+- **Switch AI menu** now lists AI sites in a 3-column grid (2 columns on narrow
+  screens) instead of one long vertical list.
+- **MCP target dropdown** uses a custom dark menu that matches the Switch AI
+  menu instead of the native browser select.
+- **Stop button** is now yellow with black text and the same pill shape as the
+  dropdown buttons.
+- **Banners** (such as "Reload page") use the yellow and black theme and appear
+  at the top center instead of the top-right corner.
+
 ## [V3.6] - 2026-10-29
 
 ### Added
