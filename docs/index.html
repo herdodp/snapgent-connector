@@ -12,9 +12,9 @@
   <meta property="og:url" content="https://herdodp.github.io/snapgent-connector/">
   <meta property="og:image" content="https://herdodp.github.io/snapgent-connector/assets/icon.png">
   <link rel="icon" href="assets/icon.png" type="image/png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2">
   <script>document.documentElement.classList.add('js');</script>
-  <script src="script.js" defer></script>
+  <script src="script.js?v=2" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -73,12 +73,12 @@
           <p class="muted">The AI does not get a remote shell. It writes a command in its reply, and the extension runs that one command and pastes the result back.</p>
         </div>
         <div>
-          <ol class="steps">
-            <li><b>You describe a task</b> in a supported AI chat, in plain language.</li>
-            <li><b>The AI replies with a command</b> written as a small JSON block.</li>
-            <li><b>The extension detects it</b> and forwards it to the local bridge.</li>
-            <li><b>The bridge routes it</b> to the VS Code MCP server for your open workspace.</li>
-            <li><b>The result is sent back</b> into the chat, and the AI continues from there.</li>
+          <ol class="trace">
+            <li><span class="trace-who">You</span><p>Describe a task in a supported AI chat, in plain language.</p></li>
+            <li><span class="trace-who">The AI</span><p>Replies with a command, written as a small JSON block.</p></li>
+            <li><span class="trace-who">Extension</span><p>Detects the command and forwards it to the local bridge.</p></li>
+            <li><span class="trace-who">Bridge</span><p>Routes it to the VS Code MCP server for your open workspace.</p></li>
+            <li><span class="trace-who">Chat</span><p>Receives the result, and the AI continues from there.</p></li>
           </ol>
           <p class="caption">This is what a command looks like in a reply:</p>
 <pre class="code" tabindex="0"><code>{"command":"read_file","params":{"path":"README.md"}}</code></pre>
