@@ -3071,7 +3071,8 @@
       const renderImport = () => {
         const v = mode === "review" ? validateSkillText(draft) : null;
         const body = mode === "paste"
-          ? `<textarea id="zs-skill-text" rows="10" style="width:100%;box-sizing:border-box;font:11px ui-monospace,Consolas,monospace;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:6px" placeholder="Paste the full SKILL.md here (with --- name / description --- frontmatter)">${esc(draft)}</textarea>` +
+          ? `<input type="file" id="zs-skill-file" accept=".md,.txt,text/markdown,text/plain" style="margin-bottom:6px;font-size:11px;max-width:100%">` +
+            `<textarea id="zs-skill-text" rows="10" style="width:100%;box-sizing:border-box;font:11px ui-monospace,Consolas,monospace;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:6px" placeholder="Paste the full SKILL.md here (with --- name / description --- frontmatter)">${esc(draft)}</textarea>` +
             `<div class="zs-mcp-pop-note" style="color:#ff6b6b">${esc(importMsg)}</div>` +
             `<div style="display:flex;gap:8px;margin-top:8px"><button id="zs-skill-cancel" class="zs-gear" style="flex:1">Cancel</button><button id="zs-skill-review" class="zs-gear" style="flex:1">Review</button></div>`
           : `<div class="zs-mcp-pop-note" style="color:#ffb454">Review carefully. Third-party skills can contain instructions that make the AI run commands or change files. It will be saved DISABLED until you turn it on.</div>` +
@@ -3084,6 +3085,20 @@
             `<div class="zs-mcp-pop-head"><span>Import skill</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
             body + `</div>`;
         pop.querySelector(".zs-mcp-pop-close").addEventListener("click", () => pop.remove());
+        const fileInput = pop.querySelector("#zs-skill-file");
+        if (fileInput) fileInput.addEventListener("change", () => {
+          const f = fileInput.files && fileInput.files[0];
+          if (!f) return;
+          if (f.size > SKILL_MAX_BYTES) { importMsg = "File too large (max 20 KB)."; renderImport(); return; }
+          const reader = new FileReader();
+          reader.onload = () => {
+            draft = String(reader.result || "");
+            importMsg = "";
+            renderImport();
+          };
+          reader.onerror = () => { importMsg = "Could not read the file."; renderImport(); };
+          reader.readAsText(f);
+        });
         const on = (id, fn) => { const el = pop.querySelector(id); if (el) el.addEventListener("click", fn); };
         on("#zs-skill-cancel", () => { mode = "list"; importMsg = ""; draft = ""; render(); });
         on("#zs-skill-review", () => {
