@@ -239,6 +239,8 @@ snapgent-full/
 | Bridge is offline | Bridge is not running | Start `start.bat` (Windows), `MacOS_Start.command` (macOS), or run `bash Linux_Start.sh` (Linux) |
 | AI replies without using tools | Provider/model stopped following commands | Remind it to use snapgentV3 commands or start a new chat |
 | VS Code target is unavailable | The bridge is offline or the release is incomplete | Run `start.bat` from the extracted release folder and keep the project open in VS Code |
+| A configured MCP server is missing from the target dropdown | The server was switched off in the **MCP servers** panel, or the extension is outdated | Open **MCP servers** from the ⋯ menu on the snapgent bar and tick the server, then reload the extension in `chrome://extensions` and refresh the chat tab |
+| Target dropdown closes or the click does nothing | Older extension versions redrew the menu during status updates | Update to the latest release and reload the extension |
 
 ---
 
