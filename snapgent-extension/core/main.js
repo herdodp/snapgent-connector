@@ -94,6 +94,7 @@
     { name: "Meta AI", url: "https://www.meta.ai/" },
     { name: "Ptero", url: "https://ptero.pro/" },
     { name: "Grok", url: "https://grok.com/" },
+    { name: "Mistral", url: "https://chat.mistral.ai/code" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
   let selectedTargetId = "vscode";
@@ -961,7 +962,10 @@
     // merged tool count - a dead server must not borrow another's numbers).
     if (name === "list_mcp_servers") {
       await ensureTools();
-      const servers = ((A.bridge && A.bridge.servers) || []).filter((sv) => isMcpEnabled(sv.id));
+      // Isolation: the AI only ever sees the server selected in the dropdown (and only
+      // if its toggle is on). Other servers, enabled or not, are invisible to it.
+      const servers = ((A.bridge && A.bridge.servers) || [])
+        .filter((sv) => sv.id === selectedTargetId && isMcpEnabled(sv.id));
       const lines = servers.length
         ? servers.map((sv) => {
             const label = sv.id === "vscode"
@@ -981,7 +985,15 @@
     // if the model explicitly asks via {"server": "<id>"} (see list_mcp_servers).
     if (name === "list_commands" || name === "list_tools") {
       await ensureTools();
-      const requested = (args.server || selectedTargetId || "vscode").trim();
+      const target = (selectedTargetId || "vscode").trim();
+      const asked = typeof args.server === "string" ? args.server.trim() : "";
+      // Isolation: only the server selected in the dropdown can be listed. A request
+      // for any other server gets a generic refusal that does not reveal whether that
+      // server exists, is connected, or is toggled on.
+      if (asked && asked !== target) {
+        return `Output of '${name}':\nERROR: server "${asked}" is not available. Only the selected target "${target}" can be used in this session. Do NOT try other servers; ask the user to switch the target in the snapgentV3 selector if needed.`;
+      }
+      const requested = target;
       if (!isMcpEnabled(requested)) {
         return `Output of '${name}':\nERROR: MCP server "${requested}" is disabled by the user. Do NOT use it. Tell the user to enable it in the MCP settings if it is needed.`;
       }
@@ -998,10 +1010,8 @@
         const rbxAlive = rbx ? !!rbx.alive : (!!s.mcpAlive || srv.some((x) => x.alive));
         const rbxUsable = !!s.connected && rbxAlive && s.studio !== false;
         if (!rbxUsable) {
-          const others = srv.filter((x) => x.id !== "roblox" && x.alive && (x.tools || 0) > 0);
-          const otherStr = others.length
-            ? `Other connected MCP server(s): ${others.map((x) => x.id).join(", ")}. Call list_mcp_servers, then list_commands with a "server" param to use them for anything that does not need Roblox.`
-            : `No other MCP server is connected right now.`;
+          // Isolation: never reveal other servers here.
+          const otherStr = "Do NOT try other servers; wait for the user to fix the target or switch it in the snapgentV3 selector.";
           return `Output of '${name}':\nRoblox Studio is currently OFFLINE (closed, no place open, or its MCP server disabled), so its commands cannot run. This is an environment problem on the user's machine, not your mistake. Tell the user in one short sentence to open their place in Roblox Studio and enable its MCP server. ${otherStr}`;
         }
       }
@@ -1012,7 +1022,7 @@
       const scoped = A.toolList.filter((t) => (t.server || "roblox") === requested);
       if (!A.toolList.length) return `Output of '${name}':\nNo commands available - the bridge or selected MCP server may be offline.`;
       if (!scoped.length) {
-        return `Output of '${name}':\nERROR: no server named "${requested}" is connected. Connected servers: ${[...known].join(", ") || "roblox"}. Call list_mcp_servers to check.`;
+        return `Output of '${name}':\nERROR: the selected server "${requested}" has no commands available (it may be offline). Do NOT try other servers; tell the user to check the target in the snapgentV3 selector.`;
       }
       const lines = scoped.map((t) => {
         const props = (t.inputSchema && t.inputSchema.properties) || {};
@@ -1051,7 +1061,21 @@
       });
       return `Output of '${name}':\n${requested} commands (${scoped.length}):\n\n${lines.join("\n\n")}`;
     }
-    if (A.toolNames.size && !A.toolNames.has(name)) {
+    // Isolation: execution is hard-limited to the server selected in the dropdown.
+    // 1) the selected target must be toggled on,
+    // 2) an explicit "server/tool" prefix may only name the selected target,
+    // 3) the tool must exist in the selected server's own catalogue (never skipped,
+    //    even when that catalogue is empty).
+    // The name sent to the bridge is NOT rewritten: the bridge only knows a "server/"
+    // prefix for tools whose names collide across servers.
+    if (!isMcpEnabled(selectedTargetId)) {
+      return `ERROR: the selected MCP server "${selectedTargetId}" is disabled by the user, so '${name}' was not run. Do NOT retry. Tell the user to enable it in the MCP settings.`;
+    }
+    if (name.includes("/") && name.split("/")[0] !== selectedTargetId) {
+      return `ERROR: '${name}' was not run. Only the selected target "${selectedTargetId}" can be used in this session. Use plain command names from list_commands.`;
+    }
+    if (!A.toolNames.size) await ensureTools();
+    if (!knownTool(name)) {
       return ZS.FEEDBACK.unknownTool(name, [...A.toolNames]);
     }
     // The Roblox MCP REQUIRES datamodel_type on execute_luau (enum Edit/Client/
@@ -1078,7 +1102,7 @@
     const stopWatch = new Promise((res) => {
       stopTimer = setInterval(() => { if (A.stop) res({ ok: false, kind: "stopped" }); }, 150);
     });
-    let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout }), hardCap, stopWatch]);
+    let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }), hardCap, stopWatch]);
     clearInterval(stopTimer);
     if (r && r.kind === "stopped") return "(stopped by user)";
     if (!r) return ZS.FEEDBACK.bridgeOffline;

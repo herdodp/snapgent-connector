@@ -368,7 +368,7 @@ IMPORTANT: Your very first action is to write \`list_commands\` with no params (
       "(System note from snapgentV3 - this is an automatic REMINDER, not a request and not a new result. " +
       "Do NOT reply to it or run any command because of it; just keep it in mind for your next command.)\n" +
       `Reminder of the ${targetName} commands (use exact names and parameter keys; ` +
-      "for other connected apps call list_mcp_servers):\n" +
+      "only this selected target is available in this session):\n" +
       toolsString
     );
   }

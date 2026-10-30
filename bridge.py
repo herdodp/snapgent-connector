@@ -464,6 +464,27 @@ class Bridge:
         except (TypeError, ValueError):
             timeout_seconds = 120.0
         server, tool_name = self._resolve_tool(name)
+        # Isolation: the extension states which server is selected. The bridge refuses to
+        # run a tool that belongs to any other server (requests without the field keep
+        # the old behaviour).
+        allowed = request.get("server")
+        if isinstance(allowed, str) and allowed:
+            if server is None and "/" not in name:
+                allowed_server = self.servers.get(allowed)
+                if allowed_server and allowed_server.alive and any(t["name"] == name for t in allowed_server.tools):
+                    server, tool_name = allowed_server, name
+            if server is not None and server.server_id != allowed:
+                await self._send_client(
+                    websocket,
+                    {
+                        "type": "tool_result",
+                        "id": request_id,
+                        "ok": False,
+                        "kind": "unknown_tool",
+                        "error": f"MCP tool not available for the selected server: {name}",
+                    },
+                )
+                return
         if not server:
             await self._send_client(
                 websocket,

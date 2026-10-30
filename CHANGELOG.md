@@ -2,6 +2,36 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9] - 2026-10-30
+
+### Added
+- **Mistral (Vibe Code) provider** for `chat.mistral.ai`. It is marked
+  *Experimental*: the page selectors (editor, messages, send and stop buttons)
+  are generic and have not yet been verified against the live site, so detection
+  may need adjusting. Requires signing in to Mistral.
+
+### Changed
+- **MCP isolation.** The AI can now only see and use the MCP server selected in
+  the target dropdown:
+  - `list_mcp_servers` lists only the selected server, and only if its toggle is on.
+  - `list_commands` refuses any `server` other than the selected one, without
+    revealing whether that server exists or is enabled.
+  - Commands are refused when the selected server is toggled off, when they use
+    another server's `server/tool` prefix, or when the tool is not in the
+    selected server's catalogue (this check is no longer skipped when the
+    catalogue is empty).
+  - Error messages and the periodic reminder no longer mention other servers.
+  - The extension now sends the selected server with every `call_tool` request,
+    and `bridge.py` rejects a tool that belongs to a different server. Requests
+    without this field keep the old behaviour, so older extensions still work.
+
+### Known limitations
+- Isolation relies on the extension telling the bridge which server is
+  selected. The bridge does not know the toggle state by itself.
+- The Roblox system prompt still tells the AI to call `list_mcp_servers` when the
+  user names another app. This does not affect the VS Code target.
+- The Mistral selectors are untested on the live site.
+
 ## [V3.8] - 2026-10-30
 
 ### Added
