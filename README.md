@@ -80,6 +80,7 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 | **Google Gemini** | `gemini.google.com` | ✅ Supported | May stop using tools in long sessions |
 | **Kimi** | `kimi.ai` | ✅ Supported | May use its native tools in some sessions |
 | **Grok** | `grok.com` | ✅ Supported | Requires signing in to xAI |
+| **Mistral (Vibe Code)** | `chat.mistral.ai` | 🧪 Experimental | Requires signing in to Mistral; selectors need testing on the live site |
 | **GLM (Z.ai)** | `chat.z.ai` | ✅ Supported | |
 | **Qwen** | `chat.qwen.ai` | ✅ Supported | |
 | **Arena** | `arena.ai` | ✅ Supported | Use **Direct** mode |

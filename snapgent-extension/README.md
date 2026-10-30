@@ -57,6 +57,8 @@ providers/ptero.js    same interface for Ptero / ptero.pro (textarea composer,
                       message and generation detection)                 (global ZSProvider)
 providers/grok.js     same interface for Grok / grok.com (ProseMirror
                       composer, message and generation detection)        (global ZSProvider)
+providers/mistral.js  same interface for Mistral / chat.mistral.ai (Vibe Code;
+                      generic selectors, needs live-site testing)        (global ZSProvider)
 background.js         WebSocket to the local bridge (provider-agnostic)
 ```
 
