@@ -1696,6 +1696,27 @@
   // Skills found in the workspace (.snapgent/skills/<name>/SKILL.md), as
   // [{ name, description, path }]. Filled by the skills loader; empty = feature off.
   let workspaceSkills = [];
+  // Every skill found on disk (enabled or not), for the Skills settings popup.
+  let allSkills = [];
+  // Persisted map { skillName: boolean }. A skill never toggled counts as enabled.
+  const SKILLS_ENABLED_KEY = "zsSkillsEnabled";
+  let skillsEnabled = {};
+  try {
+    chrome.storage.local.get(SKILLS_ENABLED_KEY, (result) => {
+      const saved = result && result[SKILLS_ENABLED_KEY];
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) skillsEnabled = saved;
+    });
+  } catch (error) {
+    console.warn("[snapgentV3] Could not load skill toggles:", error);
+  }
+  function isSkillEnabled(name) {
+    return skillsEnabled[name] !== false;
+  }
+  function setSkillEnabled(name, on) {
+    skillsEnabled = { ...skillsEnabled, [name]: !!on };
+    try { chrome.storage.local.set({ [SKILLS_ENABLED_KEY]: skillsEnabled }); } catch {}
+    workspaceSkills = allSkills.filter((s) => isSkillEnabled(s.name));
+  }
 
   // Scan .snapgent/skills/*/SKILL.md and fill workspaceSkills with name +
   // one-line description (progressive disclosure: bodies are read on demand by
@@ -1727,8 +1748,9 @@
         if (!name || !description) continue;
         out.push({ name, description, path: p });
       }
-      workspaceSkills = out;
-      diag("skills.loaded", { count: out.length });
+      allSkills = out;
+      workspaceSkills = out.filter((s) => isSkillEnabled(s.name));
+      diag("skills.loaded", { count: out.length, enabled: workspaceSkills.length });
     } catch (error) {
       log("Could not load workspace skills:", error);
     }
@@ -3004,6 +3026,33 @@
         box.addEventListener("change", () => setMcpEnabled(box.dataset.id, box.checked)));
     }
 
+    // ── Skills settings popup (toggle which workspace skills are listed) ────
+    function openSkillsSettings() {
+      const old = document.getElementById("zs-mcp-pop");
+      if (old) old.remove();
+      const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const pop = document.createElement("div");
+      pop.id = "zs-mcp-pop";
+      const render = () => {
+        const rows = allSkills.length
+          ? allSkills.map((s) => `<label class="zs-mcp-row"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">${esc(s.name)}</span><span class="zs-mcp-row-meta">${esc(s.description)}</span></span><input type="checkbox" class="zs-mcp-check" data-name="${esc(s.name)}" ${isSkillEnabled(s.name) ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>`).join("")
+          : `<div class="zs-mcp-pop-note">No skills found in .snapgent/skills/ (VS Code workspace only).</div>`;
+        pop.innerHTML =
+          `<div class="zs-mcp-pop-card" role="dialog" aria-label="Skills settings">` +
+            `<div class="zs-mcp-pop-head"><span>Skills</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
+            `<div class="zs-mcp-pop-note">Only enabled skills are listed in the prompt. Changes apply to the next chat session.</div>` +
+            `<div class="zs-mcp-pop-list">${rows}</div>` +
+          `</div>`;
+        pop.querySelector(".zs-mcp-pop-close").addEventListener("click", () => pop.remove());
+        pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
+          box.addEventListener("change", () => setSkillEnabled(box.dataset.name, box.checked)));
+      };
+      pop.addEventListener("click", (e) => { if (e.target === pop) pop.remove(); });
+      document.documentElement.appendChild(pop);
+      render();
+      if (selectedTargetId === "vscode") loadWorkspaceSkills().then(() => { if (pop.isConnected) render(); });
+    }
+
     function buildMenu() {
       const here = (P.displayName || "").toLowerCase();
       const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
@@ -3018,7 +3067,7 @@
       menuEl.innerHTML =
         `<div class="zs-menu-head"><span class="zs-menu-logo">snapgentV3</span></div>
          <section class="zs-menu-sec">
-           <div class="zs-sec-label zs-sec-label-row"><span>Switch AI</span><button id="zs-mcp-settings" class="zs-gear" title="MCP settings" aria-label="MCP settings">&#9881;</button></div>
+           <div class="zs-sec-label zs-sec-label-row"><span>Switch AI</span><span><button id="zs-skills-settings" class="zs-gear" title="Skills" aria-label="Skills">&#9733;</button><button id="zs-mcp-settings" class="zs-gear" title="MCP settings" aria-label="MCP settings">&#9881;</button></span></div>
            <div class="zs-site-grid">${sites}</div>
          </section>`;
       const open = (url) => { try { window.open(url, "_blank", "noopener"); } catch {} menuEl.hidden = true; };
@@ -3026,6 +3075,8 @@
         b.addEventListener("click", () => open(b.dataset.u)));
       const gear = menuEl.querySelector("#zs-mcp-settings");
       if (gear) gear.addEventListener("click", (e) => { e.stopPropagation(); menuEl.hidden = true; openMcpSettings(); });
+      const starBtn = menuEl.querySelector("#zs-skills-settings");
+      if (starBtn) starBtn.addEventListener("click", (e) => { e.stopPropagation(); menuEl.hidden = true; openSkillsSettings(); });
     }
 
     // ── First-time onboarding card (bridge missing) ─────────────────────────
