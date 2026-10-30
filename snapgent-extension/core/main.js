@@ -1086,7 +1086,7 @@
     // (Studio closed / no place / MCP option disabled) - with an explanatory
     // text instead of a result. Surface it as a proper environment ERROR so the
     // model stops and tells the user, instead of treating it as tool output.
-    if (r.ok && /Unable to find an active Studio instance|previously active Studio has disconnected/i.test(r.text || "")) {
+    if (r.ok && selectedTargetId === "roblox" && /Unable to find an active Studio instance|previously active Studio has disconnected/i.test(r.text || "")) {
       ui.banner("warn", "Studio offline",
         "Open a place, enable MCP.");
       return ZS.FEEDBACK.studioOffline;
