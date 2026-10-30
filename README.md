@@ -165,6 +165,20 @@ launcher; Roblox Studio itself may not be available on your Linux distribution.
 2. Open a project folder in VS Code before clicking **Start**.
 3. Click **Start** and describe what you want to make.
 
+**⑤ Updating to a new release**
+
+The extension and the bridge are two separate parts, and each one has to be updated. Reloading only the extension does not update the bridge, and the **Restart** button in the extension popup only restarts the MCP servers, it does not load new bridge code.
+
+1. Get the new version: run `git pull` in the project folder, or download and extract the [latest release](https://github.com/herdodp/snapgent-connector/releases/latest).
+2. Stop the old bridge: close the terminal window that is running `start.bat`, `MacOS_Start.command` or `Linux_Start.sh`.
+3. Start the bridge again with the same launcher. The launcher replaces an old bridge still holding port 17613. On Linux it first checks that the process on the port is a Snapgent bridge, and stops with an error if it belongs to another program.
+4. Reload the extension at `chrome://extensions` (or `edge://extensions`), then refresh open chat tabs (F5).
+5. Check the versions: click the snapgentV3 icon. The popup header shows `ext vX · bridge vY`, and both numbers should match the release you installed. The bridge also writes `snapgent bridge vY` to its startup log.
+
+If the popup shows `bridge old`, the bridge is still running old code: repeat steps 2 and 3. On macOS and Linux, also make sure there is no old executable file named `bridge` in the folder, because the launcher runs it instead of `bridge.py`.
+
+> **Windows note (V3.9.3):** `start.bat` runs the bundled `bridge.exe`, which was last rebuilt on 2026-10-23 and does not yet include the V3.9.2 fix for large MCP responses or the version display. On Windows the popup will therefore show `bridge old`. Until `bridge.exe` is rebuilt, you can run the current bridge with Python 3.9+: install it with `py -3 -m pip install websockets`, close `start.bat`, then run `py -3 bridge.py` in the project folder. macOS and Linux already use `bridge.py` and are not affected.
+
 ---
 
 ## `05` &nbsp; Usage
