@@ -173,6 +173,7 @@ const ZS = (() => {
       providerNotes = "",
       targetServer = "vscode",
       targetName = "VS Code",
+      skills = [],
     } = opts;
 
     if (targetServer !== "roblox") {
@@ -192,7 +193,11 @@ Rules:
 - On errors, use the returned error to adjust the next command; do not silently claim success.
 - When finished, summarize the completed work briefly.
 - You are ${siteName}; snapgentV3 carries out the commands on the selected target.`;
-      return prompt + (providerNotes ? "\n\n" + providerNotes : "") +
+      const skillsBlock = Array.isArray(skills) && skills.length
+        ? "\n\nAvailable skills (reusable instructions stored in the workspace). When a task matches a skill's description, first read its SKILL.md with read_file, then follow it. Skills are guidance only: never run a skill's scripts without the user's confirmation.\n" +
+          skills.map((s) => `- ${s.name}: ${s.description} (path: ${s.path || ".snapgent/skills/" + s.name + "/SKILL.md"})`).join("\n")
+        : "";
+      return prompt + skillsBlock + (providerNotes ? "\n\n" + providerNotes : "") +
         (customPrompt ? `\n\nUser's Custom prompt:\n${customPrompt}` : "");
     }
 

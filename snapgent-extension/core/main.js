@@ -1693,6 +1693,47 @@
   // The full system prompt for the CURRENT provider and user settings. One
   // definition, used both by the bootstrap and by the periodic re-injection, so
   // the two can never drift apart.
+  // Skills found in the workspace (.snapgent/skills/<name>/SKILL.md), as
+  // [{ name, description, path }]. Filled by the skills loader; empty = feature off.
+  let workspaceSkills = [];
+
+  // Scan .snapgent/skills/*/SKILL.md and fill workspaceSkills with name +
+  // one-line description (progressive disclosure: bodies are read on demand by
+  // the model via read_file). Never throws; on any problem the list stays empty.
+  async function loadWorkspaceSkills() {
+    workspaceSkills = [];
+    try {
+      const tools = activeTools();
+      const findTool = tools.find((t) => bareToolName(t.name) === "find_files");
+      const readTool = tools.find((t) => bareToolName(t.name) === "read_file");
+      if (!findTool || !readTool) return;
+      const found = await bg({ type: "call_tool", name: findTool.name,
+        arguments: { path: ".snapgent/skills", pattern: "**/SKILL.md" }, timeout: 5000 });
+      if (!found || !found.ok || !found.text) return;
+      let paths;
+      try { paths = JSON.parse(found.text); } catch { return; }
+      if (!Array.isArray(paths)) return;
+      const out = [];
+      for (const p of paths.slice(0, 30)) {
+        if (typeof p !== "string") continue;
+        const r = await bg({ type: "call_tool", name: readTool.name,
+          arguments: { path: p }, timeout: 5000 });
+        if (!r || !r.ok || !r.text) continue;
+        const fm = r.text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+        if (!fm) continue;
+        const clean = (v) => (v || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ");
+        const name = clean((fm[1].match(/^name:\s*(.+)$/m) || [])[1]);
+        const description = clean((fm[1].match(/^description:\s*(.+)$/m) || [])[1]).slice(0, 200);
+        if (!name || !description) continue;
+        out.push({ name, description, path: p });
+      }
+      workspaceSkills = out;
+      diag("skills.loaded", { count: out.length });
+    } catch (error) {
+      log("Could not load workspace skills:", error);
+    }
+  }
+
   function systemPrompt() {
     return ZS.buildSystemPrompt({
       siteName: P.displayName,
@@ -1700,6 +1741,7 @@
       providerNotes: P.promptExtra || "",
       targetServer: selectedTargetId,
       targetName: ui.getTargetName(),
+      skills: workspaceSkills,
     });
   }
 
@@ -1937,6 +1979,8 @@
           `Try a new chat or reload.`);
         return;
       }
+      if (selectedTargetId === "vscode") await loadWorkspaceSkills();
+      if (!alive()) return;
       const prompt = systemPrompt();
       const base = await submitAndGetBase(prompt);
       if (!alive()) return;
