@@ -1756,6 +1756,38 @@
     }
   }
 
+  // Validate pasted SKILL.md text. Returns { ok, name, description } or { ok:false, error }.
+  const SKILL_MAX_BYTES = 20 * 1024;
+  function validateSkillText(text) {
+    if (typeof text !== "string" || !text.trim()) return { ok: false, error: "Empty content." };
+    if (new Blob([text]).size > SKILL_MAX_BYTES) return { ok: false, error: "Too large (max 20 KB)." };
+    const fm = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+    if (!fm) return { ok: false, error: "Missing frontmatter (--- name / description ---)." };
+    const clean = (v) => (v || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ");
+    const name = clean((fm[1].match(/^name:\s*(.+)$/m) || [])[1]);
+    const description = clean((fm[1].match(/^description:\s*(.+)$/m) || [])[1]);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64)
+      return { ok: false, error: "name must be lowercase letters, digits and hyphens only (max 64)." };
+    if (!description) return { ok: false, error: "description is required." };
+    if (description.length > 200) return { ok: false, error: "description is too long (max 200 characters)." };
+    return { ok: true, name, description };
+  }
+
+  // Write a validated skill to .snapgent/skills/<name>/SKILL.md. create_file never
+  // overwrites, so an existing name is rejected. Imported skills start DISABLED.
+  async function importSkillText(text) {
+    const v = validateSkillText(text);
+    if (!v.ok) return v;
+    const createTool = activeTools().find((t) => bareToolName(t.name) === "create_file");
+    if (!createTool) return { ok: false, error: "create_file is not available on this server." };
+    if (allSkills.some((s) => s.name === v.name)) return { ok: false, error: `A skill named "${v.name}" already exists.` };
+    const r = await bg({ type: "call_tool", name: createTool.name,
+      arguments: { path: `.snapgent/skills/${v.name}/SKILL.md`, content: text }, timeout: 8000 });
+    if (!r || !r.ok) return { ok: false, error: (r && (r.error || r.text)) || "Write failed." };
+    setSkillEnabled(v.name, false);
+    return { ok: true, name: v.name };
+  }
+
   function systemPrompt() {
     return ZS.buildSystemPrompt({
       siteName: P.displayName,
@@ -3033,7 +3065,45 @@
       const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
       const pop = document.createElement("div");
       pop.id = "zs-mcp-pop";
+      let mode = "list"; // "list" | "paste" | "review"
+      let draft = "";
+      let importMsg = "";
+      const renderImport = () => {
+        const v = mode === "review" ? validateSkillText(draft) : null;
+        const body = mode === "paste"
+          ? `<textarea id="zs-skill-text" rows="10" style="width:100%;box-sizing:border-box;font:11px ui-monospace,Consolas,monospace;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:6px" placeholder="Paste the full SKILL.md here (with --- name / description --- frontmatter)">${esc(draft)}</textarea>` +
+            `<div class="zs-mcp-pop-note" style="color:#ff6b6b">${esc(importMsg)}</div>` +
+            `<div style="display:flex;gap:8px;margin-top:8px"><button id="zs-skill-cancel" class="zs-gear" style="flex:1">Cancel</button><button id="zs-skill-review" class="zs-gear" style="flex:1">Review</button></div>`
+          : `<div class="zs-mcp-pop-note" style="color:#ffb454">Review carefully. Third-party skills can contain instructions that make the AI run commands or change files. It will be saved DISABLED until you turn it on.</div>` +
+            `<div class="zs-mcp-pop-note"><b>${esc(v.name || "")}</b> - ${esc(v.description || "")}</div>` +
+            `<pre style="max-height:220px;overflow:auto;white-space:pre-wrap;font:11px ui-monospace,Consolas,monospace;border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:6px;margin:6px 0">${esc(draft)}</pre>` +
+            `<div class="zs-mcp-pop-note" style="color:#ff6b6b">${esc(importMsg)}</div>` +
+            `<div style="display:flex;gap:8px;margin-top:8px"><button id="zs-skill-back" class="zs-gear" style="flex:1">Back</button><button id="zs-skill-confirm" class="zs-gear" style="flex:1">Confirm import</button></div>`;
+        pop.innerHTML =
+          `<div class="zs-mcp-pop-card" role="dialog" aria-label="Import skill">` +
+            `<div class="zs-mcp-pop-head"><span>Import skill</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
+            body + `</div>`;
+        pop.querySelector(".zs-mcp-pop-close").addEventListener("click", () => pop.remove());
+        const on = (id, fn) => { const el = pop.querySelector(id); if (el) el.addEventListener("click", fn); };
+        on("#zs-skill-cancel", () => { mode = "list"; importMsg = ""; draft = ""; render(); });
+        on("#zs-skill-review", () => {
+          draft = pop.querySelector("#zs-skill-text").value;
+          const chk = validateSkillText(draft);
+          if (!chk.ok) { importMsg = chk.error; renderImport(); return; }
+          if (allSkills.some((s) => s.name === chk.name)) { importMsg = `A skill named "${chk.name}" already exists.`; renderImport(); return; }
+          importMsg = ""; mode = "review"; renderImport();
+        });
+        on("#zs-skill-back", () => { mode = "paste"; importMsg = ""; renderImport(); });
+        on("#zs-skill-confirm", async () => {
+          const res = await importSkillText(draft);
+          if (!res.ok) { importMsg = res.error; renderImport(); return; }
+          mode = "list"; draft = ""; importMsg = "";
+          await loadWorkspaceSkills();
+          if (pop.isConnected) render();
+        });
+      };
       const render = () => {
+        if (mode !== "list") { renderImport(); return; }
         const rows = allSkills.length
           ? allSkills.map((s) => `<label class="zs-mcp-row"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">${esc(s.name)}</span><span class="zs-mcp-row-meta">${esc(s.description)}</span></span><input type="checkbox" class="zs-mcp-check" data-name="${esc(s.name)}" ${isSkillEnabled(s.name) ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>`).join("")
           : `<div class="zs-mcp-pop-note">No skills found in .snapgent/skills/ (VS Code workspace only).</div>`;
@@ -3042,8 +3112,11 @@
             `<div class="zs-mcp-pop-head"><span>Skills</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
             `<div class="zs-mcp-pop-note">Only enabled skills are listed in the prompt. Changes apply to the next chat session.</div>` +
             `<div class="zs-mcp-pop-list">${rows}</div>` +
+            `<div style="margin-top:8px"><button id="zs-skill-import" class="zs-gear" style="width:100%">+ Import skill</button></div>` +
           `</div>`;
         pop.querySelector(".zs-mcp-pop-close").addEventListener("click", () => pop.remove());
+        const impBtn = pop.querySelector("#zs-skill-import");
+        if (impBtn) impBtn.addEventListener("click", () => { mode = "paste"; draft = ""; importMsg = ""; render(); });
         pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
           box.addEventListener("change", () => setSkillEnabled(box.dataset.name, box.checked)));
       };
