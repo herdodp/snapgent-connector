@@ -65,6 +65,28 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 await server.stop()
             self.assertFalse(server.alive)
 
+    async def test_large_response_line_is_received(self):
+        # Regression: a single JSON line larger than asyncio's default 64 KB
+        # stream limit used to kill the stdout reader while the process stayed
+        # alive, so every later request timed out.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                big_message = "x" * 200_000
+                result = await server.call_tool("echo", {"message": big_message}, 10)
+                self.assertEqual(result["content"][0]["text"], big_message)
+                self.assertTrue(server.alive)
+                follow_up = await server.call_tool("echo", {"message": "still works"}, 10)
+                self.assertEqual(follow_up["content"][0]["text"], "still works")
+            finally:
+                await server.stop()
+
     @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
     async def test_websocket_extension_protocol(self):
         with tempfile.TemporaryDirectory() as temp_dir:

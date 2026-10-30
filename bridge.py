@@ -63,7 +63,8 @@ class MCPServer:
 
     @property
     def alive(self) -> bool:
-        return bool(self.process and self.process.returncode is None)
+        reader_dead = bool(self._reader_task and self._reader_task.done())
+        return bool(self.process and self.process.returncode is None and not reader_dead)
 
     async def start(self) -> bool:
         async with self._start_lock:
@@ -97,6 +98,7 @@ class MCPServer:
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    limit=64 * 1024 * 1024,
                 )
             except (OSError, ValueError) as error:
                 self.error = str(error)
@@ -246,6 +248,8 @@ class MCPServer:
                         future.set_result(message)
         except asyncio.CancelledError:
             raise
+        except (ValueError, asyncio.LimitOverrunError) as error:
+            log(f"[{self.server_id}] MCP stdout read failed: {error}")
         finally:
             if self.process is process and process.returncode is None:
                 log(f"[{self.server_id}] MCP stdout closed.")
