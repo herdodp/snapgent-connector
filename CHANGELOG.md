@@ -2,6 +2,33 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.8] - 2026-10-30
+
+### Added
+- **Skills.** Reusable instructions stored in the workspace at
+  `.snapgent/skills/<name>/SKILL.md`. The skill list is added to the system
+  prompt at the start of a chat, and the AI reads a skill's `SKILL.md` with
+  `read_file` when a task matches its description. Skills are guidance only and
+  scripts are never run without user confirmation. Includes an example
+  `commit-message` skill.
+- **Skills popup.** A star (★) button in the snapgentV3 menu opens a popup with
+  a toggle for each skill, so only the skills you want are listed to the AI.
+- **Skill import.** Import a skill by pasting text or by choosing a `.md` or
+  `.txt` file, then review it and confirm before it is saved.
+- **Global skill library.** Save a skill to a library shared across workspaces,
+  install it into the current workspace, or delete it from the library.
+
+### Fixed
+- **False "Studio offline" message** shown on every target, not only Roblox
+  Studio.
+
+### Known limitations
+- The skill list is loaded at bootstrap, so changes apply from the next chat
+  session.
+- Skills only work for the VS Code target.
+- Zip import is not available yet.
+- The global library is stored in the browser and does not sync across devices.
+
 ## [V3.7.1] - 2026-10-30
 
 ### Fixed
