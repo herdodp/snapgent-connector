@@ -26,7 +26,7 @@ LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.2"
+BRIDGE_VERSION = "3.9.3"
 MAX_LOG_CHARS = 1000
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)

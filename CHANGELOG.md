@@ -2,6 +2,21 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.3] - 2026-10-31
+
+### Added
+- **Bridge version is now visible.** The bridge defines `BRIDGE_VERSION`, writes it
+  to the startup log (`snapgent bridge v...`), sends it to the extension in the
+  `connected` message, and reports it as the MCP `clientInfo` version instead of
+  the fixed `1.0.0`.
+- **Versions in the popup header.** The popup shows `ext vX · bridge vY`. If the
+  bridge is too old to report a version, it shows `bridge old`, which means the
+  bridge was not updated and restarted after pulling.
+
+### Upgrade
+Pull the latest `main`, restart the bridge, then reload the extension at
+`chrome://extensions` (or `edge://extensions`) and refresh open chat tabs (F5).
+
 ## [V3.9.2] - 2026-10-31
 
 ### Fixed
