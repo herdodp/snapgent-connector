@@ -3021,6 +3021,12 @@
     function renderTargetMenu() {
       if (!targetMenuEl || !targetSelect) return;
       const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      // Skip the rewrite when nothing changed: periodic status updates call
+      // setTarget() -> renderTargetMenu() and would otherwise destroy the buttons
+      // between mouse-down and mouse-up, so the click never fires.
+      const menuKey = selectedTargetId + "|" + [...targetSelect.options].map((o) => `${o.value}:${o.textContent}`).join("|");
+      if (targetMenuEl.dataset.menuKey === menuKey && targetMenuEl.childElementCount) return;
+      targetMenuEl.dataset.menuKey = menuKey;
       const rows = [...targetSelect.options].map((o) => {
         const cur = o.value === selectedTargetId;
         return `<button type="button" class="zs-site-opt zs-target-opt${cur ? " zs-target-cur" : ""}" data-id="${esc(o.value)}"><span class="zs-site-name"><span>${esc(o.textContent)}</span></span>${cur ? `<span class="zs-site-badge">active</span>` : ""}</button>`;
@@ -3110,7 +3116,12 @@
       pop.addEventListener("click", (e) => { if (e.target === pop) close(); });
       pop.querySelector(".zs-mcp-pop-close").addEventListener("click", close);
       pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
-        box.addEventListener("change", () => setMcpEnabled(box.dataset.id, box.checked)));
+        box.addEventListener("change", () => {
+          setMcpEnabled(box.dataset.id, box.checked);
+          // Refresh the dropdown right away so a re-enabled server is selectable
+          // without waiting for the popup to close.
+          setTarget(selectedTargetId);
+        }));
     }
 
     // ── Skills settings popup (toggle which workspace skills are listed) ────
