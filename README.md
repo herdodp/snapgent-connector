@@ -6,7 +6,7 @@
 
 <p><b>Turn any AI chatbot browser to many app via MCP</b></p>
 
-<p><a href="https://discord.gg/rvaZ8KkvAX"><b>💬 Join our Discord</b></a></p>
+<p><a href="https://discord.gg/rvaZ8KkvAX"><b>💬 Join our Discord</b></a> for report problem</p>
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
