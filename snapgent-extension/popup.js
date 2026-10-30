@@ -25,6 +25,11 @@ function render(s) {
         : studioOff ? "No Studio"
         : "Open Studio")
     : "Bridge offline";
+  const ver = document.getElementById("ver");
+  const extVer = chrome.runtime.getManifest().version;
+  ver.textContent = !s.connected ? `ext v${extVer}`
+    : s.bridgeVersion ? `ext v${extVer} · bridge v${s.bridgeVersion}`
+    : `ext v${extVer} · bridge old`;
   tools.textContent = s.connected ? `${s.tools || 0} tools` : "Run start.bat";
   servers.textContent = s.connected
     ? list.map((x) => `${x.alive ? "●" : "○"} ${x.id} (${x.alive ? x.tools + " tools" : "down"})`).join("\n")

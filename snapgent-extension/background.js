@@ -35,6 +35,7 @@ const pending = new Map(); // id -> {resolve, timer}
 let toolsCache = [];
 let mcpAlive = false;
 let serversCache = [];
+let bridgeVersion = null;
 // true/false = a PLACE is loaded and usable in Roblox Studio; null = unknown.
 // The MCP process stays alive when Studio is closed or its MCP option is off,
 // so this is probed separately (bridge "studio_status").
@@ -97,6 +98,7 @@ function connect() {
     studioApp = null;
     studioProc = null;
     serversCache = [];
+    bridgeVersion = null;
     stopHeartbeat();
     failAllPending("bridge connection closed");
     broadcastStatus();
@@ -223,6 +225,7 @@ function handleBridgeMessage(msg) {
     return;
   }
   if (msg.type === "connected") {
+    bridgeVersion = typeof msg.bridge_version === "string" ? msg.bridge_version : null;
     mcpAlive = !!msg.mcp_alive;
     if (Array.isArray(msg.tools)) toolsCache = msg.tools;
     if (Array.isArray(msg.servers)) serversCache = msg.servers;
@@ -286,7 +289,7 @@ function failAllPending(reason) {
 
 // ── status push to any open DeepSeek tab + popup ─────────────────────────
 function statusObj() {
-  return { type: "zs-status", connected, mcpAlive, studio: studioConnected, studioApp, studioProc, tools: toolsCache.length, servers: serversCache };
+  return { type: "zs-status", connected, mcpAlive, bridgeVersion, studio: studioConnected, studioApp, studioProc, tools: toolsCache.length, servers: serversCache };
 }
 
 function broadcastStatus() {

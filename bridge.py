@@ -26,6 +26,7 @@ LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 MCP_PROTOCOL_VERSION = "2024-11-05"
+BRIDGE_VERSION = "3.9.2"
 MAX_LOG_CHARS = 1000
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -115,7 +116,7 @@ class MCPServer:
                     {
                         "protocolVersion": MCP_PROTOCOL_VERSION,
                         "capabilities": {},
-                        "clientInfo": {"name": "snapgent-bridge", "version": "1.0.0"},
+                        "clientInfo": {"name": "snapgent-bridge", "version": BRIDGE_VERSION},
                     },
                     timeout=12,
                 )
@@ -356,6 +357,7 @@ class Bridge:
     def _connected_message(self) -> Dict[str, Any]:
         return {
             "type": "connected",
+            "bridge_version": BRIDGE_VERSION,
             "mcp_alive": any(server.alive for server in self.servers.values()),
             "tools": self._catalog,
             "servers": self._server_status(),
@@ -682,6 +684,7 @@ async def run() -> None:
         ping_interval=20,
         ping_timeout=20,
     )
+    log(f"snapgent bridge v{BRIDGE_VERSION}")
     log(f"listening on ws://{HOST}:{PORT} - load the extension and open a supported AI chat")
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
