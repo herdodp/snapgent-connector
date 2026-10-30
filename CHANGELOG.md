@@ -2,6 +2,24 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.1] - 2026-10-31
+
+### Fixed
+- **Target dropdown not clickable.** The target menu is no longer rewritten when
+  its contents have not changed. Periodic status updates used to redraw the
+  buttons between mouse-down and mouse-up, so the click never fired.
+- **Re-enabled MCP server missing from the dropdown.** Toggling a server in the
+  **MCP servers** panel now refreshes the target dropdown immediately, without
+  waiting for the panel to close.
+
+### Documentation
+- Added troubleshooting rows to `README.md` for a missing MCP server in the
+  target dropdown and for dropdown clicks that do nothing.
+
+### Upgrade
+Pull the latest `main`, reload the extension at `chrome://extensions` (or
+`edge://extensions`), then refresh open chat tabs (F5).
+
 ## [V3.9] - 2026-10-30
 
 ### Added
