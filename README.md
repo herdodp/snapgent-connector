@@ -1,7 +1,7 @@
 <div align="center">
 
 <a href="https://github.com/herdodp/snapgent-connector">
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;%3E+Connector+agent+MCP" alt="snapgentV3: Connector agent for VS Code" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;+Connector+agent+MCP" alt="snapgentV3: Connector agent for VS Code" />
 </a>
 
 <p><b>Turn any AI chatbot browser to VS Code.</b></p>
