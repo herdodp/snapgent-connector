@@ -1788,6 +1788,37 @@
     return { ok: true, name: v.name };
   }
 
+  // Global skill library: stored in chrome.storage (not in any workspace). The
+  // model cannot read these, so they must be installed into a workspace (through
+  // the same review + importSkillText path) before they take effect.
+  const GLOBAL_SKILLS_KEY = "zsGlobalSkills";
+  let globalSkills = {}; // { name: { description, text } }
+  try {
+    chrome.storage.local.get(GLOBAL_SKILLS_KEY, (result) => {
+      const saved = result && result[GLOBAL_SKILLS_KEY];
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) globalSkills = saved;
+    });
+  } catch (error) {
+    console.warn("[snapgentV3] Could not load global skills:", error);
+  }
+  function persistGlobalSkills() {
+    try { chrome.storage.local.set({ [GLOBAL_SKILLS_KEY]: globalSkills }); } catch {}
+  }
+  function saveGlobalSkill(text) {
+    const v = validateSkillText(text);
+    if (!v.ok) return v;
+    if (globalSkills[v.name]) return { ok: false, error: `A global skill named "${v.name}" already exists.` };
+    globalSkills = { ...globalSkills, [v.name]: { description: v.description, text } };
+    persistGlobalSkills();
+    return { ok: true, name: v.name };
+  }
+  function removeGlobalSkill(name) {
+    const next = { ...globalSkills };
+    delete next[name];
+    globalSkills = next;
+    persistGlobalSkills();
+  }
+
   function systemPrompt() {
     return ZS.buildSystemPrompt({
       siteName: P.displayName,
@@ -3079,7 +3110,7 @@
             `<div class="zs-mcp-pop-note"><b>${esc(v.name || "")}</b> - ${esc(v.description || "")}</div>` +
             `<pre style="max-height:220px;overflow:auto;white-space:pre-wrap;font:11px ui-monospace,Consolas,monospace;border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:6px;margin:6px 0">${esc(draft)}</pre>` +
             `<div class="zs-mcp-pop-note" style="color:#ff6b6b">${esc(importMsg)}</div>` +
-            `<div style="display:flex;gap:8px;margin-top:8px"><button id="zs-skill-back" class="zs-gear" style="flex:1">Back</button><button id="zs-skill-confirm" class="zs-gear" style="flex:1">Confirm import</button></div>`;
+            `<div style="display:flex;gap:8px;margin-top:8px"><button id="zs-skill-back" class="zs-gear" style="flex:1">Back</button><button id="zs-skill-global" class="zs-gear" style="flex:1">Save to global</button><button id="zs-skill-confirm" class="zs-gear" style="flex:1">Confirm import</button></div>`;
         pop.innerHTML =
           `<div class="zs-mcp-pop-card" role="dialog" aria-label="Import skill">` +
             `<div class="zs-mcp-pop-head"><span>Import skill</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
@@ -3109,6 +3140,12 @@
           importMsg = ""; mode = "review"; renderImport();
         });
         on("#zs-skill-back", () => { mode = "paste"; importMsg = ""; renderImport(); });
+        on("#zs-skill-global", () => {
+          const res = saveGlobalSkill(draft);
+          if (!res.ok) { importMsg = res.error; renderImport(); return; }
+          mode = "list"; draft = ""; importMsg = "";
+          render();
+        });
         on("#zs-skill-confirm", async () => {
           const res = await importSkillText(draft);
           if (!res.ok) { importMsg = res.error; renderImport(); return; }
@@ -3127,9 +3164,23 @@
             `<div class="zs-mcp-pop-head"><span>Skills</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
             `<div class="zs-mcp-pop-note">Only enabled skills are listed in the prompt. Changes apply to the next chat session.</div>` +
             `<div class="zs-mcp-pop-list">${rows}</div>` +
+            `<div class="zs-mcp-pop-note" style="margin-top:10px"><b>Global library</b> (stored in this browser; install into a workspace to use)</div>` +
+            (Object.keys(globalSkills).length
+              ? Object.keys(globalSkills).map((n) => `<div class="zs-mcp-row"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">${esc(n)}</span><span class="zs-mcp-row-meta">${esc(globalSkills[n].description)}</span></span><button class="zs-gear zs-gskill-install" data-name="${esc(n)}">Install</button><button class="zs-gear zs-gskill-del" data-name="${esc(n)}">Delete</button></div>`).join("")
+              : `<div class="zs-mcp-pop-note">Empty. Use "Save to global" while reviewing an import.</div>`) +
             `<div style="margin-top:8px"><button id="zs-skill-import" class="zs-gear" style="width:100%">+ Import skill</button></div>` +
           `</div>`;
         pop.querySelector(".zs-mcp-pop-close").addEventListener("click", () => pop.remove());
+        pop.querySelectorAll(".zs-gskill-install").forEach((b) => b.addEventListener("click", () => {
+          const g = globalSkills[b.dataset.name];
+          if (!g) return;
+          draft = g.text; importMsg = "";
+          if (allSkills.some((s) => s.name === b.dataset.name)) { importMsg = `A skill named "${b.dataset.name}" already exists in this workspace.`; }
+          mode = "review"; render();
+        }));
+        pop.querySelectorAll(".zs-gskill-del").forEach((b) => b.addEventListener("click", () => {
+          removeGlobalSkill(b.dataset.name); render();
+        }));
         const impBtn = pop.querySelector("#zs-skill-import");
         if (impBtn) impBtn.addEventListener("click", () => { mode = "paste"; draft = ""; importMsg = ""; render(); });
         pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
