@@ -2,6 +2,24 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.2] - 2026-10-31
+
+### Fixed
+- **Bridge stops responding after a large MCP response.** asyncio limits each
+  line read from an MCP server to 64 KB. A single large response (for example
+  `read_files` or `list_dir` on a big folder such as a home directory) made the
+  stdout reader fail while the server process stayed alive, so the bridge never
+  restarted it and every later request timed out. The stream limit is now
+  64 MB, a dead reader now counts as a dead server so it is restarted
+  automatically, and the cause is written to the log.
+
+### Tests
+- Added a regression test that sends a 200 KB response line through the bridge.
+
+### Upgrade
+Pull the latest `main` and restart the bridge. No extension reload is needed
+for the bridge fix itself.
+
 ## [V3.9.1] - 2026-10-31
 
 ### Fixed
