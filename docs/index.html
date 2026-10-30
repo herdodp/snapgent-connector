@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#e0e0e0">
-  <title>snapgentV3: Use your browser AI chat inside VS Code</title>
-  <meta name="description" content="snapgentV3 is a free, open source browser extension and local bridge. It lets the AI chat you already use read, edit, search and run code in your open VS Code workspace through MCP.">
-  <meta property="og:title" content="snapgentV3: Use your browser AI chat inside VS Code">
-  <meta property="og:description" content="A browser extension and a local bridge that connect a normal AI chat to your open VS Code workspace. Free and open source.">
+  <title>snapgentV3: Connect your browser AI chat to your apps through MCP</title>
+  <meta name="description" content="snapgentV3 is a free, open source browser extension and local bridge. It lets the AI chat you already use control apps on your computer through MCP, such as VS Code, Roblox Studio, EffectCraft or any other MCP server.">
+  <meta property="og:title" content="snapgentV3: Connect your browser AI chat to your apps through MCP">
+  <meta property="og:description" content="A browser extension and a local bridge that connect a normal AI chat to apps on your computer through MCP. Free and open source.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://herdodp.github.io/snapgent-connector/">
   <meta property="og:image" content="https://herdodp.github.io/snapgent-connector/assets/icon.png">
   <link rel="icon" href="assets/icon.png" type="image/png">
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
   <script>document.documentElement.classList.add('js');</script>
   <script src="script.js?v=2" defer></script>
 </head>
@@ -31,7 +31,7 @@
       </button>
       <nav class="site-nav" id="site-nav" aria-label="Main">
         <a href="#how-it-works">How it works</a>
-        <a href="#tools">Tools</a>
+        <a href="#targets">Targets</a>
         <a href="#providers">Providers</a>
         <a href="#install">Install</a>
         <a href="https://github.com/herdodp/snapgent-connector" target="_blank" rel="noopener">GitHub</a>
@@ -42,8 +42,8 @@
   <main id="main">
     <section class="hero wrap" id="top">
       <div class="hero-copy">
-        <h1>The AI chat you already use, working inside <mark>VS Code</mark>.</h1>
-        <p class="lead">snapgentV3 is a browser extension and a local bridge. Your chat sends plain-text commands, the bridge runs them on the workspace you have open, and the results go back into the conversation. No API key, no sign-in.</p>
+        <h1>The AI chat you already use, <mark>connected to your apps</mark>.</h1>
+        <p class="lead">snapgentV3 is a browser extension and a local bridge. Your chat sends plain-text commands, the bridge runs them on an MCP server for the app you chose, and the results go back into the conversation. No API key needed.</p>
         <div class="actions">
           <a class="btn btn-primary" href="https://github.com/herdodp/snapgent-connector/releases/latest" target="_blank" rel="noopener">Download the latest release</a>
           <a class="text-link" href="https://youtu.be/HY0YWsHLp34" target="_blank" rel="noopener">Watch the demo video (YouTube)</a>
@@ -60,8 +60,8 @@
           <li><b>AI chat</b><span>in your browser</span></li>
           <li><b>snapgentV3 extension</b><span>reads the command in the reply</span></li>
           <li><b>Local bridge</b><span>WebSocket on your machine</span></li>
-          <li><b>VS Code MCP server</b><span>28 workspace tools</span></li>
-          <li class="end"><b>Your open workspace</b><span>files, Git, scripts</span></li>
+          <li><b>MCP server</b><span>the target you selected</span></li>
+          <li class="end"><b>Your app</b><span>Any app with an MCP server</span></li>
         </ol>
         <figcaption>Commands travel down. Results travel back up into the chat.</figcaption>
       </figure>
@@ -70,7 +70,7 @@
     <section class="section wrap" id="how-it-works" aria-labelledby="how-title">
       <div class="split">
         <div class="split-head">
-          <h2 id="how-title">One command at a time, <mark>checked by you</mark> in the chat.</h2>
+          <h2 id="how-title">One command at a time, <mark>visible to you</mark> in the chat.</h2>
           <p class="muted">The AI does not get a remote shell. It writes a command in its reply, and the extension runs that one command and pastes the result back.</p>
         </div>
         <div>
@@ -78,7 +78,7 @@
             <li><span class="trace-who">You</span><p>Describe a task in a supported AI chat, in plain language.</p></li>
             <li><span class="trace-who">The AI</span><p>Replies with a command, written as a small JSON block.</p></li>
             <li><span class="trace-who">Extension</span><p>Detects the command and forwards it to the local bridge.</p></li>
-            <li><span class="trace-who">Bridge</span><p>Routes it to the VS Code MCP server for your open workspace.</p></li>
+            <li><span class="trace-who">Bridge</span><p>Routes it to the MCP server of the target you selected.</p></li>
             <li><span class="trace-who">Chat</span><p>Receives the result, and the AI continues from there.</p></li>
           </ol>
           <p class="caption">This is what a command looks like in a reply:</p>
@@ -87,43 +87,45 @@
       </div>
     </section>
 
-    <section class="band" id="tools" aria-labelledby="tools-title">
+    <section class="band" id="targets" aria-labelledby="targets-title">
       <div class="wrap">
-        <h2 id="tools-title"><mark>28 tools</mark> for the workspace you have open.</h2>
-        <p class="muted lede">The VS Code MCP server works inside the open workspace folder. Tools marked new arrived in V3.6.</p>
+        <h2 id="targets-title">One chat, <mark>many targets</mark>.</h2>
+        <p class="muted lede">Each target is an MCP server. Pick one in the selector in the chat bar and switch at any time. The AI only sees and can only use the target you selected.</p>
         <div class="tool-groups">
-          <section aria-labelledby="g-look">
-            <h3 id="g-look">Look around <small>11</small></h3>
+          <section aria-labelledby="t-vscode">
+            <h3 id="t-vscode">VS Code <small>default</small></h3>
             <ul>
-              <li>get_workspace_info</li><li>get_project_info</li><li>list_dir</li><li>list_tree</li><li>find_files</li><li>search_files</li><li>read_file</li><li>read_files</li><li>read_file_lines</li><li>get_file_info</li><li>get_file_outline</li>
+              <li>Read and search files</li><li>Edit, create, move, copy</li><li>Git status, diff, add, commit</li><li>Run scripts and tests</li>
             </ul>
           </section>
-          <section aria-labelledby="g-change">
-            <h3 id="g-change">Change files <small>8</small></h3>
+          <section aria-labelledby="t-roblox">
+            <h3 id="t-roblox">Roblox Studio</h3>
             <ul>
-              <li>create_file</li><li>write_file</li><li>edit_file</li><li class="new">apply_patch <small>new</small></li><li>create_directory</li><li>move_file</li><li>copy_file</li><li class="new">delete_file <small>new</small></li>
+              <li>Uses Studio's built-in MCP server</li><li>Read and edit scripts</li><li>Inspect the game tree</li>
             </ul>
           </section>
-          <section aria-labelledby="g-git">
-            <h3 id="g-git">Use Git <small>6</small></h3>
+          <section aria-labelledby="t-effectcraft">
+            <h3 id="t-effectcraft">EffectCraft <small>optional</small></h3>
             <ul>
-              <li>git_status</li><li>git_diff</li><li>git_log</li><li>git_branches</li><li class="new">git_add <small>new</small></li><li class="new">git_commit <small>new</small></li>
+              <li>Needs EffectCraft installed</li><li>Detected by the bridge</li>
             </ul>
           </section>
-          <section aria-labelledby="g-run">
-            <h3 id="g-run">Run and test <small>3</small></h3>
+          <section aria-labelledby="t-more">
+            <h3 id="t-more">Other MCP servers</h3>
             <ul>
-              <li>run_command</li><li>run_project_script</li><li>run_tests</li>
+              <li>The bridge can run additional MCP servers</li><li>Each one stays isolated</li>
             </ul>
           </section>
         </div>
+        <p class="note" style="margin-top:1.75rem">Available commands depend on the target. Ask the AI to run <code>list_commands</code> to see exactly what the selected target offers.</p>
       </div>
     </section>
 
     <section class="section wrap" aria-labelledby="guard-title">
-      <h2 id="guard-title">Where the tools <mark>say no</mark>.</h2>
-      <p class="muted lede">These limits are built into the server, so they hold whatever the AI asks for.</p>
+      <h2 id="guard-title">Where it <mark>says no</mark>.</h2>
+      <p class="muted lede">These limits are built in, so they hold whatever the AI asks for. The examples below are from the built-in VS Code server.</p>
       <dl class="guards">
+        <div><dt>Target isolation</dt><dd>The AI can only list and use the MCP server you selected. Other servers, even enabled ones, stay invisible, and a disabled server cannot be used.</dd></div>
         <div><dt>delete_file</dt><dd>Deletes one file. Directories, the workspace root and anything under <code>.git</code> are refused.</dd></div>
         <div><dt>apply_patch</dt><dd>Applies several exact replacements to one file. Each <code>old_text</code> must match exactly once, and nothing is written if any edit fails.</dd></div>
         <div><dt>git_add</dt><dd>Stages the paths you name. Staging the whole workspace is refused.</dd></div>
@@ -138,7 +140,7 @@
         <div class="split-head">
           <h2 id="prov-title">Eleven chats, <mark>your pick</mark>.</h2>
           <p class="muted">Use whichever AI site you prefer. The extension has a separate integration for each one.</p>
-          <p class="note">Whatever a command returns is pasted into the chat, so the provider you choose can see it. Pick a project you are comfortable sharing with that provider.</p>
+          <p class="note">Whatever a command returns is pasted into the chat, so the provider you choose can see it. Only use projects you are comfortable sharing with that provider.</p>
         </div>
         <div class="table-wrap" role="region" aria-label="Supported AI providers" tabindex="0">
           <table>
@@ -164,15 +166,15 @@
     <section class="band" id="install" aria-labelledby="install-title">
       <div class="wrap">
         <h2 id="install-title">From download to <mark>first command</mark>.</h2>
-        <p class="muted lede">Needs Microsoft Edge or Google Chrome, and VS Code. On macOS and Linux the bridge also needs Python 3.9 or newer. Windows ships the bridge as an executable.</p>
+        <p class="muted lede">Needs Microsoft Edge or Google Chrome, plus the app you want to control, such as VS Code or Roblox Studio. On macOS and Linux the bridge also needs Python 3.9 or newer. Windows ships the bridge as an executable.</p>
         <ol class="install-steps">
           <li>
             <h3>Load the extension</h3>
             <p>Download and extract the <a href="https://github.com/herdodp/snapgent-connector/releases/latest" target="_blank" rel="noopener">latest release</a>. Open <code>edge://extensions</code> or <code>chrome://extensions</code>, turn on Developer mode, choose Load unpacked, and select the <code>snapgent-extension</code> folder.</p>
           </li>
           <li>
-            <h3>Open your project in VS Code</h3>
-            <p>Open the folder you want to work on. The bridge can start before VS Code. The agent waits until a workspace is open and never falls back to the release folder.</p>
+            <h3>Open your app</h3>
+            <p>Open the app you want to control. For the default VS Code target, open the folder you want to work on. The bridge can start before VS Code. The agent waits until a workspace is open and never falls back to the release folder. For Roblox Studio, open a place and enable its built-in MCP server.</p>
           </li>
           <li>
             <h3>Start the bridge</h3>
@@ -186,7 +188,7 @@
           </li>
           <li>
             <h3>Start a session</h3>
-            <p>Open a supported AI site, start a new chat, click Start in the snapgentV3 bar above the input box, and describe what you want. The <a href="https://youtu.be/eo3sdtPSBso" target="_blank" rel="noopener">installation video</a> walks through it (YouTube).</p>
+            <p>Open a supported AI site, start a new chat, choose your target in the snapgentV3 bar above the input box, click Start, and describe what you want. The <a href="https://youtu.be/eo3sdtPSBso" target="_blank" rel="noopener">installation video</a> walks through it (YouTube).</p>
           </li>
         </ol>
 
@@ -195,19 +197,9 @@
           <div><dt>The snapgentV3 bar is missing</dt><dd>Check that the extension is enabled and allowed on the current site, then reload the tab.</dd></div>
           <div><dt>The bridge shows as offline</dt><dd>Start the launcher for your system and keep its window open.</dd></div>
           <div><dt>The AI answers without using tools</dt><dd>Remind it to use snapgentV3 commands, or start a new chat.</dd></div>
+          <div><dt>The target does not respond</dt><dd>Check that the app is open and its MCP server is running, then switch the target in the selector. After a switch the page reloads, and a running session in that tab has to be started again.</dd></div>
         </dl>
-      </div>
-    </section>
-
-    <section class="section wrap" aria-labelledby="other-title">
-      <div class="split split-tight">
-        <div class="split-head">
-          <h2 id="other-title">Other targets, <mark>one click</mark> away.</h2>
-        </div>
-        <div>
-          <p>VS Code is the default target. The MCP selector in the chat bar can also point the bridge at Roblox Studio or EffectCraft, and you can switch at any time. After a switch the page reloads, and a running session in that tab has to be started again.</p>
-          <p class="muted">EffectCraft support is optional and needs EffectCraft installed. Roblox Studio needs its built-in MCP server enabled. The <a href="https://github.com/herdodp/snapgent-connector#readme" target="_blank" rel="noopener">README</a> has the detection details for each system.</p>
-        </div>
+        <p class="note" style="margin-top:1.5rem">The <a href="https://github.com/herdodp/snapgent-connector#readme" target="_blank" rel="noopener">README</a> has the detection details for each system.</p>
       </div>
     </section>
   </main>
