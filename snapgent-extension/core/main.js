@@ -1285,6 +1285,24 @@
     P.setInputLock(true); // prevent user from typing while the agent is active
     ui.inputCover(true);  // keep the "Agent is working" cover up for the WHOLE loop
     diag("loop.start", { base });
+    // Watchdog: if the tab is visible, no tool is running and NOTHING has changed
+    // (turn counts, stream length, generating flag) for WD_STALL_MS, the loop is
+    // stuck waiting. Stop it so the cover and Stop button are released by the
+    // finally block below, and tell the user instead of leaving a dead bar.
+    const WD_STALL_MS = 180000;
+    let _wdSig = "", _wdAt = Date.now();
+    const _wd = setInterval(() => {
+      if (!A.running) return;
+      if (document.hidden || A.parked || A.toolRunning || A.injecting) { _wdAt = Date.now(); return; }
+      const sig = [P.assistantCount(), P.userCount(), P.streamLen ? P.streamLen() : 0, P.isGenerating() ? 1 : 0].join("|");
+      if (sig !== _wdSig) { _wdSig = sig; _wdAt = Date.now(); return; }
+      if (Date.now() - _wdAt > WD_STALL_MS) {
+        diag("loop.watchdog", { sig });
+        ui.banner("warn", "Agent stopped waiting", "No progress for 3 min. Send continue to resume.");
+        A.stop = true;
+        _wdAt = Date.now();
+      }
+    }, 5000);
     try {
       while (!A.stop) {
         // Gate the WHOLE cycle on tab visibility. We only advance - read the
@@ -1538,6 +1556,7 @@
       A.toolSettle = null;
       A.loopKey = null;
       ui.showStop(false);
+      clearInterval(_wd);
       ui.inputCover(false); // lift the "Agent is working" cover when the loop ends
       P.setInputLock(false); // always unlock, even on error or stop
       diag("loop.end");

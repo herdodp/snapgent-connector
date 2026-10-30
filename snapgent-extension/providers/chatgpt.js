@@ -208,8 +208,15 @@ const ZSProvider = (() => {
       // textWithout, never textContent - see the CodeMirror note there.
       return replyNodes(item).map((m) => textWithout(m)).join("\n");
     }
-    return textWithout(item);
+    return isUserItem(item) ? stripSrPrefix(textWithout(item)) : textWithout(item);
   }
+
+  // ChatGPT's user turns can start with a visually hidden screen-reader label
+  // ("You said:" / "Vous avez dit :"). It sits in front of the injected
+  // "Output of '...'" caption, so the core's ^-anchored isInjectedFeedback test
+  // missed the turn and the raw result stayed on screen as a blue bubble.
+  const SR_PREFIX = /^\s*(?:you said|vous avez dit|you wrote|tu as dit|usted dijo|du hast gesagt)\s*:?\s*/i;
+  const stripSrPrefix = (t) => (t ? t.replace(SR_PREFIX, "") : t);
 
   function classifyText(item, excludeSel) {
     if (isAssistantItem(item)) {
@@ -217,7 +224,9 @@ const ZSProvider = (() => {
         .filter((m) => !(excludeSel && m.closest(excludeSel)))
         .map((m) => textWithout(m, excludeSel)).join("\n");
     }
-    return textWithout(item, excludeSel);
+    return isUserItem(item)
+      ? stripSrPrefix(textWithout(item, excludeSel))
+      : textWithout(item, excludeSel);
   }
 
   // ── DOM primitives ────────────────────────────────────────────────────────

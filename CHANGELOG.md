@@ -2,6 +2,19 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.7.1] - 2026-10-30
+
+### Fixed
+- **ChatGPT: "Agent is working" and the Stop button could stay on forever** when
+  the loop got stuck waiting for a reply. A watchdog now stops the loop after 3
+  minutes with no progress (tab visible, no tool running), releases the cover
+  and Stop button, and shows an "Agent stopped waiting" banner. Time spent with
+  the tab hidden or a tool running is not counted.
+- **ChatGPT: tool results could stay visible as a raw blue bubble.** A hidden
+  screen-reader label ("You said:") at the start of a user turn is now ignored
+  when detecting injected `Output of '...'` results, so they can be masked.
+  This is a best-effort fix and is not yet confirmed on the live site.
+
 ## [V3.7] - 2026-10-30
 
 ### Added
