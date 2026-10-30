@@ -6,6 +6,8 @@
 
 <p><b>Turn any AI chatbot browser to many app via MCP</b></p>
 
+<p><a href="https://discord.gg/rvaZ8KkvAX"><b>💬 Join our Discord</b></a></p>
+
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
 [![Release](https://img.shields.io/badge/RELEASE-V3.9.1-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.1)
