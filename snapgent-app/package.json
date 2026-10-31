@@ -1,0 +1,26 @@
+{
+  "name": "snapgent-app",
+  "version": "0.1.0",
+  "description": "Standalone snapgent app: built-in AI browser, agent UI bar and local bridge",
+  "main": "src/main.js",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.snapgent.app",
+    "productName": "Snapgent",
+    "files": ["src/**/*", "extension/**/*", "package.json"],
+    "extraResources": [
+      { "from": "bin", "to": "bin", "filter": ["vscode_mcp.exe"] }
+    ],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

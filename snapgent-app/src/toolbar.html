@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'">
+<title>Snapgent</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f4f5; --fg:#18181b; --bd:#d4d4d8; --ac:#facc15; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#18181b; --fg:#e4e4e7; --bd:#3f3f46; } }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px system-ui, sans-serif; overflow:hidden; }
+  #bar { display:flex; gap:6px; align-items:center; height:44px; padding:0 8px; border-bottom:1px solid var(--bd); }
+  button { background:transparent; color:inherit; border:1px solid var(--bd); border-radius:6px; padding:5px 9px; cursor:pointer; }
+  button:hover { border-color:var(--ac); }
+  #url { flex:1; min-width:80px; background:transparent; color:inherit; border:1px solid var(--bd); border-radius:6px; padding:6px 9px; }
+  #url:focus { outline:none; border-color:var(--ac); }
+  #ws { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #panel { position:fixed; top:44px; right:0; width:360px; max-height:420px; overflow:auto; background:var(--bg);
+           border:1px solid var(--bd); border-radius:0 0 0 8px; display:none; z-index:10; }
+  #panel.open { display:block; }
+  #panel .head { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-bottom:1px solid var(--bd); }
+  #panel .item { padding:7px 10px; border-bottom:1px solid var(--bd); cursor:pointer; }
+  #panel .item:hover { background:rgba(250,204,21,.15); }
+  #panel .t { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #panel .u { opacity:.65; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="back" title="Back">&#8592;</button>
+  <button id="fwd" title="Forward">&#8594;</button>
+  <button id="reload" title="Reload">&#8635;</button>
+  <input id="url" type="text" spellcheck="false" placeholder="https://claude.ai/">
+  <button id="ws" title="Choose the project folder the agent works in">Folder: none</button>
+  <button id="hist" title="History">History</button>
+</div>
+<div id="panel">
+  <div class="head"><b>History</b><button id="clear">Clear</button></div>
+  <div id="list"></div>
+</div>
+<script src="toolbar.js"></script>
+</body>
+</html>
