@@ -73,7 +73,7 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 ---
 
-## `â˜…` &nbsp; Snapgent App (standalone, Windows)
+## Snapgent App (standalone, Windows)
 
 Prefer not to load an extension or run the bridge yourself? **Snapgent App** is a standalone desktop app (Electron) with a built-in AI browser, a toolbar, and the bridge built in. It needs no Chrome/Edge, no `start.bat`, no Python and no Node.js.
 
