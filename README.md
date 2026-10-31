@@ -73,6 +73,44 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 ---
 
+## `â˜…` &nbsp; Snapgent App (standalone, Windows)
+
+Prefer not to load an extension or run the bridge yourself? **Snapgent App** is a standalone desktop app (Electron) with a built-in AI browser, a toolbar, and the bridge built in. It needs no Chrome/Edge, no `start.bat`, no Python and no Node.js.
+
+**Download** (pre-release `app-v0.1.0`): [Releases > app-v0.1.0](https://github.com/herdodp/snapgent-connector/releases/tag/app-v0.1.0)
+
+| File | Use |
+|---|---|
+| `Snapgent.Setup.0.1.0.exe` | Installer (recommended) |
+| `Snapgent-0.1.0-win-x64.zip` | Portable: extract the whole folder, then run `Snapgent.exe` |
+
+**How to use**
+
+1. Install and open Snapgent. It opens `claude.ai` inside the app and keeps your login in its own profile.
+2. Click the workspace button in the toolbar and choose your project folder.
+3. Chat as usual. The agent bar appears on the page and runs the commands in the selected folder.
+
+**Known limitations (0.1.0)**
+
+- The exe is **not code-signed**, so Windows SmartScreen may warn. Click **More info**, then **Run anyway**.
+- **Google sign-in has not been fully tested.** If it fails, log in with email and password on the Claude page.
+- Windows only. The default Electron icon is still used.
+
+**Build from source**
+
+The source is in [`snapgent-app/`](snapgent-app). It carries its own copy of the extension code (`snapgent-app/extension`), separate from `snapgent-extension/`.
+
+```
+cd snapgent-app
+npm install
+npm start        # run in development
+npm run dist     # build the Windows installer into dist/
+```
+
+`snapgent-app/bin/vscode_mcp.exe` is not stored in Git. Build it from `snapgent-app/mcp/vscode_mcp.py` with PyInstaller (see `vscode_mcp.spec`) and place it in `snapgent-app/bin/` before running `npm run dist`.
+
+---
+
 ## `02` &nbsp; Supported AI providers
 
 | Provider | URL | Status | Notes |
