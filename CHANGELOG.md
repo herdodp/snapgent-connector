@@ -12,6 +12,7 @@ All notable changes to snapgentV3 Free are documented here.
 - **The WebSocket opens before the servers start.** The extension can connect
   immediately. The tool catalogue is rebuilt and broadcast as each server becomes
   ready, so tools appear one server at a time instead of all at once.
+- Bridge and extension versions bumped to **3.9.4**.
 
 ### Fixed
 - **`bridge.exe` could not find `config.json` or write logs.** In a PyInstaller
