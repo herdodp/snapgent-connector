@@ -20,13 +20,17 @@ except ImportError:
     websockets = None
 
 
-ROOT = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    # PyInstaller build: config.json and logs live next to the .exe, not in the temp extraction dir.
+    ROOT = Path(sys.executable).resolve().parent
+else:
+    ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.3"
+BRIDGE_VERSION = "3.9.4"
 MAX_LOG_CHARS = 1000
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -306,8 +310,17 @@ class Bridge:
             server_id: MCPServer(server_id, server_config)
             for server_id, server_config in config.items()
         }
-        for server in self.servers.values():
-            await server.start()
+        async def _start_one(server: MCPServer) -> None:
+            try:
+                await server.start()
+            except Exception as error:
+                server.error = str(error)
+                log(f"[{server.server_id}] unexpected startup error: {error}")
+            # Publish each server as soon as it is ready so slow ones do not block the rest.
+            self._rebuild_catalog()
+            await self.broadcast(self._connected_message())
+
+        await asyncio.gather(*(_start_one(server) for server in self.servers.values()))
         self._rebuild_catalog()
         self._log_health()
 
@@ -675,7 +688,6 @@ async def run() -> None:
             f"'{sys.executable} -m pip install websockets'."
         )
     bridge = Bridge()
-    await bridge.start_servers()
     server = await websockets.serve(
         bridge.handle_client,
         HOST,
@@ -688,7 +700,16 @@ async def run() -> None:
     log(f"listening on ws://{HOST}:{PORT} - load the extension and open a supported AI chat")
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
-    monitor_task = asyncio.create_task(_monitor_servers(bridge))
+    async def _startup_then_monitor() -> None:
+        # Servers start in parallel after the websocket is already listening;
+        # the monitor only begins once the initial startup has finished.
+        try:
+            await bridge.start_servers()
+        except RuntimeError as error:
+            log(f"config error: {error}")
+        await _monitor_servers(bridge)
+
+    monitor_task = asyncio.create_task(_startup_then_monitor())
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop_event.set)

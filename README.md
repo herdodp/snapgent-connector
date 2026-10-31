@@ -10,7 +10,7 @@
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
-[![Release](https://img.shields.io/badge/RELEASE-V3.9.3-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.3)
+[![Release](https://img.shields.io/badge/RELEASE-V3.9.4-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.4)
 [![MCP](https://img.shields.io/badge/PROTOCOL-MCP-FACC15?style=flat-square&labelColor=111111&logo=modelcontextprotocol&logoColor=FACC15)](https://modelcontextprotocol.io/)
 
 </div>
@@ -107,7 +107,7 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 **① Load the extension**
 
-1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.3).
+1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.4).
 2. Open `edge://extensions` (Edge) or `chrome://extensions` (Chrome).
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select the `snapgent-extension` folder.
@@ -177,7 +177,7 @@ The extension and the bridge are two separate parts, and each one has to be upda
 
 If the popup shows `bridge old`, the bridge is still running old code: repeat steps 2 and 3. On macOS and Linux, also make sure there is no old executable file named `bridge` in the folder, because the launcher runs it instead of `bridge.py`.
 
-> **Windows note (V3.9.3):** `start.bat` runs the bundled `bridge.exe`, which was last rebuilt on 2026-10-23 and does not yet include the V3.9.2 fix for large MCP responses or the version display. On Windows the popup will therefore show `bridge old`. Until `bridge.exe` is rebuilt, you can run the current bridge with Python 3.9+: install it with `py -3 -m pip install websockets`, close `start.bat`, then run `py -3 bridge.py` in the project folder. macOS and Linux already use `bridge.py` and are not affected.
+> **Windows note (V3.9.4):** `start.bat` runs the bundled `bridge.exe`, which was rebuilt for V3.9.4 and includes the large-response fix, the version display and parallel server startup. If the popup still shows `bridge old`, close `start.bat` and start it again so the new `bridge.exe` is used. To run the bridge from source instead, install Python 3.9+ and `py -3 -m pip install websockets`, then run `py -3 bridge.py` in the project folder.
 
 ---
 
@@ -264,6 +264,6 @@ snapgent-full/
 
 **Built for creators who want to spend more time making.**
 
-[Latest release V3.9.3](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.3) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
+[Latest release V3.9.4](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.4) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
 
 </div>

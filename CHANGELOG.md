@@ -2,6 +2,29 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.4] - 2026-10-31
+
+### Changed
+- **MCP servers now start in parallel.** The bridge used to start servers one by
+  one, so a slow or failing server (for example Roblox Studio not ready yet)
+  delayed all the others. Servers now start together with `asyncio.gather`, and a
+  startup error in one server no longer affects the rest.
+- **The WebSocket opens before the servers start.** The extension can connect
+  immediately. The tool catalogue is rebuilt and broadcast as each server becomes
+  ready, so tools appear one server at a time instead of all at once.
+
+### Fixed
+- **`bridge.exe` could not find `config.json` or write logs.** In a PyInstaller
+  build, `__file__` points to a temporary extraction folder. The bridge now uses
+  the folder of the `.exe` as its root when running frozen.
+- **`bridge.exe` rebuilt.** The bundled Windows binary now includes the V3.9.2 fix
+  for large MCP responses and the bridge version display, so the popup no longer
+  shows `bridge old` on Windows.
+
+### Upgrade
+Pull the latest `main`, close and restart `start.bat`, then reload the extension
+at `chrome://extensions` (or `edge://extensions`) and refresh open chat tabs (F5).
+
 ## [V3.9.3] - 2026-10-31
 
 ### Added

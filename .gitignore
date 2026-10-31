@@ -5,6 +5,16 @@ ExtensionPresentation/
 presentation/
 config.json
 
+# Build output and local backups
+routergent/
+dist_tmp/
+build_tmp/
+dist_v394/
+build_v394/
+bridge.exe.bak
+vscode_mcp.exe.old
+config.json.bak-*
+
 # Zip files
 *.zip
 
