@@ -26,6 +26,11 @@ All notable changes to snapgentV3 Free are documented here.
 Pull the latest `main`, close and restart `start.bat`, then reload the extension
 at `chrome://extensions` (or `edge://extensions`) and refresh open chat tabs (F5).
 
+macOS and Linux: the launchers run `bridge.py`, so the update applies after you
+pull and restart. On macOS, if an old executable named `bridge` (no extension)
+exists in the folder, `MacOS_Start.command` runs it instead of `bridge.py`.
+Delete that file so the new bridge is used.
+
 ## [V3.9.3] - 2026-10-31
 
 ### Added
