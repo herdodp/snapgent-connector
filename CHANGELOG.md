@@ -2,6 +2,16 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [Unreleased]
+
+### Changed
+- Renamed `vscode_mcp.py` to `workspace_mcp.py` and de-branded the server (`workspace-mcp`, 28 tools unchanged).
+- Made the workspace root explicit via `ZS_WORKSPACE_ROOT`/`MCP_ROOT`; `tools/list` now always returns the full catalog without a VS Code liveness gate.
+- Made `setup-config.py` Linux-only: writes a `repo` server entry carrying `ZS_WORKSPACE_ROOT`, no Roblox or Effect Craft discovery.
+- Dropped Roblox coupling from `bridge.py` (`studio_status` request, `_studio_status`, `_process_running`, and the `roblox`/`vscode` guards).
+- Deleted Windows/macOS-only artifacts (`bridge.exe`, `vscode_mcp.exe`, `start.bat`, `setup-config.ps1`, `start-effectcraft.ps1`, `MacOS_Start.command`, `vscode_mcp.spec`).
+- Added `sync-upstream.sh` with the purge policy for renamed/deleted artifacts.
+
 ## [V3.9.4] - 2026-10-31
 
 ### Changed

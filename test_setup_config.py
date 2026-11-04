@@ -14,46 +14,24 @@ SPEC.loader.exec_module(setup_config)
 
 
 class SetupConfigTests(unittest.TestCase):
-    def test_linux_setup_writes_local_vscode_configuration(self):
+    def test_linux_setup_writes_repo_entry_with_workspace_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.json"
             with patch.object(setup_config.sys, "platform", "linux"), patch.object(
                 setup_config, "CONFIG_PATH", config_path
-            ), patch.object(
-                setup_config, "_roblox_studio_mcp", return_value=None
-            ), patch.object(setup_config, "_effectcraft_cli", return_value=None):
+            ), patch.dict(
+                os.environ, {"ZS_WORKSPACE_ROOT": temp_dir}, clear=False
+            ):
                 result = setup_config.main()
             self.assertEqual(result, 0)
             config = json.loads(config_path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            config["mcpServers"]["vscode"]["args"],
-            [str(setup_config.VSCODE_MCP)],
-        )
+        entry = config["mcpServers"]["repo"]
+        self.assertEqual(entry["args"], [str(setup_config.WORKSPACE_MCP)])
+        self.assertEqual(entry["env"]["ZS_WORKSPACE_ROOT"], temp_dir)
 
-    def test_linux_effectcraft_cli_is_discovered_from_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            cli = Path(temp_dir) / "effectcraft-cli"
-            cli.write_text("#!/bin/sh\n", encoding="utf-8")
-            cli.chmod(0o755)
-            with patch.object(setup_config.sys, "platform", "linux"), patch.dict(
-                os.environ, {"PATH": temp_dir}
-            ):
-                detected = setup_config._effectcraft_cli(None)
-        self.assertEqual(detected, cli.resolve())
-
-    def test_linux_studio_mcp_requires_explicit_override(self):
-        with patch.object(setup_config.sys, "platform", "linux"), patch.dict(
-            os.environ, {}, clear=True
-        ):
-            self.assertIsNone(setup_config._roblox_studio_mcp())
-        with tempfile.TemporaryDirectory() as temp_dir:
-            binary = Path(temp_dir) / "StudioMCP"
-            binary.write_text("#!/bin/sh\n", encoding="utf-8")
-            binary.chmod(0o755)
-            with patch.object(setup_config.sys, "platform", "linux"), patch.dict(
-                os.environ, {"ZS_STUDIO_MCP_PATH": str(binary)}
-            ):
-                self.assertEqual(setup_config._roblox_studio_mcp(), binary.resolve())
+    def test_non_linux_setup_is_refused(self):
+        with patch.object(setup_config.sys, "platform", "darwin"):
+            self.assertEqual(setup_config.main(), 1)
 
 
 if __name__ == "__main__":

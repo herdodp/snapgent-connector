@@ -77,7 +77,7 @@ if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
     pause_and_exit 1
 fi
 
-echo "  [3/4] Detecting VS Code, Roblox Studio, and EffectCraft..."
+echo "  [3/4] Writing the MCP configuration..."
 if ! "$PY" "./setup-config.py"; then
     echo "  ERROR: MCP configuration failed. See the message above."
     log "MCP auto-configuration failed."

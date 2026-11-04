@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import unquote, urlparse
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -25,81 +24,17 @@ MAX_FILE_CHARS = 200_000
 SAFE_PROJECT_SCRIPTS = {"build", "check", "format", "lint", "test", "typecheck"}
 
 
-def _vscode_active_folder() -> Optional[Path]:
-    if sys.platform == "win32":
-        result = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq Code.exe", "/NH"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError("Could not check whether VS Code is running.")
-        if "Code.exe" not in result.stdout:
-            return None
-
-    for storage_path in _vscode_storage_paths():
-        if not storage_path.is_file():
-            continue
-        try:
-            data = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"Could not read VS Code workspace state: {error}") from error
-
-        windows_state = data.get("windowsState") or {}
-        uris = []
-        last_folder = (windows_state.get("lastActiveWindow") or {}).get("folder")
-        if last_folder:
-            uris.append(last_folder)
-        uris.extend(
-            folder
-            for window in (windows_state.get("openedWindows") or [])
-            if (folder := (window or {}).get("folder"))
-        )
-
-        for uri in uris:
-            try:
-                parsed = urlparse(uri)
-                path = unquote(parsed.path)
-                if sys.platform == "win32" and re.match(r"^/[A-Za-z]:/", path):
-                    path = path[1:]
-                candidate = Path(path).resolve()
-            except (OSError, ValueError):
-                continue
-            if candidate.is_dir():
-                return candidate
-    return None
-
-
-def _vscode_storage_paths() -> List[Path]:
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA")
-        if not appdata:
-            return []
-        return [Path(appdata) / "Code" / "User" / "globalStorage" / "storage.json"]
-
-    if sys.platform == "linux":
-        config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-        return [
-            config / product / "User" / "globalStorage" / "storage.json"
-            for product in ("Code", "Code - Insiders", "VSCodium")
-        ]
-
-    support = Path.home() / "Library" / "Application Support"
-    return [
-        support / product / "User" / "globalStorage" / "storage.json"
-        for product in ("Code", "Code - Insiders", "VSCodium")
-    ]
-
-
 def get_root() -> Path:
-    active = _vscode_active_folder()
-    if active is None:
-        raise RuntimeError("Open a project folder in VS Code before using the VS Code MCP server.")
-    return active.resolve()
+    env_root = os.environ.get("ZS_WORKSPACE_ROOT") or os.environ.get("MCP_ROOT")
+    if not env_root:
+        raise RuntimeError(
+            "Configured workspace root is not set. Set ZS_WORKSPACE_ROOT to the "
+            "project folder."
+        )
+    candidate = Path(env_root).expanduser().resolve()
+    if not candidate.is_dir():
+        raise RuntimeError(f"Configured workspace root does not exist: {env_root}")
+    return candidate
 
 
 def normalize_target(rel_or_abs: str, root: Path) -> Path:
@@ -549,7 +484,7 @@ def _tool(name: str, description: str, properties: Dict[str, Any], required: Opt
 
 STR = {"type": "string"}
 TOOLS = [
-    _tool("get_workspace_info", "Get the active VS Code workspace name, path, and Git status.", {}),
+    _tool("get_workspace_info", "Get the workspace name, path, and Git status.", {}),
     _tool("get_project_info", "Inspect common project manifests and package scripts.", {}),
     _tool("list_dir", "List files and folders in the workspace.", {"path": STR}),
     _tool("list_tree", "List a bounded tree of workspace files and folders.", {"path": STR, "max_depth": {"type": "integer", "minimum": 0, "maximum": 8}}),
@@ -631,14 +566,13 @@ def handle_request(request: Dict[str, Any]) -> None:
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "vscode-mcp", "version": "2.0.0"},
+            "serverInfo": {"name": "workspace-mcp", "version": "2.0.0"},
         } if method == "initialize" else {}
         send_message({"jsonrpc": "2.0", "id": request_id, "result": result})
         return
 
     if method == "tools/list":
-        tools = TOOLS if _vscode_active_folder() is not None else []
-        send_message({"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools}})
+        send_message({"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}})
         return
 
     if method == "tools/call":

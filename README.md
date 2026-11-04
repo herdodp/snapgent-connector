@@ -28,7 +28,9 @@
   > no API key · no terminal · no copy-paste
 ```
 
-snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to **VS Code**. It automatically uses the currently open workspace. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
+snapgentV3 is a browser extension plus a local bridge that connects a normal AI chat to a scoped MCP workspace server. It automatically uses the configured workspace folder. Describe what you want in plain language — the extension forwards commands to the selected server through the local bridge, and returns the results to chat.
+
+This Linux build targets the client-agnostic `workspace-mcp` server. See `docs/linux-mcp-design.md` for the Linux-only design, setup, and upstream-sync policy.
 
 **Free and open source — no API key, subscription, or sign-in required.** snapgentV3 automatically uses the currently open VS Code workspace.
 
@@ -268,18 +270,16 @@ snapgent-full/
 │   ├── manifest.json          # Manifest V3 configuration
 │   └── test-*.js              # Smoke tests
 ├── assets/                    # Project images
-├── setup-config.ps1           # Configures Windows MCP servers
-├── setup-config.py            # Detects MCP servers on macOS and Linux
+├── setup-config.py            # Linux-only MCP server configurator
 ├── config.json                # Generated locally by launchers (not tracked)
-├── start.bat                  # Windows bridge launcher
-├── MacOS_Start.command        # macOS bridge launcher
 ├── Linux_Start.sh             # Linux bridge launcher
-├── bridge.exe                 # Windows local bridge
 ├── bridge.py                  # Cross-platform Python MCP bridge
-├── vscode_mcp.exe             # Default VS Code MCP server (28 workspace tools)
-├── vscode_mcp.py              # VS Code MCP server source
+├── workspace_mcp.py           # Linux-scoped workspace MCP server source (28 tools)
+├── sync-upstream.sh           # Sync with upstream, keeping purged paths deleted
 ├── test_bridge.py             # MCP bridge protocol tests
 ├── test_setup_config.py       # MCP setup helper tests
+├── test_workspace_mcp.py      # Workspace MCP server tests
+└── docs/linux-mcp-design.md   # Linux-only design, setup, and sync policy
 └── vscode_mcp.spec            # PyInstaller build recipe
 ```
 

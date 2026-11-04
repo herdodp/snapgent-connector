@@ -144,8 +144,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                     await manager.stop_servers()
 
     def test_duplicate_tool_names_are_server_qualified(self):
-        first = bridge.MCPServer("roblox", {})
-        second = bridge.MCPServer("effectcraft", {})
+        first = bridge.MCPServer("alpha", {})
+        second = bridge.MCPServer("beta", {})
         first.process = SimpleNamespace(returncode=None)
         second.process = SimpleNamespace(returncode=None)
         first.ready = second.ready = True
@@ -153,14 +153,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         second.tools = [{"name": "get_state"}]
 
         manager = bridge.Bridge()
-        manager.servers = {"roblox": first, "effectcraft": second}
+        manager.servers = {"alpha": first, "beta": second}
         manager._rebuild_catalog()
 
         self.assertEqual(
             [tool["name"] for tool in manager._catalog],
-            ["roblox/get_state", "effectcraft/get_state"],
+            ["alpha/get_state", "beta/get_state"],
         )
-        self.assertIs(manager._resolve_tool("effectcraft/get_state")[0], second)
+        self.assertIs(manager._resolve_tool("beta/get_state")[0], second)
         self.assertIsNone(manager._resolve_tool("get_state")[0])
 
 
