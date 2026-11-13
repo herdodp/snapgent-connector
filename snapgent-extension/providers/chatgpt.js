@@ -63,7 +63,15 @@ const ZSProvider = (() => {
   let diag = () => {}; // injected by core via init()
 
   const S = {
-    msg: '[data-message-author-role],[class*="DilResponseRoot"]',
+    // 2026-11 (desktop): ChatGPT dropped BOTH data-message-author-role AND
+    // .markdown. A turn is now a [data-turn-key] container holding a user bubble
+    // ([class*="group/user-message"]) and an assistant bubble whose only stable
+    // marker is a hashed class. Measured live (Chrome 157, 13 Nov 2026):
+    // authorRole=0, DilResponseRoot=0, markdown=0, groupUser=4, turnKey=2 - which
+    // is exactly why Start reported
+    // "reply was never read (0 chars) - message DOM not matched".
+    // The structural probes are APPENDED, so older layouts keep working.
+    msg: '[data-message-author-role],[class*="DilResponseRoot"],[data-turn-key]',
     userRole: "user",
     assistantRole: "assistant",
     reply: ".markdown",
@@ -115,13 +123,61 @@ const ZSProvider = (() => {
   };
 
   // ── Turn classification ───────────────────────────────────────────────────
-  const role = (item) => (item && item.getAttribute ? item.getAttribute("data-message-author-role") : null);
-  const isUserItem = (item) => role(item) === S.userRole;
+  // 2026-11 desktop changed the message DOM, so a turn is now identified by its
+  // STRUCTURAL container instead of the removed author-role attributes:
+  //   <div data-turn-key="…">
+  //     <div …><div class="group/user-message">…user text…</div></div>
+  //     <div …><h4 class="sr-only"><span>ChatGPT said:</span></h4>…reply…</div>
+  //   </div>
+  const isTurnKeyItem = (item) => !!(item && item.matches && item.matches('[data-turn-key]'));
+  const role = (item) => {
+    const attr = item && item.getAttribute ? item.getAttribute("data-message-author-role") : null;
+    if (attr) return attr;
+    // New markup: the container itself carries the turn, the role lives inside it.
+    if (isTurnKeyItem(item)) return "turn";
+    return null;
+  };
+  const isUserItem = (item) =>
+    role(item) === S.userRole ||
+    !!(item && item.closest && item.closest('[class*="group/user-message"]'));
   const isDilReply = (item) => !!(item && item.matches && item.matches('[class*="DilResponseRoot"]'));
-  const isAssistantItem = (item) => role(item) === S.assistantRole || isDilReply(item);
-  const replyNodes = (item) => isDilReply(item)
-    ? [item]
-    : [...item.querySelectorAll(S.reply)];
+  const isAssistantItem = (item) =>
+    role(item) === S.assistantRole || isDilReply(item) || isTurnKeyItem(item);
+
+  // The assistant reply inside a new-style turn comes in TWO shapes, and they
+  // alternate between replies:
+  //   A) fenced code  → <div class="… zs-cmd-mask"> … <pre>{"command":…}</pre>
+  //   B) plain text   → <div class="zs-tool-hide">ChatGPT said:ChatGPTJSON{"command":…}</div>
+  //      (NO <pre> at all - measured: preAsst=0, hide=1)
+  // Reading only <pre> made the bar sit on "ChatGPT returned an empty reply"
+  // while the tool chip spun forever, because shape B yielded zero nodes.
+  // .zs-tool-hide must NEVER be excluded: the core itself uses that class to mark
+  // the block it already consumed.
+  const SR_REPLY = /^\s*(?:chatgpt\s+(?:said|dit))\s*:?\s*/i;
+  const turnAssistantBlocks = (item) => {
+    if (!isTurnKeyItem(item)) return [];
+    const inUser = (el) => !!el.closest('[class*="group/user-message"]');
+    const pres = [...item.querySelectorAll("pre")].filter(
+      (p) => !inUser(p) && /[{[]/.test(p.innerText || "")
+    );
+    if (pres.length) return pres;
+    // Shape B: plain text. Take the DEEPEST wrapper that still carries the
+    // envelope, i.e. the one whose text starts at the payload.
+    return [...item.querySelectorAll("div")]
+      .filter((d) => {
+        if (inUser(d)) return false;
+        const t = d.innerText || "";
+        if (!/\{/.test(t) || /you\s+said\s*:/i.test(t)) return false;
+        return /"(?:command|params|tool)"\s*:/.test(t);
+      })
+      .slice(-1);
+  };
+  const replyNodes = (item) => {
+    if (isDilReply(item)) return [item];
+    const native = [...item.querySelectorAll(S.reply)];
+    if (native.length) return native;
+    return turnAssistantBlocks(item);
+  };
 
   // Text extraction that can skip our own chip (and any excluded subtree).
   //
@@ -218,11 +274,31 @@ const ZSProvider = (() => {
   const SR_PREFIX = /^\s*(?:you said|vous avez dit|you wrote|tu as dit|usted dijo|du hast gesagt)\s*:?\s*/i;
   const stripSrPrefix = (t) => (t ? t.replace(SR_PREFIX, "") : t);
 
+  // Assistant turns carry the mirrored label. Shape B of the 2026-11 desktop
+  // bubble reads, verbatim:
+  //   "ChatGPT said:ChatGPTJSON{"command":"read_file","params":{"path":"…"}}"
+  // The speaker word is repeated with NO separator, and a bare language label
+  // ("JSON") sits between it and the envelope. Left in place, the parser received
+  // a payload glued behind that chrome and no command ever matched.
+  const stripAssistantSrPrefix = (t) => {
+    if (!t) return t;
+    let s = t.replace(SR_REPLY, "");
+    s = s.replace(/chatgpt\s+(?:said|dit)\s*:?/gi, "").replace(/^chatgpt/i, "");
+    s = s.replace(
+      /^\s*(?:json|javascript|js|html|css|python|bash|sh|shell|text|plaintext|xml|sql|lua|yaml)\s*\n?/i,
+      ""
+    );
+    // Belt and braces: the payload starts at its first brace/bracket.
+    const brace = s.search(/[{[]/);
+    if (brace > 0) s = s.slice(brace);
+    return s;
+  };
+
   function classifyText(item, excludeSel) {
     if (isAssistantItem(item)) {
-      return replyNodes(item)
+      return stripAssistantSrPrefix(replyNodes(item)
         .filter((m) => !(excludeSel && m.closest(excludeSel)))
-        .map((m) => textWithout(m, excludeSel)).join("\n");
+        .map((m) => textWithout(m, excludeSel)).join("\n"));
     }
     return isUserItem(item)
       ? stripSrPrefix(textWithout(item, excludeSel))
