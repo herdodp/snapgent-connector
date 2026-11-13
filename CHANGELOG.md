@@ -2,6 +2,32 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.5] - 2026-11-14
+
+### Fixed
+- **ChatGPT: the extension could not read replies after the 2026-11 layout change.**
+  ChatGPT removed `data-message-author-role` and `.markdown`, so Start failed with
+  "reply was never read (0 chars) - message DOM not matched". Turns are now read from
+  the `[data-turn-key]` container, including both reply shapes (fenced code block and
+  plain text). Older layouts keep working. Thanks to @insiderinside (#2) and
+  @Abelion512 for the review.
+- **A saturated ChatGPT conversation no longer hangs.** When ChatGPT answers with an
+  empty placeholder turn, Start and the running agent now stop with a clear message
+  (open a new chat and Start again) instead of waiting out the 45 s timeout or showing
+  a false "Ready".
+- **Start no longer reports "Ready" when the first reply has no command.** It now says
+  why it did not complete and keeps Start available.
+
+### Added
+- **Background sessions (off by default).** With several chats open, a hidden tab can
+  now keep its session running. Turn it on in the MCP popup under Sessions. Off keeps
+  the previous behaviour, where a hidden tab pauses.
+
+### Changed
+- Extension and Snapgent App versions bumped to **3.9.5**. The bridge is unchanged
+  (still 3.9.4).
+- The Snapgent App now bundles the same extension scripts as the browser extension.
+
 ## [V3.9.4] - 2026-10-31
 
 ### Changed
