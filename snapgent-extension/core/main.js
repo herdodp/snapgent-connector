@@ -129,6 +129,15 @@
     await backgroundSessionsLoaded;
     return backgroundSessions;
   }
+  // Writer for the flag: without this the setting could only be flipped by
+  // hand-editing chrome.storage.local in DevTools, so the multi-tab feature was
+  // unreachable for users. Kept in memory too, so a toggle takes effect on the
+  // NEXT waitVisible() of a running session without a page reload.
+  function setBackgroundSessions(on) {
+    backgroundSessions = on === true;
+    try { chrome.storage.local.set({ [BACKGROUND_SESSIONS_KEY]: backgroundSessions }); } catch {}
+    return backgroundSessions;
+  }
 
   let selectedTargetId = "vscode";
   try {
@@ -423,6 +432,11 @@
   // ════════════════════════════════════════════════════════════════════════
   //  RESPONSE WATCHER  (generating-flag driven - robust to DOM churn)
   // ════════════════════════════════════════════════════════════════════════
+  // Shared wording for the 2026-11 placeholder turn, used by both the Start flow
+  // and agentLoop so the user sees one explanation, not two dialects.
+  const FALLBACK_TURN_TEXT =
+    "ChatGPT returned an empty placeholder reply for this conversation - open a new chat and Start again.";
+
   async function waitForResponse(base) {
     const t0 = Date.now();
     // INACTIVITY timeout (not total-elapsed): the loop only gives up after this
@@ -1432,6 +1446,18 @@
             `Timed out. Agent stopped.`);
           break;
         }
+        // 2026-11 ChatGPT saturation: the turn is a PLACEHOLDER (fallback-turn-*)
+        // that never renders its text. Only the Start flow used to handle this,
+        // so a session that saturated mid-conversation fell through every branch
+        // and re-entered with an unchanged base - reading the same placeholder
+        // every ~2.5s: no send, no banner, and (on a hidden tab) no watchdog to
+        // end it. Stop with the same banner Start shows.
+        if (res.kind === "fallback_turn") {
+          diag("fallback_turn.end");
+          ui.banner("warn", "Conversation stopped responding", FALLBACK_TURN_TEXT);
+          break;
+        }
+
         // A genuinely empty turn is effectively never produced (the warm-up guard
         // waits out slow starts). It DOES happen when the site drops a reply, and
         // ending the loop silently is what made this the single most confusing
@@ -2194,7 +2220,7 @@
         // bar on a false "Active" with no agent behind it, so say what happened
         // and keep Start available.
         diag("start.noToolCall", { kind: startRes.kind });
-        ui.banner("warn", "Start did not complete", "ChatGPT returned an empty placeholder reply for this conversation - open a new chat and Start again.");
+        ui.banner("warn", "Start did not complete", FALLBACK_TURN_TEXT);
         return; // do NOT mark the session ready
       } else if (startRes.kind !== "tool") {
         // The bootstrap used to fall through to A.started = true with NO command
@@ -3188,6 +3214,9 @@
           `<div class="zs-mcp-pop-head"><span>MCP servers</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
           `<div class="zs-mcp-pop-note">Only enabled servers appear in the dropdown and are read by the AI. Disabled servers cost no tokens.</div>` +
           `<div class="zs-mcp-pop-list">${rows}</div>` +
+          `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>Sessions</span></div>` +
+          `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>` +
+          `<div class="zs-mcp-pop-note">Off by default: a hidden tab has no layout, so reads right after it is shown again can be stale. Turn this on only when you run several chats at once.</div>` +
         `</div>`;
       document.documentElement.appendChild(pop);
 
@@ -3208,6 +3237,8 @@
       };
       pop.addEventListener("click", (e) => { if (e.target === pop) close(); });
       pop.querySelector(".zs-mcp-pop-close").addEventListener("click", close);
+      const bgBox = pop.querySelector("#zs-bg-sessions");
+      if (bgBox) bgBox.addEventListener("change", () => setBackgroundSessions(bgBox.checked));
       pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
         box.addEventListener("change", () => {
           setMcpEnabled(box.dataset.id, box.checked);
