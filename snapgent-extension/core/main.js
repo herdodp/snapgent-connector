@@ -97,6 +97,39 @@
     { name: "Mistral", url: "https://chat.mistral.ai/code" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
+
+  // ── Background (multi-tab) sessions ─────────────────────────────────────
+  // By default a session PARKS while its tab is hidden (see waitVisible): a
+  // hidden tab has no layout, so the first reads after unhide can come back
+  // stale and the agent loop must not act on them. That is the right default for
+  // a single session, but it also means that with several chats open only ONE
+  // of them can make progress - the others sit on "Paused · open this tab"
+  // indefinitely (user-reported).
+  //
+  // Opting in lets a hidden tab keep its session alive. It is deliberately NOT
+  // the default: reading a hidden tab is the stale-DOM case the parking was
+  // built for, so it must be an explicit choice. Off = previous behaviour,
+  // byte for byte.
+  const BACKGROUND_SESSIONS_KEY = "zsBackgroundSessions";
+  let backgroundSessions = false;
+  const backgroundSessionsLoaded = new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(BACKGROUND_SESSIONS_KEY, (result) => {
+        const saved = result && result[BACKGROUND_SESSIONS_KEY];
+        if (saved === true) backgroundSessions = true;
+        resolve();
+      });
+    } catch (error) {
+      console.warn("[snapgentV3] Could not load background-session setting:", error);
+      resolve();
+    }
+  });
+  // Awaitable so a session that starts right after load does not race the flag.
+  async function backgroundSessionsReady() {
+    await backgroundSessionsLoaded;
+    return backgroundSessions;
+  }
+
   let selectedTargetId = "vscode";
   try {
     chrome.storage.local.get(TARGET_STORAGE_KEY, (result) => {
@@ -237,6 +270,14 @@
   // race it against a slow stop-poll (the stop path is not latency-critical).
   async function waitVisible() {
     if (!document.hidden || A.stop) return !A.stop;
+    // Multi-tab opt-in: a hidden tab may keep working. Read the flag through the
+    // awaitable so a session started immediately after load cannot race it.
+    if (await backgroundSessionsReady()) {
+      // Mark the state for the diagnostics only; never place a cover over a tab
+      // the user cannot see anyway.
+      diag("park.skipped.background", { configured: true });
+      return !A.stop;
+    }
     A.parked = true;
     try { ui.setStarting(); } catch {}
     try {
@@ -620,6 +661,30 @@
       // A turn that has produced NOTHING yet is still warming up - never
       // finalize it as empty/truncated/text (a premature retry interrupts it).
       if (!sawContent) {
+        // 2026-11 ChatGPT: a saturated conversation answers with a PLACEHOLDER
+        // turn that never gains content. Its only marker is the search-unit key
+        //   data-content-search-unit-key="fallback-turn-0:2:assistant"
+        // and the bubble holds nothing but "ChatGPT said:". Measured live: the
+        // reply text was present in the page's own text but never rendered into
+        // the turn, so the loop waited the full WARMUP_MS (45 s) and then blamed
+        // the DOM ("empty"). Detect the placeholder immediately and say what it
+        // actually is, so the user is told to open a new chat instead of losing
+        // an hour to a stuck chip.
+        try {
+          const it = d && d.item;
+          const marker = it && it.querySelector
+            ? it.querySelector('[data-content-search-unit-key^="fallback-turn"]')
+            : null;
+          if (marker && !(d.reply || "").length) {
+            if (!warmSince) warmSince = Date.now();
+            if (Date.now() - warmSince > 2500) {
+              diag("empty.why", { branch: "fallbackTurn", rep: 0 });
+              return { kind: "fallback_turn" };
+            }
+            await sleep(200);
+            continue;
+          }
+        } catch {}
         if (!warmSince) warmSince = Date.now();
         if (Date.now() - warmSince < WARMUP_MS) { await sleep(200); continue; }
         diag("empty.why", { branch: "warmup", rep: (d.reply||"").length, lastGood: lastGoodReply.length });
@@ -2123,6 +2188,34 @@
         const readyRes = await waitForResponse(base2); // wait for "I'm ready" reply
         if (!alive()) return;
         if (A.stop || readyRes.kind === "stopped") { diag("start.aborted", { kind: readyRes.kind }); return; }
+      } else if (startRes.kind === "fallback_turn") {
+        // 2026-11 ChatGPT: the bootstrap was answered with a placeholder turn that
+        // never renders its text. Declaring the session ready here would leave the
+        // bar on a false "Active" with no agent behind it, so say what happened
+        // and keep Start available.
+        diag("start.noToolCall", { kind: startRes.kind });
+        ui.banner("warn", "Start did not complete", "ChatGPT returned an empty placeholder reply for this conversation - open a new chat and Start again.");
+        return; // do NOT mark the session ready
+      } else if (startRes.kind !== "tool") {
+        // The bootstrap used to fall through to A.started = true with NO command
+        // ever executed - the bar flipped to "Ready", yet nothing was wired and
+        // every later tool call died silently. Report the real outcome instead.
+        const kind = startRes.kind || "?";
+        const raw = String(startRes.text || startRes.raw || "");
+        diag("start.noToolCall", { kind, textLen: raw.length, head: raw.slice(0, 240) });
+        const why = {
+          empty: "reply was never read (0 chars) - message DOM not matched",
+          timeout: "no reply appeared within the timeout",
+          text: /"command"\s*:/.test(raw)
+            ? "reply has a command block the parser rejected"
+            : "model answered in prose without a command block",
+          parse_error: `command block malformed (${startRes.reason || "?"})`,
+          truncated: "reply was cut off before the command finished",
+          context_limit: "conversation hit the context limit",
+          too_long: "the message was too long for the site",
+        }[kind] || `unexpected reply kind "${kind}"`;
+        ui.banner("warn", "Start did not complete", why);
+        return; // do NOT mark the session ready - "Start" must stay available
       }
       A.started = true;
       rememberSession(P.conversationKey()); // survives virtualization AND reloads
