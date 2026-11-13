@@ -1,6 +1,6 @@
 {
   "name": "snapgent-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Standalone snapgent app: built-in AI browser, agent UI bar and local bridge",
   "main": "src/main.js",
   "license": "GPL-3.0-or-later",
