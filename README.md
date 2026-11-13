@@ -77,12 +77,12 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 Prefer not to load an extension or run the bridge yourself? **Snapgent App** is a standalone desktop app (Electron) with a built-in AI browser, a toolbar, and the bridge built in. It needs no Chrome/Edge, no `start.bat`, no Python and no Node.js.
 
-**Download** (pre-release `app-v0.1.0`): [Releases > app-v0.1.0](https://github.com/herdodp/snapgent-connector/releases/tag/app-v0.1.0)
+**Download** (`app-v0.1.1`): [Releases > app-v0.1.1](https://github.com/herdodp/snapgent-connector/releases/tag/app-v0.1.1)
 
 | File | Use |
 |---|---|
-| `Snapgent.Setup.0.1.0.exe` | Installer (recommended) |
-| `Snapgent-0.1.0-win-x64.zip` | Portable: extract the whole folder, then run `Snapgent.exe` |
+| `Snapgent.Setup.0.1.1.exe` | Installer (recommended) |
+| `Snapgent.Setup.0.1.1.exe.blockmap` | Update metadata, not needed for a normal install |
 
 **How to use**
 
@@ -90,7 +90,7 @@ Prefer not to load an extension or run the bridge yourself? **Snapgent App** is 
 2. Click the workspace button in the toolbar and choose your project folder.
 3. Chat as usual. The agent bar appears on the page and runs the commands in the selected folder.
 
-**Known limitations (0.1.0)**
+**Known limitations (0.1.1)**
 
 - The exe is **not code-signed**, so Windows SmartScreen may warn. Click **More info**, then **Run anyway**.
 - **Google sign-in has not been fully tested.** If it fails, log in with email and password on the Claude page.
