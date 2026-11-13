@@ -137,12 +137,32 @@ const ZSProvider = (() => {
     if (isTurnKeyItem(item)) return "turn";
     return null;
   };
-  const isUserItem = (item) =>
-    role(item) === S.userRole ||
-    !!(item && item.closest && item.closest('[class*="group/user-message"]'));
+  // The user bubble is a DESCENDANT of the [data-turn-key] item, so the old
+  // `closest('[class*="group/user-message"]')` probe walked ANCESTORS and could
+  // never match: role() returned "turn", isAssistantItem() then claimed every
+  // turn unconditionally, and classifyText's assistant-first branch read an empty
+  // string for user turns (their text is excluded by inUser()). That silently
+  // killed, in the new layout only: the injected-feedback chip + .zs-hidden
+  // camouflage, SYS_MARKER hiding, preHideWholeItems, the sinceLastSysInDom user
+  // tally, the "next is user" fallback and landed()'s preUser check.
+  // Detect on the descendant, and treat a turn as the ASSISTANT only when it has
+  // no user bubble.
+  const turnHasUserBubble = (item) =>
+    !!(item && item.querySelector && item.querySelector('[class*="group/user-message"]'));
+  const isUserItem = (item) => {
+    if (role(item) === S.userRole) return true;
+    if (!item) return false;
+    // A bare bubble handed to us directly still reports itself.
+    if (item.closest && item.closest('[class*="group/user-message"]')) return true;
+    return isTurnKeyItem(item) && turnHasUserBubble(item);
+  };
   const isDilReply = (item) => !!(item && item.matches && item.matches('[class*="DilResponseRoot"]'));
-  const isAssistantItem = (item) =>
-    role(item) === S.assistantRole || isDilReply(item) || isTurnKeyItem(item);
+  const isAssistantItem = (item) => {
+    if (role(item) === S.assistantRole || isDilReply(item)) return true;
+    // New layout: one container holds BOTH sides, so a turn is the assistant
+    // surface only if it carries no user bubble of its own.
+    return isTurnKeyItem(item) && !turnHasUserBubble(item);
+  };
 
   // The assistant reply inside a new-style turn comes in TWO shapes, and they
   // alternate between replies:
@@ -280,8 +300,32 @@ const ZSProvider = (() => {
   // The speaker word is repeated with NO separator, and a bare language label
   // ("JSON") sits between it and the envelope. Left in place, the parser received
   // a payload glued behind that chrome and no command ever matched.
+  // GATED to shape B only. Stripping unconditionally mangled shape-A replies:
+  // the leading /^chatgpt/i cut a legitimate "ChatGPT ..." opening, the global
+  // speaker-word removal ate "{option} ChatGPT said" style examples, and the
+  // brace slice chopped markdown before the first "[" - and that corrupted text
+  // is exactly what feeds kind:"text" loop context. Parsing does not need it:
+  // extractToolAnywhere/CMD_KEY_RE. So strip only when the raw text actually
+  // carries the glued 2026-11 chrome.  // Shape B opens with the speaker word AND/OR the bare language label; both are
+  // chrome, never content. Requiring the payload directly behind them keeps
+  // ordinary prose ("Python is a language.") untouched.
+  const LANG_LABEL = /(?:json|javascript|js|html|css|python|bash|sh|shell|text|plaintext|xml|sql|lua|yaml)/i;
+  const LOOKS_GLUED = (t) => {
+    if (!t) return false;
+    // Burn the chrome in the SAME order the stripper does: speaker word, then a
+    // second glued "ChatGPT", then the bare language label (see the verbatim
+    // sample above: "ChatGPT said:ChatGPTJSON{…}").
+    const payload = t.slice(0, 96)
+      .replace(/^\s*(?:chatgpt\s+(?:said|dit))\s*:?\s*/i, "")
+      .replace(/^chatgpt\s*/i, "")
+      .replace(new RegExp("^" + LANG_LABEL.source + "\\s*:?\\s*", "i"), "");
+    if (!/^\s*[{[]/.test(payload)) return false;
+    // Only a string that actually carried some chrome gets stripped.
+    return payload.length < t.replace(/^\s+/, "").length;
+  };
   const stripAssistantSrPrefix = (t) => {
     if (!t) return t;
+    if (!LOOKS_GLUED(t)) return t;
     let s = t.replace(SR_REPLY, "");
     s = s.replace(/chatgpt\s+(?:said|dit)\s*:?/gi, "").replace(/^chatgpt/i, "");
     s = s.replace(
@@ -295,10 +339,19 @@ const ZSProvider = (() => {
   };
 
   function classifyText(item, excludeSel) {
+    // USER FIRST. In the 2026-11 layout one container holds both sides, so a
+    // turn can be user-ness and assistant-ness at once; the assistant branch
+    // reads only the reply nodes and returns "" for a user turn, which is what
+    // broke the injected-feedback / camouflage / tally logic.
+    if (isUserItem(item) && !(role(item) === S.assistantRole || isDilReply(item))) {
+      const userSel = `[class*="group/user-message"]`;
+      const bubble = isTurnKeyItem(item) ? item.querySelector(userSel) : null;
+      return stripSrPrefix(textWithout(bubble || item, excludeSel));
+    }
     if (isAssistantItem(item)) {
       return stripAssistantSrPrefix(replyNodes(item)
         .filter((m) => !(excludeSel && m.closest(excludeSel)))
-        .map((m) => textWithout(m, excludeSel)).join("\n"));
+        .map((m) => textWithout(m, excludeSel)).join("\n"), item);
     }
     return isUserItem(item)
       ? stripSrPrefix(textWithout(item, excludeSel))
