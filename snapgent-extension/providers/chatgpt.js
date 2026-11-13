@@ -386,8 +386,20 @@ const ZSProvider = (() => {
   // a monotonic number, so the core's numeric "old id" shortcut simply doesn't
   // apply here (Number(uuid) is NaN and that guard is skipped) - the
   // settled-history guard covers the same case provider-agnostically.
-  const itemKey = (item) =>
-    (item && item.getAttribute ? item.getAttribute("data-message-id") : null) || null;
+  // 2026-11: data-message-id is GONE from the turn (measured on live turns:
+  // msgId=null, hasMsgIdAttr=false, 0 descendants carry it), while data-turn-key
+  // is always present and stable across node recreation. Returning null here
+  // made core's turnKey() fall back to a POSITIONAL assistantIdx, which collides
+  // as soon as swapping turns change the rendered window - that is the
+  // "agent action re-runs / re-triggers when I scroll back up" bug: the
+  // off-DOM `executed` guard missed and the resume watchdog re-fired the tool.
+  // Prefer the stable turn key, keep the legacy attribute as a fallback.
+  const itemKey = (item) => {
+    if (!item || !item.getAttribute) return null;
+    return item.getAttribute("data-turn-key")
+      || item.getAttribute("data-message-id")
+      || null;
+  };
   const lastAssistantId = () => itemKey(lastAssistant());
 
   const chatIsEmpty = () => allItems().length === 0;

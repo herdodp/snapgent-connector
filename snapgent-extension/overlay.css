@@ -1114,3 +1114,74 @@ html.zs-light #zs-set-save:hover,
 html.zs-light #zs-mcp-add:hover { background: rgba(0, 0, 0, 0.09); }
 html.zs-light #zs-set-status,
 html.zs-light #zs-mcp-status { color: #6b7280; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   RESULT CARDS + USER BUBBLES  (ChatGPT 2026-11)
+   Requested look: the injected results and the user's own turns read like
+   Claude's "result" card and ChatGPT's collapsed tool row - a quiet dark
+   rounded surface with a leading icon, a bold label and a chevron, instead of
+   a raw blue bubble with the caption dumped as prose.
+   Gated on html.zs-site-chatgpt so no other site's layout is touched.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── injected result / system chips: card surface ───────────────────────── */
+html.zs-site-chatgpt .zs-chip.result,
+html.zs-site-chatgpt .zs-chip.sys {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  color: #cfd2da;
+}
+html.zs-site-chatgpt .zs-chip.result:hover,
+html.zs-site-chatgpt .zs-chip.sys:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.13);
+}
+html.zs-site-chatgpt .zs-chip.result .zs-chip-head,
+html.zs-site-chatgpt .zs-chip.sys .zs-chip-head { padding: 10px 14px; gap: 10px; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-tx,
+html.zs-site-chatgpt .zs-chip.sys .zs-chip-tx { font-weight: 600; color: #e4e6ec; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-dt,
+html.zs-site-chatgpt .zs-chip.sys .zs-chip-dt { opacity: 0.55; }
+
+/* ── the user's own turn, restyled as a quiet card ──────────────────────────
+   The stock bubble is 22px-radius blue (bg-user-message). Keep the site's own
+   width constraint (-user-chat-width) - only the surface changes, never the
+   text, so selection/copy still behaves exactly as before. */
+html.zs-site-chatgpt .group\/user-message .bg-user-message {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  color: #e6e8ee;
+}
+html.zs-site-chatgpt .group\/user-message .bg-user-message:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Injected feedback turns ("Output of 'tool': …") are OUR synthetic user turns,
+   not something the user typed. Collapse the caption to a tool-style row: the
+   chip already names the tool and carries the result, so the raw caption is
+   pure noise above it. Scoped to a turn that OWNS a chip, so a genuine user
+   message that happens to start with "Output of" is never touched. */
+html.zs-site-chatgpt .zs-hidden .bg-user-message {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+html.zs-site-chatgpt .zs-hidden > .zs-chip { margin-bottom: 2px; }
+
+/* Light theme keeps the same shape, inverted surfaces. */
+html.zs-site-chatgpt.zs-light .zs-chip.result,
+html.zs-site-chatgpt.zs-light .zs-chip.sys {
+  background: rgba(0, 0, 0, 0.035);
+  border-color: rgba(0, 0, 0, 0.09);
+  color: #3c4150;
+}
+html.zs-site-chatgpt.zs-light .zs-chip.result .zs-chip-tx,
+html.zs-site-chatgpt.zs-light .zs-chip.sys .zs-chip-tx { color: #1f2430; }
+html.zs-site-chatgpt.zs-light .group\/user-message .bg-user-message {
+  background: rgba(0, 0, 0, 0.045) !important;
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #1f2430;
+}
