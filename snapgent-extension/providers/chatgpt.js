@@ -386,8 +386,20 @@ const ZSProvider = (() => {
   // a monotonic number, so the core's numeric "old id" shortcut simply doesn't
   // apply here (Number(uuid) is NaN and that guard is skipped) - the
   // settled-history guard covers the same case provider-agnostically.
-  const itemKey = (item) =>
-    (item && item.getAttribute ? item.getAttribute("data-message-id") : null) || null;
+  // 2026-11: data-message-id is GONE from the turn (measured on live turns:
+  // msgId=null, hasMsgIdAttr=false, 0 descendants carry it), while data-turn-key
+  // is always present and stable across node recreation. Returning null here
+  // made core's turnKey() fall back to a POSITIONAL assistantIdx, which collides
+  // as soon as swapping turns change the rendered window - that is the
+  // "agent action re-runs / re-triggers when I scroll back up" bug: the
+  // off-DOM `executed` guard missed and the resume watchdog re-fired the tool.
+  // Prefer the stable turn key, keep the legacy attribute as a fallback.
+  const itemKey = (item) => {
+    if (!item || !item.getAttribute) return null;
+    return item.getAttribute("data-turn-key")
+      || item.getAttribute("data-message-id")
+      || null;
+  };
   const lastAssistantId = () => itemKey(lastAssistant());
 
   const chatIsEmpty = () => allItems().length === 0;
@@ -532,17 +544,52 @@ const ZSProvider = (() => {
     const item = lastAssistant();
     const len = streamText(item).length;
     const now = Date.now();
+    // A swap counts as NEW OUTPUT only when the arriving turn carries MORE text
+    // than the one we were tracking (a reply grows as it streams). Scrolling just
+    // brings an arbitrary older turn into view, usually at the same or a smaller
+    // length, so the idle clock must keep running in that case. Resetting it on
+    // every swap made a scroll look like generation for GEN_IDLE_MS, which
+    // wrongly showed a Stop button and let the watchdog re-fire old commands.
     if (item !== _streamItem || len < _streamMax - 400) {
-      _streamItem = item; _streamMax = len; _streamAt = now; return;
+      const arrivedLonger = len > _streamMax;
+      _streamItem = item;
+      _streamMax = len;
+      if (arrivedLonger) _streamAt = now;
+      return;
     }
+    // Same turn: only genuine growth refreshes the clock (a large shrink means
+    // the site re-rendered the turn, not that it is streaming).
     if (len > _streamMax) { _streamMax = len; _streamAt = now; }
   }
   const grewWithin = (ms) => _streamMax > 1 && Date.now() - _streamAt < ms;
+
+  // A turn that already has its injected result BELOW it is settled history: it
+  // cannot be streaming, no matter what sampleStream's growth clock last saw.
+  // Scrolling renders such turns as "last assistant", and without this the bar
+  // shows a Stop control and the watchdog considers the old command live.
+  const turnSettled = (item) => {
+    if (!item) return false;
+    try {
+      const all = allItems();
+      const i = all.indexOf(item);
+      if (i < 0) return false;
+      for (let j = i + 1; j < all.length; j++) {
+        const nx = all[j];
+        if (nx === item) continue;
+        if (isUserItem(nx) && /^\s*Output of '/.test(classifyText(nx, ".zs-chip") || "")) return true;
+        if (!isUserItem(nx)) return false;
+      }
+    } catch {}
+    return false;
+  };
 
   const WEDGE_MS = 10000;
   let _stopSince = 0;
   function genActive() {
     sampleStream();
+    // Settled history is never a live generation - checked FIRST so a scroll into
+    // an old command turn can never make the bar show Stop or the watchdog fire.
+    if (turnSettled(lastAssistant())) { _stopSince = 0; return false; }
     const stop = !!stopButton();
     const now = Date.now();
     if (stop) {

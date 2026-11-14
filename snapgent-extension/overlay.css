@@ -1114,3 +1114,72 @@ html.zs-light #zs-set-save:hover,
 html.zs-light #zs-mcp-add:hover { background: rgba(0, 0, 0, 0.09); }
 html.zs-light #zs-set-status,
 html.zs-light #zs-mcp-status { color: #6b7280; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   RESULT CARDS + USER BUBBLES  (ChatGPT 2026-11)
+   Requested look: the injected results and the user's own turns read like
+   Claude's "result" card and ChatGPT's collapsed tool row - a quiet dark
+   rounded surface with a leading icon, a bold label and a chevron, instead of
+   a raw blue bubble with the caption dumped as prose.
+   Gated on html.zs-site-chatgpt so no other site's layout is touched.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── injected result / system chips: card surface ───────────────────────── */
+html.zs-site-chatgpt .zs-chip.result,
+html.zs-site-chatgpt .zs-chip.sys {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  color: #cfd2da;
+}
+html.zs-site-chatgpt .zs-chip.result:hover,
+html.zs-site-chatgpt .zs-chip.sys:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.13);
+}
+html.zs-site-chatgpt .zs-chip.result .zs-chip-head,
+html.zs-site-chatgpt .zs-chip.sys .zs-chip-head { padding: 10px 14px; gap: 10px; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-tx,
+html.zs-site-chatgpt .zs-chip.sys .zs-chip-tx { font-weight: 600; color: #e4e6ec; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-dt,
+html.zs-site-chatgpt .zs-chip.sys .zs-chip-dt { opacity: 0.55; }
+
+/* ── the user's own turn: RESTORED to ChatGPT's stock bubble ────────────────
+   An earlier restyle turned this surface into a flat grey card. That is not
+   wanted: keep the site's native blue bubble (measured live on the 2026-11
+   layout: rgb(23,62,118), radius 22px). We therefore set NOTHING on the
+   bubble - no background, radius, border or colour override - so ChatGPT's own
+   .bg-user-message rules apply untouched. Kept as an explicit no-op block so
+   nobody re-adds a restyle here by accident. */
+
+/* ── assistant JSON blocks: hidden, the injected chip is the only surface ───
+   ChatGPT renders the raw {"command":…} reply as a fenced code block with its
+   own header row ("JSON" + copy/insert buttons). That header is what made the
+   reply look like a stray IDE panel. The tool chip already carries the result,
+   so the block is redundant. The provider tags the assistant turn with
+   .zs-cmd-mask, and the generic rule at the top of this file hides the <pre>.
+   This adds the ChatGPT-specific wrapper (header button row included) so the
+   whole card disappears rather than leaving an empty header behind. */
+html.zs-site-chatgpt .zs-cmd-mask div:has(> pre),
+html.zs-site-chatgpt .zs-cmd-mask div:has(pre) { display: none !important; }
+html.zs-site-chatgpt .zs-cmd-mask div:has(> .flex > button[aria-label*="opy"]) { display: none !important; }
+html.zs-site-chatgpt .zs-cmd-mask pre { display: none !important; }
+
+/* Injected feedback turns ("Output of 'tool': …") are OUR synthetic user turns,
+   not something the user typed. The chip already names the tool and carries the
+   result. We no longer restyle their bubble (the user wants the native blue
+   everywhere); only the spacing under the chip stays tuned. */
+html.zs-site-chatgpt .zs-hidden > .zs-chip { margin-bottom: 2px; }
+
+/* Light theme keeps the same shape, inverted surfaces. */
+html.zs-site-chatgpt.zs-light .zs-chip.result,
+html.zs-site-chatgpt.zs-light .zs-chip.sys {
+  background: rgba(0, 0, 0, 0.035);
+  border-color: rgba(0, 0, 0, 0.09);
+  color: #3c4150;
+}
+html.zs-site-chatgpt.zs-light .zs-chip.result .zs-chip-tx,
+html.zs-site-chatgpt.zs-light .zs-chip.sys .zs-chip-tx { color: #1f2430; }
+/* Light theme: the user's bubble is intentionally left alone too, so ChatGPT's
+   own light-mode surface shows through unchanged. */

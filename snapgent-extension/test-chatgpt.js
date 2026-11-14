@@ -222,3 +222,23 @@ ok("mobile textarea text can be read", P.editorText() === "");
   console.error(error);
   process.exitCode = 1;
 });
+
+// ── Turn identity must be STABLE (the "tools re-run when I scroll up" bug) ──
+// core's turnKey() dedupes already-executed commands off-DOM. It prefers
+// P.itemKey(item); when that returns null it falls back to a POSITIONAL index,
+// which collides as soon as scrolling changes the rendered window, so the guard
+// misses and the resume watchdog re-fires a historical tool. The 2026-11 turn no
+// longer carries data-message-id (measured live: 0 turns, 0 descendants), so the
+// key must come from data-turn-key.
+{
+  const turn = el("div", { attrs: { "data-turn-key": "f918df91-aaaa-bbbb" } });
+  ok("itemKey uses data-turn-key on the 2026-11 turn",
+    P.itemKey(turn) === "f918df91-aaaa-bbbb");
+  ok("itemKey is never null for a 2026-11 turn (positional fallback is the bug)",
+    P.itemKey(turn) != null);
+  const legacy = el("div", { attrs: { "data-message-id": "uuid-legacy" } });
+  ok("itemKey still honours the legacy data-message-id",
+    P.itemKey(legacy) === "uuid-legacy");
+  ok("itemKey returns null only when neither attribute exists",
+    P.itemKey(el("div", {})) === null);
+}
