@@ -23,6 +23,10 @@ const HEARTBEAT_MS = 10000;
 // pending requests slowly time out.
 const STALE_SOCKET_MS = 25000;
 const REQUEST_TIMEOUT_DEFAULT = 130000; // a bit above the 120s tool timeout
+// Cheap probe types (liveness pings, status reads) must not inherit the full
+// tool budget: a local bridge answers in single-digit milliseconds, so waiting
+// two minutes for a ping only delays the "offline" report the UI needs.
+const FAST_TIMEOUT = 6000;
 
 let ws = null;
 let connected = false;
@@ -119,20 +123,35 @@ function scheduleReconnect() {
 
 function startHeartbeat() {
   stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    if (connected) {
-      // Half-open socket: the WS still reports OPEN but nothing comes through.
-      // The pong (and every other frame) refreshes lastMessageAt; if it has
-      // gone stale, drop the dead socket so onclose triggers a reconnect.
-      if (lastMessageAt && Date.now() - lastMessageAt > STALE_SOCKET_MS) {
-        log("socket stale, forcing reconnect");
+  heartbeatTimer = setInterval(async () => {
+    if (!connected) return;
+    // Half-open socket: the WS still reports OPEN but nothing comes through.
+    // The pong refreshes lastMessageAt; if it has gone stale, drop the dead
+    // socket so onclose triggers a reconnect.
+    //
+    // IMPORTANT: do not trust the timestamp alone. Chrome SUSPENDS an MV3
+    // service worker when idle, and setInterval does not run while suspended.
+    // On wake-up lastMessageAt is therefore always older than STALE_SOCKET_MS,
+    // so the old code closed a perfectly HEALTHY socket on the first tick and
+    // then reconnected - a permanent connect/disconnect loop (measured: 203
+    // connect/disconnect events in one day, several inside the same second,
+    // surfacing as a false "bridge offline" banner). Probe with a real ping
+    // and only close once the bridge actually fails to answer.
+    if (lastMessageAt && Date.now() - lastMessageAt > STALE_SOCKET_MS) {
+      const pong = await send({ type: "ping" }, 4000).catch(() => null);
+      if (connected && !(pong && pong.ok)) {
+        log("socket stale after failed ping, forcing reconnect");
         try { ws.close(); } catch {}
-        return;
+      } else {
+        // The bridge answered, so the socket is healthy: the gap was the
+        // suspended worker, not a dead half-open socket.
+        lastMessageAt = Date.now();
       }
-      // Keeps the MV3 service worker alive AND detects a half-open socket.
-      send({ type: "ping" }).catch(() => {});
-      refreshStudioStatus();
+      return;
     }
+    // Keeps the MV3 service worker alive AND detects a half-open socket.
+    send({ type: "ping" }).catch(() => {});
+    refreshStudioStatus();
   }, HEARTBEAT_MS);
 }
 
@@ -306,6 +325,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "status":
         if (!connected) connect(); // self-heal after a worker wake-up
         sendResponse(statusObj());
+        break;
+      // Liveness probe for the content script. Without this case a
+      // bg({type:"ping"}) falls through to `default:` and answers
+      // {ok:false, error:"unknown message"} - which any caller reads as "the
+      // bridge is down" even though it is perfectly healthy (measured: ping
+      // 1 ms, 28 tools listed). Keeping the case here makes the answer
+      // truthful: ok only when the bridge actually returned a pong.
+      case "ping":
+        send({ type: "ping" }, FAST_TIMEOUT).then((r) => {
+          sendResponse(r && r.ok
+            ? { ok: true }
+            : { ok: false, kind: (r && r.kind) || "no_pong", error: (r && r.error) || "bridge did not answer the ping" });
+        }).catch((e) => {
+          sendResponse({ ok: false, kind: "error", error: String(e) });
+        });
         break;
       case "list_tools": {
         // Prefer a live refresh; fall back to cache so the loop never stalls.

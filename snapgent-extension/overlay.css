@@ -1145,30 +1145,31 @@ html.zs-site-chatgpt .zs-chip.sys .zs-chip-tx { font-weight: 600; color: #e4e6ec
 html.zs-site-chatgpt .zs-chip.result .zs-chip-dt,
 html.zs-site-chatgpt .zs-chip.sys .zs-chip-dt { opacity: 0.55; }
 
-/* ── the user's own turn, restyled as a quiet card ──────────────────────────
-   The stock bubble is 22px-radius blue (bg-user-message). Keep the site's own
-   width constraint (-user-chat-width) - only the surface changes, never the
-   text, so selection/copy still behaves exactly as before. */
-html.zs-site-chatgpt .group\/user-message .bg-user-message {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  color: #e6e8ee;
-}
-html.zs-site-chatgpt .group\/user-message .bg-user-message:hover {
-  border-color: rgba(255, 255, 255, 0.12);
-}
+/* ── the user's own turn: RESTORED to ChatGPT's stock bubble ────────────────
+   An earlier restyle turned this surface into a flat grey card. That is not
+   wanted: keep the site's native blue bubble (measured live on the 2026-11
+   layout: rgb(23,62,118), radius 22px). We therefore set NOTHING on the
+   bubble - no background, radius, border or colour override - so ChatGPT's own
+   .bg-user-message rules apply untouched. Kept as an explicit no-op block so
+   nobody re-adds a restyle here by accident. */
+
+/* ── assistant JSON blocks: hidden, the injected chip is the only surface ───
+   ChatGPT renders the raw {"command":…} reply as a fenced code block with its
+   own header row ("JSON" + copy/insert buttons). That header is what made the
+   reply look like a stray IDE panel. The tool chip already carries the result,
+   so the block is redundant. The provider tags the assistant turn with
+   .zs-cmd-mask, and the generic rule at the top of this file hides the <pre>.
+   This adds the ChatGPT-specific wrapper (header button row included) so the
+   whole card disappears rather than leaving an empty header behind. */
+html.zs-site-chatgpt .zs-cmd-mask div:has(> pre),
+html.zs-site-chatgpt .zs-cmd-mask div:has(pre) { display: none !important; }
+html.zs-site-chatgpt .zs-cmd-mask div:has(> .flex > button[aria-label*="opy"]) { display: none !important; }
+html.zs-site-chatgpt .zs-cmd-mask pre { display: none !important; }
 
 /* Injected feedback turns ("Output of 'tool': …") are OUR synthetic user turns,
-   not something the user typed. Collapse the caption to a tool-style row: the
-   chip already names the tool and carries the result, so the raw caption is
-   pure noise above it. Scoped to a turn that OWNS a chip, so a genuine user
-   message that happens to start with "Output of" is never touched. */
-html.zs-site-chatgpt .zs-hidden .bg-user-message {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border-color: rgba(255, 255, 255, 0.06);
-}
+   not something the user typed. The chip already names the tool and carries the
+   result. We no longer restyle their bubble (the user wants the native blue
+   everywhere); only the spacing under the chip stays tuned. */
 html.zs-site-chatgpt .zs-hidden > .zs-chip { margin-bottom: 2px; }
 
 /* Light theme keeps the same shape, inverted surfaces. */
@@ -1180,8 +1181,5 @@ html.zs-site-chatgpt.zs-light .zs-chip.sys {
 }
 html.zs-site-chatgpt.zs-light .zs-chip.result .zs-chip-tx,
 html.zs-site-chatgpt.zs-light .zs-chip.sys .zs-chip-tx { color: #1f2430; }
-html.zs-site-chatgpt.zs-light .group\/user-message .bg-user-message {
-  background: rgba(0, 0, 0, 0.045) !important;
-  border-color: rgba(0, 0, 0, 0.08);
-  color: #1f2430;
-}
+/* Light theme: the user's bubble is intentionally left alone too, so ChatGPT's
+   own light-mode surface shows through unchanged. */
