@@ -15,8 +15,11 @@ const URL = `ws://127.0.0.1:${PORT}`;
 // manifest.json content_scripts + host_permissions) when integrating another AI.
 const PROVIDER_URLS = ["https://chat.deepseek.com/*", "https://chatgpt.com/*", "https://chat.openai.com/*", "https://claude.ai/*", "https://gemini.google.com/*", "https://www.kimi.ai/*", "https://kimi.ai/*", "https://chat.z.ai/*", "https://chat.qwen.ai/*", "https://arena.ai/*", "https://www.meta.ai/*", "https://meta.ai/*", "https://ptero.pro/*", "https://grok.com/*", "https://chat.mistral.ai/*"];
 
-const RECONNECT_MIN = 1000;
-const RECONNECT_MAX = 5000;
+// Keep the retry window tight: a local socket either accepts in milliseconds or
+// is not there at all, so a long ceiling only makes "bridge offline" feel like a
+// hang (measured: the old 5s ceiling was the reported slowness).
+const RECONNECT_MIN = 500;
+const RECONNECT_MAX = 2000;
 const HEARTBEAT_MS = 10000;
 // If no message (incl. pong) arrives within this window while we believe we're
 // connected, the socket is half-open: force a reconnect instead of letting
@@ -27,6 +30,18 @@ const REQUEST_TIMEOUT_DEFAULT = 130000; // a bit above the 120s tool timeout
 // tool budget: a local bridge answers in single-digit milliseconds, so waiting
 // two minutes for a ping only delays the "offline" report the UI needs.
 const FAST_TIMEOUT = 6000;
+// Probes the bridge answers instantly (single-digit ms on a healthy local
+// socket). They must not inherit the full tool budget, otherwise the loop sits
+// waiting two minutes just to learn the bridge is offline.
+const FAST_TYPES = new Set([
+  "ping", "studio_status", "list_mcp_servers", "get_servers",
+  "list_tools", "get_tools", "capabilities",
+]);
+// How long to wait for a socket that is not open before declaring it offline.
+// The reconnect ceiling is 2s and connecting to a LOCAL socket takes a few ms,
+// so a healthy bridge reconnects well inside this window; waiting longer is
+// exactly the "bridge is unreachable" delay users complained about.
+const CONNECT_WAIT_MS = 2500;
 
 let ws = null;
 let connected = false;
@@ -182,9 +197,12 @@ function waitForConnection(timeout = 8000) {
 async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
   // The MV3 service worker can be suspended; the first message after a wake-up
   // arrives before the socket has re-opened. Wait for it instead of failing -
-  // otherwise Kimi wrongly hears "bridge offline".
+  // otherwise the provider wrongly hears "bridge offline". Probe types fail fast
+  // so the loop learns "offline" quickly instead of staring at a spinner; a real
+  // tool run still waits the longer budget.
+  const fast = FAST_TYPES.has(obj && obj.type);
   if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-    await waitForConnection(8000);
+    await waitForConnection(fast ? CONNECT_WAIT_MS : 8000);
   }
   return new Promise((resolve) => {
     if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -193,12 +211,15 @@ async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
     }
     const id = nextId++;
     const payload = { ...obj, id };
+    // A probe the bridge answers in milliseconds must not inherit the full tool
+    // budget; otherwise "offline" takes two minutes to surface.
+    const effectiveTimeout = fast ? Math.min(timeout, FAST_TIMEOUT) : timeout;
     const timer = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
         resolve({ ok: false, kind: "timeout", error: "bridge did not respond in time" });
       }
-    }, timeout);
+    }, effectiveTimeout);
     pending.set(id, { resolve, timer });
     try {
       ws.send(JSON.stringify(payload));
