@@ -185,9 +185,12 @@ function waitForConnection(timeout = 8000) {
 async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
   // The MV3 service worker can be suspended; the first message after a wake-up
   // arrives before the socket has re-opened. Wait for it instead of failing -
-  // otherwise Kimi wrongly hears "bridge offline".
+  // otherwise Kimi wrongly hears "bridge offline". Probe types fail fast so the
+  // loop learns "offline" quickly instead of staring at a spinner; a real tool
+  // run still waits the longer budget.
+  const fast = FAST_TYPES.has(obj && obj.type);
   if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-    await waitForConnection(8000);
+    await waitForConnection(fast ? CONNECT_WAIT_MS : 8000);
   }
   return new Promise((resolve) => {
     if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -196,6 +199,9 @@ async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
     }
     const id = nextId++;
     const payload = { ...obj, id };
+    // A probe the bridge answers in milliseconds must not inherit the full tool
+    // budget; otherwise "offline" takes two minutes to surface.
+    const effectiveTimeout = fast ? Math.min(timeout, FAST_TIMEOUT) : timeout;
     const timer = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
@@ -336,6 +342,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "status":
         if (!connected) connect(); // self-heal after a worker wake-up
         sendResponse(statusObj());
+        break;
+      // Liveness probe for the content script. Without this case a
+      // bg({type:"ping"}) falls through to `default:` and answers
+      // {ok:false, error:"unknown message"} - which any caller reads as "the
+      // bridge is down" even though it is perfectly healthy (measured: ping
+      // 1 ms, 28 tools listed). Keeping the case here makes the answer
+      // truthful: ok only when the bridge actually returned a pong.
+      case "ping":
+        send({ type: "ping" }, FAST_TIMEOUT).then((r) => {
+          sendResponse(r && r.ok
+            ? { ok: true }
+            : { ok: false, kind: (r && r.kind) || "no_pong", error: (r && r.error) || "bridge did not answer the ping" });
+        }).catch((e) => {
+          sendResponse({ ok: false, kind: "error", error: String(e) });
+        });
         break;
       case "list_tools": {
         // Prefer a live refresh; fall back to cache so the loop never stalls.

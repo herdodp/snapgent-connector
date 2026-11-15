@@ -37,10 +37,15 @@ function el(tag, opts, children) {
     getAttribute: (n) => (n in attrs ? attrs[n] : null),
     matches: (sel) => sel.split(",").some((part) => {
       const s = part.trim();
+      // A bare tag name ("pre", "div") was not supported, so the provider's
+      // querySelectorAll("pre") silently found nothing.
+      if (/^[a-z][\w-]*$/i.test(s)) return tag.toUpperCase() === s.toUpperCase();
       if (s.startsWith(".") && !s.startsWith("[") && classes.includes(s.slice(1))) return true;
       const classMatch = /^\[class\*=["']([^"']+)["']\]$/.exec(s);
       if (classMatch && classes.some((c) => c.includes(classMatch[1]))) return true;
       const attrMatch = /^\[([-\w]+)\]$/.exec(s);
+      // Attribute NAMES may contain hyphens (data-turn-key), so look the raw
+      // string up rather than only strlen-safe identifiers.
       return !!attrMatch && attrMatch[1] in attrs;
     }),
   };
@@ -54,16 +59,61 @@ function el(tag, opts, children) {
     for (const c of node.childNodes) { const r = hit(c); if (r) return r; }
     return null;
   };
+  // Standard descendant semantics: every matching ELEMENT BELOW this node.
+  // (Walking `node.childNodes` only - the old code - skipped an element whose
+  // own childNodes the walk started from, so a <pre> inside a wrapper was never
+  // found.)
   node.querySelectorAll = (sel) => {
     const hits = [];
     const walk = (n) => {
-      if (n.nodeType !== 1) return;
-      if (n.matches(sel)) hits.push(n);
-      for (const c of n.childNodes) walk(c);
+      for (const c of n.childNodes || []) {
+        if (c.nodeType !== 1) continue;
+        if (c.matches(sel)) hits.push(c);
+        walk(c);
+      }
     };
-    for (const c of node.childNodes) walk(c);
+    walk(node);
     return hits;
   };
+  // querySelector: first descendant match (the old one started at the node
+  // itself, which made a turn "contain" its own selector).
+  node.querySelector = (sel) => {
+    const walk = (n) => {
+      for (const c of n.childNodes || []) {
+        if (c.nodeType !== 1) continue;
+        if (c.matches(sel)) return c;
+        const hit = walk(c);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return walk(node);
+  };
+  // innerText: the provider filters <pre> and shape-B wrappers on it, so the
+  // stub must provide it. Concatenate the subtree's text nodes, the way a real
+  // one renders them (a text node's `nodeValue`).
+  Object.defineProperty(node, "innerText", {
+    get() {
+      const out = [];
+      const walk = (n) => {
+        if (n.nodeType === 3) out.push(n.nodeValue);
+        else for (const c of n.childNodes || []) walk(c);
+      };
+      walk(node);
+      return out.join("");
+    },
+  });
+  // closest(): walk up through the parent links the stub sets below.
+  node.closest = (sel) => {
+    let n = node;
+    while (n && n.nodeType === 1) {
+      if (n.matches && n.matches(sel)) return n;
+      n = n.parent;
+    }
+    return null;
+  };
+  // Link children back to their parent so closest()/descendant lookups work.
+  for (const c of node.childNodes) if (c && c.nodeType === 1) c.parent = node;
   return node;
 }
 
@@ -222,3 +272,104 @@ ok("mobile textarea text can be read", P.editorText() === "");
   console.error(error);
   process.exitCode = 1;
 });
+
+// ── Turn identity must be STABLE (the "tools re-run when I scroll up" bug) ──
+// core's turnKey() dedupes already-executed commands off-DOM. It prefers
+// P.itemKey(item); when that returns null it falls back to a POSITIONAL index,
+// which collides as soon as scrolling changes the rendered window, so the guard
+// misses and the resume watchdog re-fires a historical tool. The 2026-11 turn no
+// longer carries data-message-id (measured live: 0 turns, 0 descendants), so the
+// key must come from data-turn-key.
+{
+  const turn = el("div", { attrs: { "data-turn-key": "f918df91-aaaa-bbbb" } });
+  ok("itemKey uses data-turn-key on the 2026-11 turn",
+    P.itemKey(turn) === "f918df91-aaaa-bbbb");
+  ok("itemKey is never null for a 2026-11 turn (positional fallback is the bug)",
+    P.itemKey(turn) != null);
+  const legacy = el("div", { attrs: { "data-message-id": "uuid-legacy" } });
+  ok("itemKey still honours the legacy data-message-id",
+    P.itemKey(legacy) === "uuid-legacy");
+  ok("itemKey returns null only when neither attribute exists",
+    P.itemKey(el("div", {})) === null);
+}
+
+// ── Prefix stripping must touch the START only (review point 2) ─────────────
+// The stripper used to run /chatgpt\s+(?:said|dit)\s*:?/gi GLOBALLY, so a payload
+// that legitimately contained those words lost them. A write_file whose content
+// mentioned "ChatGPT said:" was silently corrupted before it ever reached the
+// bridge. A brace slice then cut everything before the first { or [, destroying
+// any prose in front of an envelope.
+{
+  const strip = P.__test.stripAssistantSrPrefix;
+
+  // The chrome the function exists for is still removed.
+  ok("glued speaker chrome is stripped",
+    strip("ChatGPT said:ChatGPTJSON{\"command\":\"list_dir\"}") === "{\"command\":\"list_dir\"}");
+  ok("glued speaker chrome (French) is stripped too",
+    strip("ChatGPT dit: JSON{\"command\":\"ping\"}") === "{\"command\":\"ping\"}");
+
+  // ...but the SAME words inside the payload survive untouched.
+  const payload = '{"command":"write_file","params":{"content":"ChatGPT said: hello, then ChatGPT dit: halo"}}';
+  const out = strip("ChatGPT said:ChatGPTJSON" + payload);
+  ok("payload keeps an inner 'ChatGPT said:' (no global wipe)", out.includes("ChatGPT said: hello"));
+  ok("payload keeps an inner 'ChatGPT dit:' (no global wipe)", out.includes("ChatGPT dit: halo"));
+
+  // The brace slice is gone: text before an envelope is no longer chopped.
+  const withProse = strip("ChatGPT said:ChatGPTJSONHere is the file {\"a\":1}");
+  ok("no brace slice - prose before an envelope survives",
+    withProse.includes("Here is the file"));
+
+  // Ordinary prose without chrome is returned byte-for-byte.
+  const plain = "Python is a language. ChatGPT said: nothing here.";
+  ok("plain prose is returned unchanged", strip(plain) === plain);
+
+  // One argument only: a second was accepted before and silently ignored.
+  ok("strip takes exactly one argument", strip.length === 1);
+}
+
+// ── The THREE-SHAPE fixture (review point 6) ────────────────────────────────
+// The commit that fixed the 2026-11 DOM verified against "a three-shape
+// fixture": A fenced <pre>, B plain text inside .zs-tool-hide, and the legacy
+// .markdown reply. The reviewer asked for it to be included. An assistant reply
+// alternates between A and B, so a reader that understands only one of them
+// yields "ChatGPT returned an empty reply" for every other turn.
+{
+  // A) fenced code block: <pre>{"command":…}</pre>
+  const shapeA = el("div", { class: "zs-cmd-mask" },
+    [el("pre", {}, [`{"command":"create_file","params":{"path":"a.txt"}}`])]);
+  // B) plain text, no <pre> at all, behind the glued speaker chrome.
+  const shapeB = el("div", { class: "zs-tool-hide" },
+    ["ChatGPT said:ChatGPTJSON", el("div", {}, [`{"command":"read_file","params":{"path":"b.txt"}}`])]);
+  // Legacy: ordinary .markdown reply.
+  const legacy = el("div", { class: "markdown" }, [`{"command":"list_dir","params":{}}`]);
+
+  const turnOf = (child) => el("div", { attrs: { "data-turn-key": "turn-shape" } }, [child]);
+
+  // classifyText is what the core actually reads a turn with, and it takes the
+  // turn item directly - no document.querySelectorAll() sweep needed.
+  const textA = P.classifyText(turnOf(shapeA));
+  const textB = P.classifyText(turnOf(shapeB));
+  const textL = P.classifyText(turnOf(legacy));
+
+  ok("shape A (<pre>) yields the create_file command",
+    /"command"\s*:\s*"create_file"/.test(textA));
+  ok("shape B (plain text) yields the read_file command",
+    /"command"\s*:\s*"read_file"/.test(textB));
+  ok("legacy .markdown yields the list_dir command",
+    /"command"\s*:\s*"list_dir"/.test(textL));
+
+  // Shape B must not leak its chrome into the payload the parser receives.
+  ok("shape B has no glued 'ChatGPT said:' left", !/chatgpt\s+said\s*:/i.test(textB));
+  ok("shape B has no bare JSON label left", !/^\s*JSON/i.test(textB));
+
+  // All three parse to a real command through the shipped parser.
+  const cmdOf = (t) => {
+    try {
+      const calls = ZSParse.parseToolCalls(t);
+      return calls && calls.length ? calls[0] : null;
+    } catch { return null; }
+  };
+  ok("shape A parses to a command", !!(cmdOf(textA) && cmdOf(textA).tool));
+  ok("shape B parses to a command", !!(cmdOf(textB) && cmdOf(textB).tool));
+  ok("legacy parses to a command", !!(cmdOf(textL) && cmdOf(textL).tool));
+}
