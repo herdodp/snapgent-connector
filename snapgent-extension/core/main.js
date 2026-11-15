@@ -191,6 +191,11 @@
     // clears it - the live generation signal toggles off/on as the loop drains,
     // which otherwise made the Stop button vanish then reappear.
     stopping: false,
+    // held: a command is parked waiting for the scroll window to lapse (see
+    // waitScrollWindow). The Stop control must stay visible while it is set:
+    // scrollSuppressed() hides the button for the very same reason the command
+    // is being held, so without this the user would have no way to cancel.
+    held: false,
     // userStopped: the user deliberately halted generation - via our "■ Stop"
     // button OR the site's native stop. While set, the auto-resume watchdog
     // must NOT relaunch or re-run a tool from the halted turn.
@@ -1031,7 +1036,17 @@
     // and then proceed. A Stop still wins, and the wait is bounded.
     if (scrollSuppressed()) {
       diag("tool.holdScrolling", { name });
-      const waited = await waitScrollWindow();
+      // Mark the hold so the busy surface keeps the Stop control visible while
+      // we wait; scrollSuppressed() would otherwise hide it for the whole wait.
+      A.held = true;
+      renderBar();
+      let waited = false;
+      try {
+        waited = await waitScrollWindow();
+      } finally {
+        A.held = false;
+      }
+      renderBar();
       if (!waited) {
         // Stopped by the user while parked - do not run the command.
         return "ERROR: the command was not run - stopped by the user.";
@@ -1313,13 +1328,14 @@
       // short settle before declaring the bridge offline - a false "offline"
       // makes the model stop working and shows "tool failed" to the user.
       //
-      // BUT only when the request provably never left: `sent === false` means
-      // it failed while waiting for the socket, so the bridge cannot have run
-      // it. A `sent` request dropped mid-flight may already have executed
-      // write_file / run_command / git_commit; re-sending it would apply the
-      // side effect twice, which is worse than reporting the failure.
-      if (r.sent) {
-        diag("bridge.noRetryAfterSend", { name });
+      // BUT only when the request provably never left. The rule lives in
+      // ZSGuard so the tested logic IS the running logic: `sent === false` means
+      // the bridge cannot have run it; `sent === true` may already have executed
+      // write_file / run_command / git_commit. A reply WITHOUT the field (an
+      // older bridge) is treated as unsafe for the same reason - re-sending a
+      // write that did land is worse than reporting the ambiguity.
+      if (!ZSGuard.mayRetryAfterDisconnect(r)) {
+        diag("bridge.noRetryAfterSend", { name, sent: r.sent });
         ui.banner("warn", "Connection dropped",
           `The bridge stopped answering while '${name}' was in flight. It may already have run - check the result before repeating it.`);
         return ZSGuard.inFlightFailure(name);
@@ -1330,6 +1346,15 @@
         bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }),
         hardCap,
       ]);
+      // The retry itself has to be judged by the same rule. A second attempt
+      // that goes out and then drops must NOT be reported as "bridge offline":
+      // the tool may have run, and the model would retry it again.
+      if (retry && retry.kind === "disconnected" && !ZSGuard.mayRetryAfterDisconnect(retry)) {
+        diag("bridge.noRetryAfterSend", { name, sent: retry.sent, attempt: 2 });
+        ui.banner("warn", "Connection dropped",
+          `The bridge stopped answering while '${name}' was in flight. It may already have run - check the result before repeating it.`);
+        return ZSGuard.inFlightFailure(name);
+      }
       if (retry && retry.kind !== "disconnected") {
         r = retry;
       } else {
@@ -1337,7 +1362,7 @@
       }
     }
     if (r.kind === "timeout") {
-      return `ERROR: tool '${name}' timed out after ${name === "execute_luau" ? 20 : 120}s.\n${r.error}\nTry a shorter/simpler call or check that Roblox Studio is open and responsive.`;
+      return `ERROR: tool '${name}' timed out after ${name === "execute_luau" ? 20 : 120}s.\n${r.error}\nTry a shorter/simpler call or check that the selected target app is open and responsive.`;
     }
     if (name === "execute_luau") {
       const err = r.error || "";
@@ -1871,6 +1896,20 @@
       // upward move of 500px and suppressed execution for no reason. A WeakMap
       // keeps one last position per element and lets them be collected.
       const tracker = ZSGuard.createScrollTracker(24);
+      // Is this target part of the CONVERSATION transcript? Both listeners must
+      // answer the same question, otherwise the scroll and wheel paths disagree
+      // about what counts as "scrolling history".
+      //
+      // `main` is deliberately NOT used as a fallback: it matches nearly the
+      // whole page, which would let a sidebar or composer gesture through. The
+      // provider's message selector is the real signal; a plain article is the
+      // only generic fallback, and a composer/editor is always excluded.
+      const inTranscript = (t) => {
+        if (!t || !t.closest) return false;
+        if (t.closest("textarea, input, .cm-editor, [contenteditable='true']")) return false;
+        const msgSel = P.msgSel || "[data-message-author-role]";
+        return !!(t.closest(msgSel) || t.closest("article"));
+      };
       const topOf = (t) => {
         if (t && typeof t.scrollTop === "number" && t !== document && t !== document.documentElement) {
           return { key: t, top: t.scrollTop };
@@ -1878,7 +1917,10 @@
         return { key: document.documentElement, top: window.scrollY || document.documentElement.scrollTop || 0 };
       };
       const onScroll = (ev) => {
-        const { key, top } = topOf(ev && ev.target);
+        const target = ev && ev.target;
+        // The same transcript-only rule as the wheel listener below.
+        if (!inTranscript(target)) return;
+        const { key, top } = topOf(target);
         // Moving UP through a turn is the problematic gesture. The 24px
         // threshold ignores layout jitter and stream-driven auto-scroll (which
         // only ever moves DOWN as the reply grows).
@@ -1891,11 +1933,7 @@
       // and used to hold execution as if the user had scrolled the conversation.
       window.addEventListener("wheel", (ev) => {
         if (!(ev && ev.deltaY < 0)) return;
-        const t = ev.target;
-        if (!t || !t.closest) return;
-        // A textarea/input scrolling its own overflow is not the transcript.
-        if (t.closest("textarea, input, .cm-editor, [contenteditable='true']")) return;
-        if (!t.closest((P.msgSel || "[data-message-author-role]") + ", main, article")) return;
+        if (!inTranscript(ev.target)) return;
         noteScrollUp();
       }, { passive: true });
     } catch {}
@@ -4737,7 +4775,9 @@
     // While the user scrolls up through history the transcript re-renders and
     // every liveness signal becomes unreliable, so the busy surface is
     // suppressed outright (user rule, 14 Nov 2026): no Stop, no working cover.
-    ui.showStop(!scrollSuppressed() &&
+    // EXCEPTION: a command parked by the hold (A.held) keeps the Stop control
+    // visible - otherwise the suppression hides the only way to cancel it.
+    ui.showStop((A.held || !scrollSuppressed()) &&
       (A.running || A.toolRunning || A.stopping || (A.started && P.isHardGenerating())));
 
     // Tool is executing on the MCP → timer on its chip.

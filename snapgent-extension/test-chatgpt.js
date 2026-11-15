@@ -373,3 +373,78 @@ ok("mobile textarea text can be read", P.editorText() === "");
   ok("shape B parses to a command", !!(cmdOf(textB) && cmdOf(textB).tool));
   ok("legacy parses to a command", !!(cmdOf(textL) && cmdOf(textL).tool));
 }
+
+// ── Language-label regex must not eat prose (review point 3) ────────────────
+// The pattern had no word boundary and listed `sh` before `shell`, so:
+//   "shell\nls"       -> "ell\nls"      (sh matched first)
+//   "Should we go?"   -> "ould we go?"  (sh matched inside Should)
+//   "Text of the file"-> "of the file"  (text consumed as a label)
+// Prose that merely STARTS with one of those words must survive untouched.
+{
+  const strip = P.__test.stripAssistantSrPrefix;
+
+  // These are ordinary prose, not chrome: LOOKS_GLUED already refuses them
+  // because no payload brace follows, so the stripper must return them as-is.
+  ok("'Should we proceed?' is not stripped",
+    strip("Should we proceed?") === "Should we proceed?");
+  ok("'Text of the file follows' is not stripped",
+    strip("Text of the file follows") === "Text of the file follows");
+  ok("'Shell commands are listed below' is not stripped",
+    strip("Shell commands are listed below") === "Shell commands are listed below");
+
+  // A real glued label in front of a payload IS chrome and must go - and the
+  // longest alternative has to win, so "shell" is not cut to "ell".
+  const glued = "ChatGPT said:ChatGPTshell\n{\"command\":\"run_command\"}";
+  const out = strip(glued);
+  ok("a glued 'shell' label is removed whole (not left as 'ell')",
+    out.startsWith("{\"command\"") && !out.includes("ell\n"));
+
+  // Same words INSIDE a payload still survive.
+  const payload = '{"command":"write_file","params":{"content":"Should we shell out?"}}';
+  const kept = strip("ChatGPT said:ChatGPTJSON" + payload);
+  ok("payload with 'Should … shell' survives", kept.includes("Should we shell out?"));
+
+  // SR_REPLY is still applied (it was briefly dropped): the speaker word goes.
+  ok("the speaker word is still removed", !/^chatgpt\s+said/i.test(kept));
+}
+
+// ── turnSettled (review: no test for this) ─────────────────────────────────
+// A turn that already has its injected result BELOW it cannot still be
+// streaming. Without this, scrolling back through history makes the bar show
+// Stop and the watchdog re-fire historical tool calls.
+{
+  const assistantTurn = (text) =>
+    el("div", { attrs: { "data-turn-key": "t-" + text.slice(0, 4) } },
+      [el("div", { class: "markdown" }, [text])]);
+  // The injected result core writes back is a USER turn carrying "Output of '…'".
+  const resultTurn = (tool) =>
+    el("div", { class: "group/user-message" }, [`Output of '${tool}':\nok`]);
+
+  const a = assistantTurn("running list_dir");
+  const b = assistantTurn("still generating");
+  const out = resultTurn("list_dir");
+
+  // allItems() drives turnSettled, so point the stub at a specific transcript.
+  const withChat = (nodes) => {
+    messageNodes = nodes;
+    return messageNodes;
+  };
+
+  withChat([a, out]);
+  ok("a turn with its injected result below is settled",
+    P.__test.turnSettled(a) === true);
+
+  withChat([a, b]);
+  ok("a turn followed by another assistant turn is NOT settled",
+    P.__test.turnSettled(a) === false);
+
+  withChat([a]);
+  ok("the last turn is never settled", P.__test.turnSettled(a) === false);
+
+  ok("a missing item is not settled", P.__test.turnSettled(null) === false);
+
+  // The settled one must be the EARLIER turn: the later turn has nothing below.
+  withChat([a, out]);
+  ok("the trailing turn is not settled even when an earlier one is",
+    P.__test.turnSettled(out) === false);
+}

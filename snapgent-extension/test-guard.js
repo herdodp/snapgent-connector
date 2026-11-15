@@ -111,3 +111,32 @@ const G = new Function(
   console.error(e);
   process.exitCode = 1;
 });
+
+// ── Heartbeat decision (review point: no test for the heartbeat) ─────────────
+// Chrome suspends the MV3 worker, so lastMessageAt is ALWAYS stale right after a
+// wake-up. Closing on elapsed time alone killed healthy sockets (measured: 203
+// connect/disconnect events in a day while a manual ping answered in 1 ms).
+{
+  const S = 25000;
+  // Fresh socket: nothing to do, and certainly no probe.
+  const fresh = G.heartbeatDecision({ now: 10000, lastMessageAt: 5000, staleMs: S });
+  ok("a fresh socket is not probed and not closed", fresh.shouldProbe === false && fresh.close === false);
+
+  // Stale before any probe: ask for a pong, but do NOT close yet.
+  const stale = G.heartbeatDecision({ now: 40000, lastMessageAt: 5000, staleMs: S });
+  ok("a stale socket is probed first", stale.shouldProbe === true);
+  ok("a stale socket is not closed before the pong", stale.close === false);
+
+  // The exact bug: stale, but the bridge answered → keep the socket.
+  const answered = G.heartbeatDecision({ now: 40000, lastMessageAt: 5000, staleMs: S, pongAnswered: true });
+  ok("a stale socket that answers the ping is KEPT", answered.close === false);
+
+  // Genuinely dead: stale and no pong → close so onclose reconnects.
+  const dead = G.heartbeatDecision({ now: 40000, lastMessageAt: 5000, staleMs: S, pongAnswered: false });
+  ok("a stale socket with no pong is closed", dead.close === true);
+
+  // lastMessageAt === 0 means we have never heard from the bridge; that is a
+  // connection problem, not a stale socket, so the heartbeat stays out of it.
+  const never = G.heartbeatDecision({ now: 999999, lastMessageAt: 0, staleMs: S });
+  ok("never-heard-from bridge is not treated as stale", never.shouldProbe === false && never.close === false);
+}

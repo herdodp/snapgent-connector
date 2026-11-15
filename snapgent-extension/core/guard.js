@@ -71,23 +71,79 @@ const ZSGuard = (() => {
   // 400 read as an upward move of 500px and held execution for nothing.
   function createScrollTracker(threshold) {
     const min = threshold == null ? 24 : threshold;
-    const last = new Map(); // keyed by the element (a real WeakMap in the page)
+    // WeakMap in the page, so a scrollable element that the site removes can be
+    // collected instead of being kept alive for the tab's lifetime. A WeakMap
+    // only accepts OBJECT keys, so anything else (a string in the tests, or a
+    // missing target) falls back to Map - otherwise observe() would throw
+    // "Invalid value used as weak map key" and kill the scroll listener.
+    const weak = typeof WeakMap === "function";
+    // The fallback MUST always exist: a non-object key (a string in the tests,
+    // or a missing target) cannot go into a WeakMap, and silently dropping the
+    // write would stop the tracker from ever noticing an upward move.
+    const fallback = new Map();
+    const strong = new WeakMap();
+    const isObject = (k) => !!k && (typeof k === "object" || typeof k === "function");
+    const useWeak = (k) => weak && isObject(k);
+    const store = {
+      get: (k) => (useWeak(k) ? strong.get(k) : fallback.get(k)),
+      set: (k, v) => {
+        if (useWeak(k)) strong.set(k, v);
+        else fallback.set(k, v);
+      },
+      delete: (k) => (useWeak(k) ? strong.delete(k) : fallback.delete(k)),
+    };
+    const liveKeys = new Set();
+    if (!weak) {
+      // Without a WeakMap, `last` IS the fallback map; keep them identical.
+      store.get = (k) => fallback.get(k);
+      store.set = (k, v) => fallback.set(k, v);
+      store.delete = (k) => fallback.delete(k);
+    }
     return {
       // Returns true when this move counts as an upward scroll.
       observe(key, top) {
-        const prev = last.get(key);
-        last.set(key, top);
+        const prev = store.get(key);
+        store.set(key, top);
+        liveKeys.add(key);
         if (prev == null) return false;
         return top < prev - min;
       },
       forget(key) {
-        last.delete(key);
+        store.delete(key);
+        liveKeys.delete(key);
       },
       size() {
-        return last.size;
+        return liveKeys.size;
       },
     };
   }
 
-  return { mayRetryAfterDisconnect, inFlightFailure, holdUntilScrollLapses, createScrollTracker };
+  // ── Heartbeat decision ────────────────────────────────────────────────────
+  // Should a stale-looking socket be dropped? Time alone is NOT proof: Chrome
+  // suspends the MV3 worker and setInterval does not run while suspended, so
+  // lastMessageAt is always old right after a wake-up. Only a failed ping may
+  // close the socket.
+  //
+  //   { shouldProbe: true }  - stale, so ask for a pong first
+  //   { close: true }        - stale AND the bridge did not answer
+  //   { close: false }       - either fresh, or the pong proved it healthy
+  function heartbeatDecision(opts) {
+    const o = opts || {};
+    const now = o.now == null ? Date.now() : o.now;
+    const lastMessageAt = o.lastMessageAt || 0;
+    const staleMs = o.staleMs == null ? 25000 : o.staleMs;
+    const stale = !!lastMessageAt && now - lastMessageAt > staleMs;
+    if (!stale) return { shouldProbe: false, close: false };
+    // pongAnswered is undefined when the probe has not been made yet.
+    if (o.pongAnswered === undefined) return { shouldProbe: true, close: false };
+    return { shouldProbe: true, close: !o.pongAnswered };
+  }
+
+  return {
+    mayRetryAfterDisconnect,
+    inFlightFailure,
+    holdUntilScrollLapses,
+    createScrollTracker,
+    heartbeatDecision,
+  };
 })();

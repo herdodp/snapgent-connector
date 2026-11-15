@@ -310,16 +310,37 @@ const ZSProvider = (() => {
   // Shape B opens with the speaker word AND/OR the bare language label; both are
   // chrome, never content. Requiring the payload directly behind them keeps
   // ordinary prose ("Python is a language.") untouched.
-  const LANG_LABEL = /(?:json|javascript|js|html|css|python|bash|sh|shell|text|plaintext|xml|sql|lua|yaml)/i;
+  // A BARE LANGUAGE LABEL may sit between the speaker chrome and the payload
+  // ("ChatGPT said:ChatGPTJSON{...}"). Two traps this pattern has to avoid, both
+  // present in the original and both destructive:
+  //
+  //   1. No word boundary. Without `\b`, a reply starting "Should we proceed?"
+  //      was eaten by the `sh` alternative ("ould we proceed?"), and a leading
+  //      "Text of the file follows" was consumed whole.
+  //   2. Alternation order. `sh` comes before `shell`, so "shell\nls" matched
+  //      `sh` first and became "ell\nls". Longest-first ordering fixes that.
+  //
+  // Requiring a separator after the label (colon, newline, or a payload brace)
+  // keeps ordinary prose that merely STARTS with one of these words intact.
+  const LANG_LABEL_SEQ =
+    "javascript|plaintext|python|shell|bash|json|html|text|xml|sql|lua|yaml|css|js|sh";
+  const LANG_LABEL_PREFIX = new RegExp(
+    "^\\s*(?:" + LANG_LABEL_SEQ + ")\\b\\s*(?::\\s*|\\n\\s*|(?=[{[]))",
+    "i"
+  );
+  // Detectability probe: is a bare label glued in front of the payload at all?
+  const LANG_LABEL = new RegExp("^(?:" + LANG_LABEL_SEQ + ")\\b", "i");
   const LOOKS_GLUED = (t) => {
     if (!t) return false;
     // Burn the chrome in the SAME order the stripper does: speaker word, then a
     // second glued "ChatGPT", then the bare language label (see the verbatim
-    // sample above: "ChatGPT said:ChatGPTJSON{…}").
+    // sample above: "ChatGPT said:ChatGPTJSON{…}"). The label pass is the same
+    // LANG_LABEL_PREFIX the stripper uses, so detection and removal can never
+    // disagree about what counts as chrome.
     const payload = t.slice(0, 96)
-      .replace(/^\s*(?:chatgpt\s+(?:said|dit))\s*:?\s*/i, "")
+      .replace(SR_REPLY, "")
       .replace(/^chatgpt\s*/i, "")
-      .replace(new RegExp("^" + LANG_LABEL.source + "\\s*:?\\s*", "i"), "");
+      .replace(LANG_LABEL_PREFIX, "");
     if (!/^\s*[{[]/.test(payload)) return false;
     // Only a string that actually carried some chrome gets stripped.
     return payload.length < t.replace(/^\s+/, "").length;
@@ -341,15 +362,15 @@ const ZSProvider = (() => {
   const stripAssistantSrPrefix = (t) => {
     if (!t) return t;
     if (!LOOKS_GLUED(t)) return t;
-    // Only the leading chrome, in the same order LOOKS_GLUED burns it. `\s*:?\s*`
-    // keeps a following newline out of the payload.
+    // Only the leading chrome, in the same order LOOKS_GLUED burns it. SR_REPLY
+    // is the speaker word ("ChatGPT said:" / "ChatGPT dit:"); the bare "ChatGPT"
+    // pass drops the doubled word the 2026-11 chrome repeats; the label pass
+    // removes a glued language name. All three are anchored, so a payload keeps
+    // its own text.
     return t
-      .replace(/^\s*(?:chatgpt\s+(?:said|dit))\s*:?\s*/i, "")
+      .replace(SR_REPLY, "")
       .replace(/^chatgpt\s*/i, "")
-      .replace(
-        /^\s*(?:json|javascript|js|html|css|python|bash|sh|shell|text|plaintext|xml|sql|lua|yaml)\s*:?\s*\n?/i,
-        ""
-      );
+      .replace(LANG_LABEL_PREFIX, "");
   };
 
   function classifyText(item, excludeSel) {
@@ -1154,7 +1175,7 @@ const ZSProvider = (() => {
     // Internal helpers exposed ONLY so the Node tests can pin them down. They
     // are pure string functions with no DOM dependency, and none of them is
     // reachable from the core, so this does not widen the provider's surface.
-    __test: { stripAssistantSrPrefix, LOOKS_GLUED },
+    __test: { stripAssistantSrPrefix, LOOKS_GLUED, turnSettled },
     // Vision OFF, like DeepSeek's text-only Expert tab. ChatGPT's free tier caps
     // image/file input separately from messages ("les fichiers, les images et
     // l'analyse sont indisponibles jusqu'à la réinitialisation de votre quota"),

@@ -26,6 +26,18 @@ const REQUEST_TIMEOUT_DEFAULT = 130000; // a bit above the 120s tool timeout
 // Cheap probe types (liveness pings, status reads) must not inherit the full
 // tool budget: a local bridge answers in single-digit milliseconds, so waiting
 // two minutes for a ping only delays the "offline" report the UI needs.
+//
+// MEASURED on a live bridge (v3.9.4, port 17613, 16 Nov 2026), including the
+// worst case of a target server that is NOT connected:
+//
+//   ping              0.4 ms     list_tools                   2.3 ms (0.8 ms again)
+//   get_tools         0.4 ms     get_tools(roblox, offline)   0.3 ms
+//   capabilities      0.3 ms     studio_status               46.3 ms (0.2 ms again)
+//   list_mcp_servers  0.8 ms     get_servers                  0.5 ms
+//
+// The slowest observed answer is one cold studio_status at 46 ms - three orders
+// of magnitude below the 6000 ms cap. A false timeout therefore needs a bridge
+// that is genuinely stuck, which is exactly what the cap is meant to surface.
 const FAST_TIMEOUT = 6000;
 // Probes the bridge answers instantly (single-digit ms on a healthy local
 // socket). They must not inherit the full tool budget, otherwise the loop sits
@@ -41,9 +53,15 @@ const FAST_TYPES = new Set([
 //
 // DELIBERATELY shorter than the 4314 ms measured for a socket that was MID-
 // RECONNECT: the first probe is expected to lose that race, and runTool's
-// preflight pays for one more attempt with a longer budget. Blocking the first
-// attempt for 4.3s would tax every ordinary cold start to win a case the retry
-// already covers.
+// preflight allows one more attempt.
+//
+// Be precise about what the two attempts cover. The 8000 ms in the preflight is
+// only the RACE timeout around bg({type:"ping"}); the second ping still waits at
+// most CONNECT_WAIT_MS (2.5 s) for the socket itself. So the two attempts spend
+// roughly 2 x 2.5 s = 5 s waiting on the connection, which is what makes the
+// measured 4.3 s case land on the retry. Without the retry, blocking the FIRST
+// attempt for 4.3 s would tax every ordinary cold start to cover a case the
+// second attempt already handles.
 const CONNECT_WAIT_MS = 2500;
 
 let ws = null;
@@ -141,14 +159,28 @@ function scheduleReconnect() {
 
 function startHeartbeat() {
   stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
+  heartbeatTimer = setInterval(async () => {
     if (connected) {
       // Half-open socket: the WS still reports OPEN but nothing comes through.
-      // The pong (and every other frame) refreshes lastMessageAt; if it has
-      // gone stale, drop the dead socket so onclose triggers a reconnect.
+      //
+      // STALENESS IS PROVED, NOT GUESSED. Chrome suspends an idle MV3 service
+      // worker and setInterval does not run while suspended, so on wake-up
+      // lastMessageAt is ALWAYS older than STALE_SOCKET_MS. Closing on elapsed
+      // time alone therefore killed a perfectly healthy socket, onclose
+      // reconnected, the worker idled again and the cycle repeated (measured:
+      // 203 connect/disconnect events in a day while a manual ping answered in
+      // 1 ms). So ask the bridge for a real pong and close only when it does
+      // not answer.
       if (lastMessageAt && Date.now() - lastMessageAt > STALE_SOCKET_MS) {
-        log("socket stale, forcing reconnect");
-        try { ws.close(); } catch {}
+        const pong = await send({ type: "ping" }, 4000).catch(() => null);
+        if (connected && !(pong && pong.ok)) {
+          log("socket stale after failed ping, forcing reconnect");
+          try { ws.close(); } catch {}
+        } else {
+          // The bridge answered, so the socket is healthy: the gap was the
+          // suspended worker, not a dead half-open socket.
+          lastMessageAt = Date.now();
+        }
         return;
       }
       // Keeps the MV3 service worker alive AND detects a half-open socket.
