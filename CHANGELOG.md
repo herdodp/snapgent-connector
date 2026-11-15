@@ -2,6 +2,16 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.6] - 2026-11-16
+
+### Changed
+- **Yellow / black theme for the UI.** Result chips (including the outer ChatGPT
+  box), the Switch AI menu and the MCP servers popup now share one yellow on warm
+  near-black palette, with matching light-mode variants. Success and error chip
+  colours are unchanged.
+- Extension and Snapgent App versions bumped to **3.9.6**. The bridge is unchanged
+  (still 3.9.4).
+
 ## [V3.9.5] - 2026-11-14
 
 ### Fixed
