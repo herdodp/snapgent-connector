@@ -1012,6 +1012,52 @@
     const name = call.tool;
     const args = call.arguments || {};
     if (!name) return ZS.FEEDBACK.parseError("malformed");
+    // SCROLL-AWAY RULE (final choke point): while the user is scrolling up
+    // through history nothing is executed - but the command is HELD, not
+    // cancelled. It used to return "skipped: conversation scrolled up", which
+    // dropped the call entirely: if the user happened to scroll just as a
+    // command became ready, the model was told its work had not run and the
+    // task stalled. The PR describes a hold, so wait the suppression window out
+    // and then proceed. A Stop still wins, and the wait is bounded.
+    if (scrollSuppressed()) {
+      diag("tool.holdScrolling", { name });
+      const waited = await waitScrollWindow();
+      if (!waited) {
+        // Stopped by the user while parked - do not run the command.
+        return "ERROR: the command was not run - stopped by the user.";
+      }
+      diag("tool.resumeAfterScroll", { name });
+    }
+    // ── Fast liveness probe ────────────────────────────────────────────────
+    // A dead bridge used to cost the full tool budget before the loop learned it
+    // was offline, so the chat felt far slower than on other providers for the
+    // SAME work. A local bridge answers a ping in single-digit milliseconds when
+    // the socket is WARM - but a COLD/reconnecting socket was measured at 4314ms,
+    // so the budget must be generous (a false "offline" is far worse than a slow
+    // probe) and one retry is allowed before giving up. The probe is paid only
+    // when the cache is cold (>15s), so normal runs cost nothing.
+    if (!A._bridgeProbeOkAt || Date.now() - A._bridgeProbeOkAt > 15000) {
+      const probeOnce = (budget) => Promise.race([
+        bg({ type: "ping" }),
+        new Promise((res) => setTimeout(() => res({ ok: false, kind: "timeout" }), budget)),
+      ]);
+      let probe = await probeOnce(6000);
+      let probeOk = probe && (probe.ok !== false) && probe.kind !== "disconnected" && probe.kind !== "timeout";
+      if (!probeOk) {
+        // One more chance: a socket that was mid-reconnect on the first attempt
+        // is usually settled a couple of seconds later.
+        probe = await probeOnce(8000);
+        probeOk = probe && (probe.ok !== false) && probe.kind !== "disconnected" && probe.kind !== "timeout";
+      }
+      if (!probeOk) {
+        diag("bridge.preflightFail", { name, kind: (probe && probe.kind) || "none" });
+        A._bridgeProbeOkAt = 0;
+        ui.banner("warn", "Bridge offline",
+          "snapgentV3 bridge is unreachable - start it and keep the selected target app open.");
+        return ZS.FEEDBACK.bridgeOffline;
+      }
+      A._bridgeProbeOkAt = Date.now();
+    }
     // NEVER execute while the AI tab is backgrounded/minimized. This is the single
     // choke point for ALL execution (agentLoop's tool dispatch AND the bootstrap's
     // list_commands), so it closes the hole the loop-entry gate alone left open:
@@ -1251,7 +1297,35 @@
       diag("bridge.staleExtension", { name, error: r.error });
       return ZS.FEEDBACK.staleExtension;
     }
-    if (r.kind === "disconnected") return ZS.FEEDBACK.bridgeOffline;
+    if (r.kind === "disconnected") {
+      // A socket that is mid-reconnect reports "disconnected" even though the
+      // bridge is alive (measured: reconnect takes ~4.3s). Retry ONCE after a
+      // short settle before declaring the bridge offline - a false "offline"
+      // makes the model stop working and shows "tool failed" to the user.
+      //
+      // BUT only when the request provably never left: `sent === false` means
+      // it failed while waiting for the socket, so the bridge cannot have run
+      // it. A `sent` request dropped mid-flight may already have executed
+      // write_file / run_command / git_commit; re-sending it would apply the
+      // side effect twice, which is worse than reporting the failure.
+      if (r.sent) {
+        diag("bridge.noRetryAfterSend", { name });
+        ui.banner("warn", "Connection dropped",
+          `The bridge stopped answering while '${name}' was in flight. It may already have run - check the result before repeating it.`);
+        return ZSGuard.inFlightFailure(name);
+      }
+      diag("bridge.disconnectedRetry", { name });
+      await new Promise((res) => setTimeout(res, 1200));
+      const retry = await Promise.race([
+        bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }),
+        hardCap,
+      ]);
+      if (retry && retry.kind !== "disconnected") {
+        r = retry;
+      } else {
+        return ZS.FEEDBACK.bridgeOffline;
+      }
+    }
     if (r.kind === "timeout") {
       return `ERROR: tool '${name}' timed out after ${name === "execute_luau" ? 20 : 120}s.\n${r.error}\nTry a shorter/simpler call or check that Roblox Studio is open and responsive.`;
     }
@@ -1750,6 +1824,73 @@
   // re-execution IDEMPOTENT regardless of any isGenerating/lastGenAt heuristic
   // misfire - the hard part (is this a live turn?) can be wrong without harm.
   const executed = new Map(); // "conv|turnKey" → text prefix at dispatch time
+  // ── Scroll-away suppression ───────────────────────────────────────────────
+  // The user's own rule, requested after the replay bug: while they scroll UP
+  // through history, nothing about the agent may look alive. Scrolling a
+  // virtualized transcript renders different turns, which makes the "last
+  // rendered turn" lie about liveness (bar shows Stop, watchdog thinks a reply
+  // is still coming). Rather than keeping a growing pile of per-turn heuristics,
+  // we detect the gesture itself and SUPPRESS the busy surface for a short
+  // window. This is a UI/`watchdog` gate only: it never cancels a real run, it
+  // just stops the indicators (and the resume logic) from acting on a scroll.
+  const SCROLL_SUPPRESS_MS = 4000;
+  let scrollUpAt = 0;
+  let scrollSuppressUntil = 0;
+  function noteScrollUp() {
+    const now = Date.now();
+    scrollUpAt = now;
+    scrollSuppressUntil = now + SCROLL_SUPPRESS_MS;
+  }
+  const scrollSuppressed = () => Date.now() < scrollSuppressUntil;
+  // Hold until the suppression window lapses (see core/guard.js: logistics live
+  // there so they can be tested in node without a DOM).
+  const waitScrollWindow = () =>
+    ZSGuard.holdUntilScrollLapses({
+      isSuppressed: scrollSuppressed,
+      isStopped: () => !!A.stop,
+      sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+      capMs: SCROLL_SUPPRESS_MS * 2 + 500,
+    });
+  function installScrollDetector() {
+    try {
+      // Position must be tracked PER SCROLLABLE ELEMENT. The listener is on
+      // `document` in the capture phase, so it sees the transcript, the sidebar,
+      // code blocks and textareas alike. A single shared _lastScrollTop compared
+      // a value from one element against a value from another: scrolling the
+      // sidebar down to 900 and then the transcript (at 400) looked like an
+      // upward move of 500px and suppressed execution for no reason. A WeakMap
+      // keeps one last position per element and lets them be collected.
+      const tracker = ZSGuard.createScrollTracker(24);
+      const topOf = (t) => {
+        if (t && typeof t.scrollTop === "number" && t !== document && t !== document.documentElement) {
+          return { key: t, top: t.scrollTop };
+        }
+        return { key: document.documentElement, top: window.scrollY || document.documentElement.scrollTop || 0 };
+      };
+      const onScroll = (ev) => {
+        const { key, top } = topOf(ev && ev.target);
+        // Moving UP through a turn is the problematic gesture. The 24px
+        // threshold ignores layout jitter and stream-driven auto-scroll (which
+        // only ever moves DOWN as the reply grows).
+        if (tracker.observe(key, top)) noteScrollUp();
+      };
+      // capture:true - ChatGPT scrolls inner containers, not just the window.
+      document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+      // WHEEL: only a gesture over the transcript counts. Scrolling up inside the
+      // sidebar, a code block or the composer is unrelated to replaying history,
+      // and used to hold execution as if the user had scrolled the conversation.
+      window.addEventListener("wheel", (ev) => {
+        if (!(ev && ev.deltaY < 0)) return;
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        // A textarea/input scrolling its own overflow is not the transcript.
+        if (t.closest("textarea, input, .cm-editor, [contenteditable='true']")) return;
+        if (!t.closest((P.msgSel || "[data-message-author-role]") + ", main, article")) return;
+        noteScrollUp();
+      }, { passive: true });
+    } catch {}
+  }
+  installScrollDetector();
   function rememberExecuted(item) {
     if (!item) return;
     try {
@@ -3817,7 +3958,7 @@
       const b = document.createElement("div");
       b.className = "zs-banner limit";
       b.innerHTML = `<div class="zs-banner-t">⚠ snapgentV3 disconnected</div>
-        <div class="zs-banner-m">Bridge stopped. Run start.bat and keep Roblox Studio open.</div>
+        <div class="zs-banner-m">Bridge stopped. Run start.bat and keep the selected target app open.</div>
         <div class="zs-banner-acts"><button class="zs-banner-x">Close</button></div>`;
       b.querySelector(".zs-banner-x").addEventListener("click", () => { b.remove(); if (bridgeBannerEl === b) bridgeBannerEl = null; });
       root.appendChild(b);

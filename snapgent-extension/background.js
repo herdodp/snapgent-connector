@@ -23,6 +23,28 @@ const HEARTBEAT_MS = 10000;
 // pending requests slowly time out.
 const STALE_SOCKET_MS = 25000;
 const REQUEST_TIMEOUT_DEFAULT = 130000; // a bit above the 120s tool timeout
+// Cheap probe types (liveness pings, status reads) must not inherit the full
+// tool budget: a local bridge answers in single-digit milliseconds, so waiting
+// two minutes for a ping only delays the "offline" report the UI needs.
+const FAST_TIMEOUT = 6000;
+// Probes the bridge answers instantly (single-digit ms on a healthy local
+// socket). They must not inherit the full tool budget, otherwise the loop sits
+// waiting two minutes just to learn the bridge is offline.
+const FAST_TYPES = new Set([
+  "ping", "studio_status", "list_mcp_servers", "get_servers",
+  "list_tools", "get_tools", "capabilities",
+]);
+// How long to wait for a socket that is not open before declaring it offline.
+// The reconnect ceiling is 2s and connecting to a LOCAL socket takes a few ms,
+// so a healthy bridge reconnects well inside this window; waiting longer is
+// exactly the "bridge is unreachable" delay users complained about.
+//
+// DELIBERATELY shorter than the 4314 ms measured for a socket that was MID-
+// RECONNECT: the first probe is expected to lose that race, and runTool's
+// preflight pays for one more attempt with a longer budget. Blocking the first
+// attempt for 4.3s would tax every ordinary cold start to win a case the retry
+// already covers.
+const CONNECT_WAIT_MS = 2500;
 
 let ws = null;
 let connected = false;
@@ -169,7 +191,7 @@ async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
   }
   return new Promise((resolve) => {
     if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-      resolve({ ok: false, kind: "disconnected", error: "bridge not connected" });
+      resolve({ ok: false, kind: "disconnected", sent: false, error: "bridge not connected" });
       return;
     }
     const id = nextId++;
@@ -179,14 +201,19 @@ async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
         pending.delete(id);
         resolve({ ok: false, kind: "timeout", error: "bridge did not respond in time" });
       }
-    }, timeout);
-    pending.set(id, { resolve, timer });
+    }, effectiveTimeout);
+    pending.set(id, { resolve, timer, sent: false });
     try {
       ws.send(JSON.stringify(payload));
+      // Past this line the bridge may already have executed the request. A
+      // caller that retries has to know the difference: retrying a write_file
+      // or a git_commit that did land would apply it twice.
+      const entry = pending.get(id);
+      if (entry) entry.sent = true;
     } catch (e) {
       clearTimeout(timer);
       pending.delete(id);
-      resolve({ ok: false, kind: "disconnected", error: String(e) });
+      resolve({ ok: false, kind: "disconnected", sent: false, error: String(e) });
     }
   });
 }
@@ -282,7 +309,10 @@ function resolvePending(id, value) {
 function failAllPending(reason) {
   for (const [, p] of pending) {
     clearTimeout(p.timer);
-    p.resolve({ ok: false, kind: "disconnected", error: reason });
+    // `sent` tells the caller whether the frame left the extension. A request
+    // still waiting on waitForConnection never reached the bridge, so it is
+    // safe to re-send; one that had gone out may already have run.
+    p.resolve({ ok: false, kind: "disconnected", sent: !!p.sent, error: reason });
   }
   pending.clear();
 }
