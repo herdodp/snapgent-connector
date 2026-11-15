@@ -482,6 +482,64 @@ html.zs-light .zs-mcp-row:hover, html.zs-light .zs-gear:hover, html.zs-light .zs
 html.zs-light .zs-gear, html.zs-light .zs-mcp-pop-close { color: #6b7280; }
 html.zs-light .zs-mcp-toggle { background: rgba(0, 0, 0, 0.18); }
 
+/* Yellow / black theme for the Switch AI menu and the MCP servers popup.
+   Same palette as .zs-chip (#eab308 on warm near-black). */
+#zs-menu, .zs-mcp-pop-card {
+  background: #0e0c06; color: #ece6cf;
+  border-color: rgba(234, 179, 8, 0.35);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(234, 179, 8, 0.06);
+}
+#zs-mcp-pop { background: rgba(0, 0, 0, 0.55); }
+#zs-menu { scrollbar-color: rgba(234, 179, 8, 0.35) transparent; }
+#zs-menu::-webkit-scrollbar-thumb { background: rgba(234, 179, 8, 0.3); background-clip: padding-box; }
+#zs-menu::-webkit-scrollbar-thumb:hover { background: rgba(234, 179, 8, 0.55); background-clip: padding-box; }
+.zs-menu-head, .zs-mcp-pop-head { border-bottom-color: rgba(234, 179, 8, 0.22); }
+.zs-menu-sec + .zs-menu-sec { border-top-color: rgba(234, 179, 8, 0.16); }
+.zs-menu-logo, .zs-mcp-pop-head { color: #fde68a; }
+.zs-menu-tag, .zs-sec-label span { color: #a38a2a; }
+.zs-menu-note, .zs-mcp-pop-note, .zs-mcp-row-meta, .zs-site-host { color: #8a7a45; }
+.zs-site-name > span:first-child, .zs-mcp-row-name { color: #f3ecd0; }
+.zs-site-opt { color: #d9d1b2; }
+button.zs-site-opt:hover, .zs-mcp-row:hover {
+  background: rgba(234, 179, 8, 0.10);
+}
+.zs-site-go { color: #eab308; }
+.zs-site-badge {
+  color: #eab308; border-color: rgba(234, 179, 8, 0.55);
+  background: rgba(234, 179, 8, 0.08);
+}
+.zs-target-cur { background: rgba(234, 179, 8, 0.12); }
+.zs-gear, .zs-mcp-pop-close { color: #eab308; opacity: 0.8; }
+.zs-gear:hover, .zs-mcp-pop-close:hover {
+  background: rgba(234, 179, 8, 0.14); color: #fde68a; opacity: 1;
+}
+.zs-mcp-toggle { background: rgba(234, 179, 8, 0.18); }
+.zs-mcp-toggle::after { background: #fde68a; }
+.zs-mcp-check:checked + .zs-mcp-toggle { background: #eab308; }
+.zs-mcp-check:checked + .zs-mcp-toggle::after { background: #0e0c06; }
+.zs-mcp-check:focus-visible + .zs-mcp-toggle { outline-color: rgba(234, 179, 8, 0.8); }
+.zs-mcp-pop-card #zs-bg-sessions { accent-color: #eab308; }
+
+/* Light mode: warm cream surface, dark amber accents. */
+html.zs-light #zs-menu, html.zs-light .zs-mcp-pop-card {
+  background: #fffaf0; color: #3b3320; border-color: rgba(180, 130, 10, 0.45);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+html.zs-light .zs-menu-logo, html.zs-light .zs-mcp-pop-head, html.zs-light .zs-mcp-row-name,
+html.zs-light .zs-site-name > span:first-child { color: #5a3d00; }
+html.zs-light .zs-menu-tag, html.zs-light .zs-sec-label span,
+html.zs-light .zs-menu-note, html.zs-light .zs-mcp-pop-note,
+html.zs-light .zs-mcp-row-meta, html.zs-light .zs-site-host { color: #8a6d1a; }
+html.zs-light .zs-menu-head, html.zs-light .zs-mcp-pop-head { border-bottom-color: rgba(180, 130, 10, 0.25); }
+html.zs-light button.zs-site-opt:hover, html.zs-light .zs-mcp-row:hover { background: rgba(234, 179, 8, 0.16); }
+html.zs-light .zs-site-badge { color: #a16207; border-color: rgba(180, 130, 10, 0.55); background: rgba(234, 179, 8, 0.12); }
+html.zs-light .zs-target-cur { background: rgba(234, 179, 8, 0.18); }
+html.zs-light .zs-gear, html.zs-light .zs-mcp-pop-close { color: #a16207; }
+html.zs-light .zs-gear:hover, html.zs-light .zs-mcp-pop-close:hover { background: rgba(234, 179, 8, 0.18); color: #7a5200; }
+html.zs-light .zs-mcp-toggle { background: rgba(161, 98, 7, 0.22); }
+html.zs-light .zs-mcp-toggle::after { background: #ffffff; }
+html.zs-light .zs-mcp-check:checked + .zs-mcp-toggle { background: #ca8a04; }
+
 #zs-set-text {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 58px;
   background: rgba(255, 255, 255, 0.04); color: #e5e5e8;
@@ -803,6 +861,40 @@ ol.flex-col-reverse > div.w-full:not(.mx-auto) > .zs-chip {
 }
 .zs-chip:hover { background: rgba(255, 255, 255, 0.06); }
 
+/* Yellow / black theme: matches the bar's Stop button and target pills
+   (#eab308 on near-black). Only the surface, border, label and chevron are
+   themed; done (green) and err (red) keep their own state colours. */
+.zs-chip {
+  background: rgba(14, 12, 6, 0.92);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: #ece6cf;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.zs-chip:hover {
+  background: rgba(28, 24, 12, 0.97);
+  border-color: rgba(234, 179, 8, 0.75);
+}
+.zs-chip-tx { color: #fde68a; }
+.zs-chip-cv { color: #eab308; opacity: 0.75; }
+
+/* Outer box around an injected result chip (ChatGPT): same yellow / black theme.
+   Scoped with :has(.zs-chip) so the user's own typed bubbles keep ChatGPT's look. */
+html.zs-site-chatgpt .zs-hidden:has(.zs-chip),
+html.zs-site-chatgpt .user-message-bubble-color:has(.zs-chip),
+html.zs-site-chatgpt [class*="group/user-message"] [class*="bg-token"]:has(.zs-chip) {
+  background: rgba(20, 17, 8, 0.96) !important;
+  border: 1px solid rgba(234, 179, 8, 0.55) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+html.zs-light.zs-site-chatgpt .zs-hidden:has(.zs-chip),
+html.zs-light.zs-site-chatgpt .user-message-bubble-color:has(.zs-chip),
+html.zs-light.zs-site-chatgpt [class*="group/user-message"] [class*="bg-token"]:has(.zs-chip) {
+  background: rgba(255, 248, 225, 0.95) !important;
+  border-color: rgba(180, 130, 10, 0.55) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
 .zs-chip-head {
   display: flex; align-items: center; gap: 9px;
   padding: 8px 13px;
@@ -846,20 +938,20 @@ ol.flex-col-reverse > div.w-full:not(.mx-auto) > .zs-chip {
 /* state themes (override category background, keep accent stripe) */
 .zs-chip.done   { --cat: #5cbf9a; }
 .zs-chip.err    { --cat: #ef6b6b; border-color: rgba(239, 68, 68, 0.38); color: #f0b8b8; }
-.zs-chip.result { --cat: #8b8b93; color: #a8a8b0; }
-.zs-chip.sys    { --cat: #8b8b93; color: #a8a8b0; }
+.zs-chip.result { --cat: #eab308; color: #ece6cf; }
+.zs-chip.sys    { --cat: #eab308; color: #ece6cf; }
 /* Orphaned command we won't execute (e.g. reload left it un-run): neutral grey,
    never a green ✓ that would imply the tool succeeded. */
-.zs-chip.idle   { --cat: #8b8b93; color: #a8a8b0; }
+.zs-chip.idle   { --cat: #a38a2a; color: #cfc6a6; }
 
 /* running shimmer, seamless: a REPEATING gradient (period = 210px) scrolled by
    exactly one period in LINEAR time, so the last frame is pixel-identical to the
    first - no visible seam or pause between cycles. background-position animates
    only the image; the base colour stays put. */
 .zs-chip.run {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: rgba(234, 179, 8, 0.06);
   background-image: linear-gradient(90deg,
-    transparent 0%, rgba(255, 255, 255, 0.09) 50%, transparent 100%);
+    transparent 0%, rgba(234, 179, 8, 0.14) 50%, transparent 100%);
   /* Fixed 210px tile (NOT tied to the chip width), repeated. This is what makes
      the sweep width-independent: when the chip grows as its detail arrives, the
      tile origin doesn't shift, so the gradient no longer "teleports". */
@@ -1029,6 +1121,18 @@ html.zs-light .zs-chip.err { border-color: rgba(220, 38, 38, 0.4); }
 html.zs-light .zs-chip-body pre { color: #2b313d; }
 html.zs-light .zs-chip-body { border-top-color: color-mix(in srgb, var(--cat) 30%, #ffffff); }
 html.zs-light .zs-chip.err { color: #7f1d1d; }
+/* Yellow theme, light mode: dark amber text/accents on the light surface. */
+html.zs-light .zs-chip {
+  border-color: rgba(180, 130, 10, 0.45);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+html.zs-light .zs-chip:hover { border-color: rgba(180, 130, 10, 0.8); }
+html.zs-light .zs-chip-tx { color: #7a5200; }
+html.zs-light .zs-chip-cv { color: #a16207; }
+html.zs-light .zs-chip.result,
+html.zs-light .zs-chip.sys { --cat: #a16207; color: #3b3320; }
+html.zs-light .zs-chip.idle { --cat: #8a6d1a; color: #5a5030; }
+html.zs-light .zs-chip.err { border-color: rgba(220, 38, 38, 0.4); }
 html.zs-light .zs-chip.run {
   background-color: rgba(0, 0, 0, 0.04);
   background-image: linear-gradient(90deg,
