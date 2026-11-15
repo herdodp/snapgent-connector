@@ -20,8 +20,10 @@ const RECONNECT_MAX = 5000;
 const HEARTBEAT_MS = 10000;
 // If no message (incl. pong) arrives within this window while we believe we're
 // connected, the socket is half-open: force a reconnect instead of letting
-// pending requests slowly time out.
-const STALE_SOCKET_MS = 25000;
+// pending requests slowly time out. Kept at 60s so a very large frame in flight
+// (big project data) does not delay the pong past the limit and cause a false
+// reconnect. Must stay below the bridge ping_timeout (90s).
+const STALE_SOCKET_MS = 60000;
 const REQUEST_TIMEOUT_DEFAULT = 130000; // a bit above the 120s tool timeout
 
 let ws = null;

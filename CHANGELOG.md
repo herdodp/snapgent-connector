@@ -2,6 +2,30 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.7] - 2026-11-16
+
+### Changed
+- **Bridge: large-payload capacity.** MCP stdout buffer raised from 64 MB to 128 MB,
+  and an oversized MCP response line no longer kills the server: the waiting request
+  fails with a clear error and the server stays alive. WebSocket `max_size` raised from
+  50 MB to 128 MB, `max_queue=256`, `ping_timeout` from 20 s to 90 s.
+- **Bridge: requests run concurrently** (up to 32), so one slow tool call no longer
+  blocks pings. Large JSON (over 256 KB) is parsed and serialized in a worker thread,
+  and the Roblox process check no longer blocks the event loop.
+- **Bridge: restart with backoff.** A failed MCP server is retried with a growing delay
+  (up to 300 s) and logs `restarting (attempt N)` instead of every 5 seconds.
+- **Bridge: errors are logged.** Failures sending to the extension are now logged, and
+  handler errors are returned to the extension as `Bridge error`.
+- Extension: `STALE_SOCKET_MS` raised from 25 s to 60 s (still below the bridge
+  `ping_timeout`) so a very large frame does not cause a false reconnect.
+- Extension: the target dropdown uses the display name, the Roblox server shows a tool
+  count fallback, and the MCP popup's Background sessions row is simplified.
+- Bridge version bumped to **3.9.7** (it was stuck at 3.9.4). `bridge.exe` is rebuilt.
+
+### Added
+- Three regression tests in `test_bridge.py`: ping during a slow call, large tool
+  result over WebSocket, and an oversized MCP line.
+
 ## [V3.9.6] - 2026-11-16
 
 ### Changed

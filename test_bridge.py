@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import sys
 import tempfile
@@ -46,7 +47,41 @@ for line in sys.stdin:
 """
 
 
+MOCK_SLOW_MCP = "import time\n" + MOCK_MCP.replace(
+    '    elif method == "tools/call":\n',
+    '    elif method == "tools/call":\n'
+    '        time.sleep(float(request["params"]["arguments"].get("delay", 0)))\n',
+)
+
+
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    @contextlib.asynccontextmanager
+    async def _ws_client(self, root, script):
+        mock_path = root / "mock_mcp.py"
+        mock_path.write_text(script, encoding="utf-8")
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}
+            ),
+            encoding="utf-8",
+        )
+        manager = bridge.Bridge()
+        with patch.object(bridge, "CONFIG_PATH", config_path):
+            await manager.start_servers()
+            try:
+                async with bridge.websockets.serve(
+                    manager.handle_client, "127.0.0.1", 0, max_size=None
+                ) as server:
+                    port = server.sockets[0].getsockname()[1]
+                    async with bridge.websockets.connect(
+                        f"ws://127.0.0.1:{port}", max_size=None
+                    ) as client:
+                        await client.recv()  # initial "connected" message
+                        yield client
+            finally:
+                await manager.stop_servers()
+
     async def test_stdio_mcp_start_list_call_and_stop(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_path = Path(temp_dir) / "mock_mcp.py"
@@ -142,6 +177,78 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(result["text"], "round trip")
                 finally:
                     await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_slow_tool_call_does_not_block_ping(self):
+        # Regression: requests used to be handled inline in the socket read loop,
+        # so one slow tool call stopped the bridge from reading pings/pongs.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            async with self._ws_client(Path(temp_dir), MOCK_SLOW_MCP) as client:
+                await client.send(
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "type": "call_tool",
+                            "name": "echo",
+                            "arguments": {"message": "slow", "delay": 1.5},
+                            "timeout": 10000,
+                        }
+                    )
+                )
+                await client.send(json.dumps({"id": 2, "type": "ping"}))
+                first = json.loads(await asyncio.wait_for(client.recv(), 1.0))
+                self.assertEqual(first["type"], "pong")
+                second = json.loads(await asyncio.wait_for(client.recv(), 8))
+                self.assertTrue(second["ok"])
+                self.assertEqual(second["text"], "slow")
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_large_tool_result_over_websocket(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            async with self._ws_client(Path(temp_dir), MOCK_MCP) as client:
+                big_message = "y" * 400_000
+                await client.send(
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "type": "call_tool",
+                            "name": "echo",
+                            "arguments": {"message": big_message},
+                            "timeout": 20000,
+                        }
+                    )
+                )
+                result = json.loads(await asyncio.wait_for(client.recv(), 20))
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["text"], big_message)
+
+    async def test_oversized_mcp_line_does_not_kill_server(self):
+        # Regression: a response line over the stream limit used to kill the
+        # stdout reader, mark the server dead and trigger a restart.
+        original = asyncio.create_subprocess_exec
+
+        async def small_limit(*args, **kwargs):
+            kwargs["limit"] = 64 * 1024
+            return await original(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                with patch.object(bridge.asyncio, "create_subprocess_exec", small_limit):
+                    self.assertTrue(await server.start())
+                with self.assertRaises(RuntimeError) as ctx:
+                    await server.call_tool("echo", {"message": "x" * 400_000}, 10)
+                self.assertIn("too large", str(ctx.exception))
+                self.assertTrue(server.alive)
+                follow_up = await server.call_tool("echo", {"message": "still works"}, 10)
+                self.assertEqual(follow_up["content"][0]["text"], "still works")
+            finally:
+                await server.stop()
 
     def test_duplicate_tool_names_are_server_qualified(self):
         first = bridge.MCPServer("roblox", {})

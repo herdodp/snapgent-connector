@@ -30,8 +30,10 @@ LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.4"
+BRIDGE_VERSION = "3.9.7"
 MAX_LOG_CHARS = 1000
+MAX_CONCURRENT_REQUESTS = 32
+BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -103,7 +105,7 @@ class MCPServer:
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    limit=64 * 1024 * 1024,
+                    limit=128 * 1024 * 1024,
                 )
             except (OSError, ValueError) as error:
                 self.error = str(error)
@@ -238,11 +240,32 @@ class MCPServer:
             return
         try:
             while True:
-                line = await process.stdout.readline()
+                try:
+                    line = await process.stdout.readline()
+                except ValueError:
+                    # Response line exceeded the stream limit. Discard the rest of it,
+                    # fail waiting requests with a clear error, and keep the server alive.
+                    log(f"[{self.server_id}] MCP response exceeded the buffer limit; discarding it.")
+                    while True:
+                        chunk = await process.stdout.read(1024 * 1024)
+                        if not chunk or b"\n" in chunk:
+                            break
+                    for future in list(self._pending.values()):
+                        if not future.done():
+                            future.set_exception(
+                                RuntimeError(
+                                    f"{self.server_id} MCP response was too large (over 128 MB). "
+                                    "Request a smaller range or fewer items."
+                                )
+                            )
+                    continue
                 if not line:
                     break
                 try:
-                    message = json.loads(line.decode("utf-8"))
+                    if len(line) > BIG_PAYLOAD_THREAD_BYTES:
+                        message = await asyncio.to_thread(lambda raw=line: json.loads(raw.decode("utf-8")))
+                    else:
+                        message = json.loads(line.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     log(f"[{self.server_id}] ignored non-JSON MCP stdout.")
                     continue
@@ -388,27 +411,67 @@ class Bridge:
 
     async def _send_client(self, client: Any, message: Dict[str, Any]) -> None:
         try:
-            await client.send(_json_line(message))
-        except Exception:
-            pass
+            text = message.get("text") if isinstance(message, dict) else None
+            heavy = bool(
+                isinstance(message, dict)
+                and (
+                    (isinstance(text, str) and len(text) > BIG_PAYLOAD_THREAD_BYTES)
+                    or message.get("images")
+                )
+            )
+            payload = await asyncio.to_thread(_json_line, message) if heavy else _json_line(message)
+            await client.send(payload)
+        except Exception as error:
+            log(f"send to client failed: {type(error).__name__}: {str(error)[:200]}")
 
     async def handle_client(self, websocket: Any, _path: Optional[str] = None) -> None:
         async with self._client_lock:
             self.clients.add(websocket)
         log("extension connected")
         await self._send_client(websocket, self._connected_message())
+        pending: set = set()
+        limiter = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+        async def _run(request: Dict[str, Any]) -> None:
+            async with limiter:
+                try:
+                    await self._handle_request(websocket, request)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    log(f"request handler error: {error}")
+                    await self._send_client(
+                        websocket,
+                        {
+                            "type": "tool_result",
+                            "id": request.get("id"),
+                            "ok": False,
+                            "kind": "tool_error",
+                            "error": f"Bridge error: {error}",
+                        },
+                    )
+
         try:
             async for raw in websocket:
                 try:
-                    request = json.loads(raw)
+                    if len(raw) > BIG_PAYLOAD_THREAD_BYTES:
+                        request = await asyncio.to_thread(json.loads, raw)
+                    else:
+                        request = json.loads(raw)
                 except (TypeError, json.JSONDecodeError):
                     await self._send_client(websocket, {"type": "error", "error": "Invalid JSON request."})
                     continue
                 if not isinstance(request, dict):
                     await self._send_client(websocket, {"type": "error", "error": "Request must be a JSON object."})
                     continue
-                await self._handle_request(websocket, request)
+                task = asyncio.create_task(_run(request))
+                pending.add(task)
+                task.add_done_callback(pending.discard)
         finally:
+            for task in list(pending):
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             async with self._client_lock:
                 self.clients.discard(websocket)
             log("extension disconnected")
@@ -580,7 +643,7 @@ class Bridge:
 
     async def _studio_status(self) -> Tuple[Optional[bool], Optional[bool], Optional[bool]]:
         studio_server = self.servers.get("roblox")
-        studio_proc = _process_running("RobloxStudioBeta.exe" if os.name == "nt" else "RobloxStudio")
+        studio_proc = await _process_running("RobloxStudioBeta.exe" if os.name == "nt" else "RobloxStudio")
         if not studio_server or not studio_server.alive:
             return None, None, studio_proc
         if not any(tool["name"] == "get_studio_state" for tool in studio_server.tools):
@@ -654,15 +717,16 @@ class Bridge:
             )
 
 
-def _process_running(process_name: str) -> Optional[bool]:
+async def _process_running(process_name: str) -> Optional[bool]:
     try:
         if os.name == "nt":
-            result = subprocess_run(
+            result = await asyncio.to_thread(
+                subprocess_run,
                 ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/NH"],
-                timeout=5,
+                5,
             )
             return process_name.lower() in result.lower()
-        result = subprocess_run(["pgrep", "-f", process_name], timeout=5)
+        result = await asyncio.to_thread(subprocess_run, ["pgrep", "-f", process_name], 5)
         return bool(result.strip())
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -692,9 +756,10 @@ async def run() -> None:
         bridge.handle_client,
         HOST,
         PORT,
-        max_size=50 * 1024 * 1024,
+        max_size=128 * 1024 * 1024,
+        max_queue=256,
         ping_interval=20,
-        ping_timeout=20,
+        ping_timeout=90,
     )
     log(f"snapgent bridge v{BRIDGE_VERSION}")
     log(f"listening on ws://{HOST}:{PORT} - load the extension and open a supported AI chat")
@@ -727,15 +792,42 @@ async def run() -> None:
 
 
 async def _monitor_servers(bridge: Bridge) -> None:
+    failures: Dict[str, int] = {}
+    next_try: Dict[str, float] = {}
+
+    def _state() -> Tuple[Tuple[str, bool], ...]:
+        return tuple(sorted((s.server_id, s.alive) for s in bridge.servers.values()))
+
+    last_state = _state()
     while True:
         await asyncio.sleep(5)
-        changed = False
-        for server in bridge.servers.values():
-            if not server.alive:
-                log(f"[{server.server_id}] MCP server disconnected; restarting.")
-                await server.start()
-                changed = True
-        if changed:
+        for server in list(bridge.servers.values()):
+            sid = server.server_id
+            if server.alive:
+                failures.pop(sid, None)
+                next_try.pop(sid, None)
+                continue
+            if time.monotonic() < next_try.get(sid, 0.0):
+                continue
+            count = failures.get(sid, 0)
+            if count < 3 or count % 20 == 0:
+                log(f"[{sid}] MCP server disconnected; restarting (attempt {count + 1}).")
+            try:
+                ok = await server.start()
+            except Exception as error:
+                server.error = str(error)
+                log(f"[{sid}] unexpected restart error: {error}")
+                ok = False
+            if ok:
+                failures.pop(sid, None)
+                next_try.pop(sid, None)
+            else:
+                failures[sid] = count + 1
+                delay = min(300.0, 5.0 * (2 ** min(count, 6)))
+                next_try[sid] = time.monotonic() + delay
+        state = _state()
+        if state != last_state:
+            last_state = state
             bridge._rebuild_catalog()
             bridge._log_health()
             await bridge.broadcast(bridge._connected_message())

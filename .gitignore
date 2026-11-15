@@ -2,6 +2,7 @@
 Compressed/
 Deprecated/
 ExtensionPresentation/
+herdodp/
 presentation/
 config.json
 
@@ -12,6 +13,10 @@ build_tmp/
 dist_v394/
 build_v394/
 bridge.exe.bak
+bridge.exe.pre-fix
+bridge.py.bak
+dist-fix/
+build-fix/
 vscode_mcp.exe.old
 config.json.bak-*
 

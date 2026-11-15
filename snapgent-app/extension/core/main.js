@@ -3215,8 +3215,8 @@
           `<div class="zs-mcp-pop-note">Only enabled servers appear in the dropdown and are read by the AI. Disabled servers cost no tokens.</div>` +
           `<div class="zs-mcp-pop-list">${rows}</div>` +
           `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>Sessions</span></div>` +
-          `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>` +
-          `<div class="zs-mcp-pop-note">Off by default: a hidden tab has no layout, so reads right after it is shown again can be stale. Turn this on only when you run several chats at once.</div>` +
+          `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}></label>` +
+          
         `</div>`;
       document.documentElement.appendChild(pop);
 

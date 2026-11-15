@@ -3121,7 +3121,7 @@
           .map((server) => ({ id: server.id, name: getTargetName(server.id) })),
       ].filter((option) => isMcpEnabled(option.id));
       if (!options.some((option) => option.id === id)) {
-        options.push({ id, name: id });
+        options.push({ id, name: getTargetName(id) });
       }
       const optionsKey = options.map((option) => `${option.id}:${option.name}`).join("|");
       if (targetSelect.dataset.optionsKey !== optionsKey) {
@@ -3204,7 +3204,8 @@
       const servers = mergedMcpServers();
       const rows = allMcpOptions().map((o) => {
         const sv = servers.find((s) => s.id === o.id);
-        const meta = sv && sv.tools ? `${sv.tools} tools` : "";
+        const toolCount = (sv && sv.tools) || (o.id === "roblox" && A.bridge && A.bridge.tools) || 0;
+        const meta = toolCount ? `${toolCount} tools` : "";
         return `<label class="zs-mcp-row"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">${esc(o.name)}</span><span class="zs-mcp-row-meta">${esc(meta)}</span></span><input type="checkbox" class="zs-mcp-check" data-id="${esc(o.id)}" ${isMcpEnabled(o.id) ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>`;
       }).join("");
       const pop = document.createElement("div");
@@ -3215,8 +3216,8 @@
           `<div class="zs-mcp-pop-note">Only enabled servers appear in the dropdown and are read by the AI. Disabled servers cost no tokens.</div>` +
           `<div class="zs-mcp-pop-list">${rows}</div>` +
           `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>Sessions</span></div>` +
-          `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}><span class="zs-mcp-toggle"></span></label>` +
-          `<div class="zs-mcp-pop-note">Off by default: a hidden tab has no layout, so reads right after it is shown again can be stale. Turn this on only when you run several chats at once.</div>` +
+          `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}></label>` +
+          
         `</div>`;
       document.documentElement.appendChild(pop);
 
