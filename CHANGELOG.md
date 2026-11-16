@@ -2,6 +2,36 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.8] - 2026-11-16
+
+### Fixed
+- **Bridge: a retry can no longer apply a tool twice.** A dropped socket used to look the
+  same whether the request had never been sent or had reached the bridge and maybe run,
+  so `write_file`, `run_command` or `git_commit` could be applied twice. The extension now
+  records when a request left, retries only if it never did, and otherwise tells the model
+  the tool may or may not have run. A reply from an older bridge without that field is
+  treated as unsafe to retry.
+- **The heartbeat no longer kills healthy sockets.** A suspended service worker used to
+  close a working connection on elapsed time alone. It now asks for a pong first and
+  closes the socket only when none comes back.
+- **Scrolling up holds a command instead of dropping it.** A command that became ready
+  just as you scrolled up was skipped and reported as not run. It now waits out the
+  scroll window (bounded to two extra windows), and Stop stays visible and still cancels
+  it. Scroll positions are tracked per element, so the sidebar, code blocks and textareas
+  no longer trigger a false hold, and the scroll container counts as the transcript.
+- **ChatGPT: language labels were over-stripped.** "Should we proceed?" no longer becomes
+  "ould we proceed?", and "shell" or "Text of the file follows" keep their first letters.
+- Restored the `ping` dispatcher entry and `turnSettled` / `sampleStream` that an earlier
+  merge had folded away.
+
+### Changed
+- Retry, heartbeat and scroll rules now live in `core/guard.js`, shared by the extension
+  and the tests. `core/guard.js` is loaded before `core/main.js` in every content script.
+- Extension and Snapgent App versions bumped to **3.9.8**. The bridge is unchanged
+  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+
+Thanks to @insiderinside (#3).
+
 ## [V3.9.7] - 2026-11-16
 
 ### Changed
