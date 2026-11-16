@@ -1904,11 +1904,33 @@
       // whole page, which would let a sidebar or composer gesture through. The
       // provider's message selector is the real signal; a plain article is the
       // only generic fallback, and a composer/editor is always excluded.
+      //
+      // The two listeners get DIFFERENT kinds of target, so the test has to look
+      // in both directions:
+      //   wheel  -> the element under the cursor, a DESCENDANT of the transcript,
+      //             so `closest()` walking up finds it;
+      //   scroll -> the element that scrolled, normally the transcript CONTAINER
+      //             (an ancestor of every message), so `closest()` finds nothing
+      //             and the event has to be accepted when the target CONTAINS a
+      //             message instead. Window-level scrolling reports `document`,
+      //             which has no `closest` at all and is the provider's scroller
+      //             for some layouts, so it is accepted as the transcript too.
+      //
+      // A filter that only walked up silently dropped scrollbar, keyboard and
+      // touch scrolling while the wheel path kept working - a regression on the
+      // exact gesture the suppression exists for.
       const inTranscript = (t) => {
-        if (!t || !t.closest) return false;
+        if (!t) return false;
+        // The window/document scroller is the transcript for window-level
+        // layouts; a composer or editor is never the transcript.
+        if (t === document || t === document.documentElement || t === window) return true;
+        if (!t.closest) return false;
         if (t.closest("textarea, input, .cm-editor, [contenteditable='true']")) return false;
         const msgSel = P.msgSel || "[data-message-author-role]";
-        return !!(t.closest(msgSel) || t.closest("article"));
+        // Upward: the target sits inside a message (wheel, inner scrollables).
+        if (t.closest(msgSel) || t.closest("article")) return true;
+        // Downward: the target is the scroll container that holds messages.
+        return !!(typeof t.querySelector === "function" && (t.querySelector(msgSel) || t.querySelector("article")));
       };
       const topOf = (t) => {
         if (t && typeof t.scrollTop === "number" && t !== document && t !== document.documentElement) {

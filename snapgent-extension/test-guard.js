@@ -140,3 +140,17 @@ const G = new Function(
   const never = G.heartbeatDecision({ now: 999999, lastMessageAt: 0, staleMs: S });
   ok("never-heard-from bridge is not treated as stale", never.shouldProbe === false && never.close === false);
 }
+
+// ── The worker uses the shared rule, not a copy ───────────────────────────
+// Guards the exact regression the reviewer found in runTool: a helper that the
+// tests cover but the running code never calls. background.js must load
+// core/guard.js via importScripts and consult ZSGuard.heartbeatDecision.
+{
+  const fs = require("fs");
+  const bg = fs.readFileSync(__dirname + "/background.js", "utf8");
+  ok("background.js imports the shared guard", /importScripts\(\s*["']core\/guard\.js["']\s*\)/.test(bg));
+  ok("background.js calls ZSGuard.heartbeatDecision", /ZSGuard\.heartbeatDecision\s*\(/.test(bg));
+  // The inline elapsed-time gate must be gone, or the worker keeps its own copy.
+  ok("no inline elapsed-time socket gate remains",
+    !/Date\.now\(\)\s*-\s*lastMessageAt\s*>\s*STALE_SOCKET_MS\s*\)\s*\{/.test(bg));
+}

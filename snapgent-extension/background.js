@@ -7,6 +7,19 @@
 // Contract with content.js: every sendMessage ALWAYS gets a response object,
 // even when the bridge is offline. The agentic loop must never hang waiting.
 
+// Shared execution policy, so the heartbeat runs the SAME rule the tests pin.
+// core/guard.js is plain top-level script (no modules), so importing it here
+// defines the identical `ZSGuard` binding in the worker global scope that the
+// content scripts get from manifest.json. Without this the worker carried an
+// inline copy of the rule while the tests covered the guard.js one - the very
+// "tested logic is not the running logic" mistake the retry path already had.
+//
+// `importScripts` only exists in the worker; node-based tests inject ZSGuard
+// themselves (see test-background.js), so the absence of it is not an error.
+if (typeof importScripts === "function" && typeof ZSGuard === "undefined") {
+  try { importScripts("core/guard.js"); } catch (e) { console.warn("guard.js not loaded:", e); }
+}
+
 const PORT = 17613;
 const URL = `ws://127.0.0.1:${PORT}`;
 
@@ -171,9 +184,24 @@ function startHeartbeat() {
       // 203 connect/disconnect events in a day while a manual ping answered in
       // 1 ms). So ask the bridge for a real pong and close only when it does
       // not answer.
-      if (lastMessageAt && Date.now() - lastMessageAt > STALE_SOCKET_MS) {
+      //
+      // The decision itself lives in ZSGuard.heartbeatDecision (imported at the
+      // top of this file) so the tested rule is the rule that runs.
+      const decision = ZSGuard.heartbeatDecision({
+        now: Date.now(),
+        lastMessageAt,
+        staleMs: STALE_SOCKET_MS,
+      });
+      if (decision.shouldProbe) {
         const pong = await send({ type: "ping" }, 4000).catch(() => null);
-        if (connected && !(pong && pong.ok)) {
+        const answered = !!(pong && pong.ok);
+        const final = ZSGuard.heartbeatDecision({
+          now: Date.now(),
+          lastMessageAt,
+          staleMs: STALE_SOCKET_MS,
+          pongAnswered: answered,
+        });
+        if (connected && final.close) {
           log("socket stale after failed ping, forcing reconnect");
           try { ws.close(); } catch {}
         } else {

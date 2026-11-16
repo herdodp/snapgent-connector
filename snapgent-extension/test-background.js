@@ -52,12 +52,18 @@ global.WebSocket = DeadSocket;
 
 // background.js runs as an IIFE-less module body; evaluate it and grab the
 // internals we need through a trailing export hook.
+//
+// ZSGuard is injected here exactly as the worker gets it via importScripts, so
+// the heartbeat in the test runs the same rule the service worker runs.
+const guardSrc = fs.readFileSync(__dirname + "/core/guard.js", "utf8");
+const ZSGuard = (0, eval)(guardSrc + "\n; ZSGuard;");
 const src = fs.readFileSync(__dirname + "/background.js", "utf8");
 const internals = new Function(
   "chrome",
   "WebSocket",
+  "ZSGuard",
   src + "\n; return { send, failAllPending, pending, setConnected: (v) => { connected = v; }, setWs: (w) => { ws = w; } };"
-)(global.chrome, global.WebSocket);
+)(global.chrome, global.WebSocket, ZSGuard);
 
 const { send, failAllPending, pending } = internals;
 
