@@ -7,6 +7,19 @@
 // Contract with content.js: every sendMessage ALWAYS gets a response object,
 // even when the bridge is offline. The agentic loop must never hang waiting.
 
+// Shared execution policy, so the heartbeat runs the SAME rule the tests pin.
+// core/guard.js is plain top-level script (no modules), so importing it here
+// defines the identical `ZSGuard` binding in the worker global scope that the
+// content scripts get from manifest.json. Without this the worker carried an
+// inline copy of the rule while the tests covered the guard.js one - the very
+// "tested logic is not the running logic" mistake the retry path already had.
+//
+// `importScripts` only exists in the worker; node-based tests inject ZSGuard
+// themselves (see test-background.js), so the absence of it is not an error.
+if (typeof importScripts === "function" && typeof ZSGuard === "undefined") {
+  try { importScripts("core/guard.js"); } catch (e) { console.warn("guard.js not loaded:", e); }
+}
+
 const PORT = 17613;
 const URL = `ws://127.0.0.1:${PORT}`;
 
@@ -25,6 +38,46 @@ const HEARTBEAT_MS = 10000;
 // reconnect. Must stay below the bridge ping_timeout (90s).
 const STALE_SOCKET_MS = 60000;
 const REQUEST_TIMEOUT_DEFAULT = 130000; // a bit above the 120s tool timeout
+// Cheap probe types (liveness pings, status reads) must not inherit the full
+// tool budget: a local bridge answers in single-digit milliseconds, so waiting
+// two minutes for a ping only delays the "offline" report the UI needs.
+//
+// MEASURED on a live bridge (v3.9.4, port 17613, 16 Nov 2026), including the
+// worst case of a target server that is NOT connected:
+//
+//   ping              0.4 ms     list_tools                   2.3 ms (0.8 ms again)
+//   get_tools         0.4 ms     get_tools(roblox, offline)   0.3 ms
+//   capabilities      0.3 ms     studio_status               46.3 ms (0.2 ms again)
+//   list_mcp_servers  0.8 ms     get_servers                  0.5 ms
+//
+// The slowest observed answer is one cold studio_status at 46 ms - three orders
+// of magnitude below the 6000 ms cap. A false timeout therefore needs a bridge
+// that is genuinely stuck, which is exactly what the cap is meant to surface.
+const FAST_TIMEOUT = 6000;
+// Probes the bridge answers instantly (single-digit ms on a healthy local
+// socket). They must not inherit the full tool budget, otherwise the loop sits
+// waiting two minutes just to learn the bridge is offline.
+const FAST_TYPES = new Set([
+  "ping", "studio_status", "list_mcp_servers", "get_servers",
+  "list_tools", "get_tools", "capabilities",
+]);
+// How long to wait for a socket that is not open before declaring it offline.
+// The reconnect ceiling is 2s and connecting to a LOCAL socket takes a few ms,
+// so a healthy bridge reconnects well inside this window; waiting longer is
+// exactly the "bridge is unreachable" delay users complained about.
+//
+// DELIBERATELY shorter than the 4314 ms measured for a socket that was MID-
+// RECONNECT: the first probe is expected to lose that race, and runTool's
+// preflight allows one more attempt.
+//
+// Be precise about what the two attempts cover. The 8000 ms in the preflight is
+// only the RACE timeout around bg({type:"ping"}); the second ping still waits at
+// most CONNECT_WAIT_MS (2.5 s) for the socket itself. So the two attempts spend
+// roughly 2 x 2.5 s = 5 s waiting on the connection, which is what makes the
+// measured 4.3 s case land on the retry. Without the retry, blocking the FIRST
+// attempt for 4.3 s would tax every ordinary cold start to cover a case the
+// second attempt already handles.
+const CONNECT_WAIT_MS = 2500;
 
 let ws = null;
 let connected = false;
@@ -121,14 +174,43 @@ function scheduleReconnect() {
 
 function startHeartbeat() {
   stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
+  heartbeatTimer = setInterval(async () => {
     if (connected) {
       // Half-open socket: the WS still reports OPEN but nothing comes through.
-      // The pong (and every other frame) refreshes lastMessageAt; if it has
-      // gone stale, drop the dead socket so onclose triggers a reconnect.
-      if (lastMessageAt && Date.now() - lastMessageAt > STALE_SOCKET_MS) {
-        log("socket stale, forcing reconnect");
-        try { ws.close(); } catch {}
+      //
+      // STALENESS IS PROVED, NOT GUESSED. Chrome suspends an idle MV3 service
+      // worker and setInterval does not run while suspended, so on wake-up
+      // lastMessageAt is ALWAYS older than STALE_SOCKET_MS. Closing on elapsed
+      // time alone therefore killed a perfectly healthy socket, onclose
+      // reconnected, the worker idled again and the cycle repeated (measured:
+      // 203 connect/disconnect events in a day while a manual ping answered in
+      // 1 ms). So ask the bridge for a real pong and close only when it does
+      // not answer.
+      //
+      // The decision itself lives in ZSGuard.heartbeatDecision (imported at the
+      // top of this file) so the tested rule is the rule that runs.
+      const decision = ZSGuard.heartbeatDecision({
+        now: Date.now(),
+        lastMessageAt,
+        staleMs: STALE_SOCKET_MS,
+      });
+      if (decision.shouldProbe) {
+        const pong = await send({ type: "ping" }, 4000).catch(() => null);
+        const answered = !!(pong && pong.ok);
+        const final = ZSGuard.heartbeatDecision({
+          now: Date.now(),
+          lastMessageAt,
+          staleMs: STALE_SOCKET_MS,
+          pongAnswered: answered,
+        });
+        if (connected && final.close) {
+          log("socket stale after failed ping, forcing reconnect");
+          try { ws.close(); } catch {}
+        } else {
+          // The bridge answered, so the socket is healthy: the gap was the
+          // suspended worker, not a dead half-open socket.
+          lastMessageAt = Date.now();
+        }
         return;
       }
       // Keeps the MV3 service worker alive AND detects a half-open socket.
@@ -165,30 +247,41 @@ function waitForConnection(timeout = 8000) {
 async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
   // The MV3 service worker can be suspended; the first message after a wake-up
   // arrives before the socket has re-opened. Wait for it instead of failing -
-  // otherwise Kimi wrongly hears "bridge offline".
+  // otherwise Kimi wrongly hears "bridge offline". Probe types fail fast so the
+  // loop learns "offline" quickly instead of staring at a spinner; a real tool
+  // run still waits the longer budget.
+  const fast = FAST_TYPES.has(obj && obj.type);
   if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-    await waitForConnection(8000);
+    await waitForConnection(fast ? CONNECT_WAIT_MS : 8000);
   }
   return new Promise((resolve) => {
     if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-      resolve({ ok: false, kind: "disconnected", error: "bridge not connected" });
+      resolve({ ok: false, kind: "disconnected", sent: false, error: "bridge not connected" });
       return;
     }
     const id = nextId++;
     const payload = { ...obj, id };
+    // A probe the bridge answers in milliseconds must not inherit the full tool
+    // budget; otherwise "offline" takes two minutes to surface.
+    const effectiveTimeout = fast ? Math.min(timeout, FAST_TIMEOUT) : timeout;
     const timer = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
         resolve({ ok: false, kind: "timeout", error: "bridge did not respond in time" });
       }
-    }, timeout);
-    pending.set(id, { resolve, timer });
+    }, effectiveTimeout);
+    pending.set(id, { resolve, timer, sent: false });
     try {
       ws.send(JSON.stringify(payload));
+      // Past this line the bridge may already have executed the request. A
+      // caller that retries has to know the difference: retrying a write_file
+      // or a git_commit that did land would apply it twice.
+      const entry = pending.get(id);
+      if (entry) entry.sent = true;
     } catch (e) {
       clearTimeout(timer);
       pending.delete(id);
-      resolve({ ok: false, kind: "disconnected", error: String(e) });
+      resolve({ ok: false, kind: "disconnected", sent: false, error: String(e) });
     }
   });
 }
@@ -284,7 +377,10 @@ function resolvePending(id, value) {
 function failAllPending(reason) {
   for (const [, p] of pending) {
     clearTimeout(p.timer);
-    p.resolve({ ok: false, kind: "disconnected", error: reason });
+    // `sent` tells the caller whether the frame left the extension. A request
+    // still waiting on waitForConnection never reached the bridge, so it is
+    // safe to re-send; one that had gone out may already have run.
+    p.resolve({ ok: false, kind: "disconnected", sent: !!p.sent, error: reason });
   }
   pending.clear();
 }
@@ -308,6 +404,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "status":
         if (!connected) connect(); // self-heal after a worker wake-up
         sendResponse(statusObj());
+        break;
+      // Liveness probe for the content script. Without this case a
+      // bg({type:"ping"}) falls through to `default:` and answers
+      // {ok:false, error:"unknown message"} - which any caller reads as "the
+      // bridge is down" even though it is perfectly healthy (measured: ping
+      // 1 ms, 28 tools listed). Keeping the case here makes the answer
+      // truthful: ok only when the bridge actually returned a pong.
+      case "ping":
+        send({ type: "ping" }, FAST_TIMEOUT).then((r) => {
+          sendResponse(r && r.ok
+            ? { ok: true }
+            : { ok: false, kind: (r && r.kind) || "no_pong", error: (r && r.error) || "bridge did not answer the ping" });
+        }).catch((e) => {
+          sendResponse({ ok: false, kind: "error", error: String(e) });
+        });
         break;
       case "list_tools": {
         // Prefer a live refresh; fall back to cache so the loop never stalls.

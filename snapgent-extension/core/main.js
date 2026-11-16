@@ -191,6 +191,11 @@
     // clears it - the live generation signal toggles off/on as the loop drains,
     // which otherwise made the Stop button vanish then reappear.
     stopping: false,
+    // held: a command is parked waiting for the scroll window to lapse (see
+    // waitScrollWindow). The Stop control must stay visible while it is set:
+    // scrollSuppressed() hides the button for the very same reason the command
+    // is being held, so without this the user would have no way to cancel.
+    held: false,
     // userStopped: the user deliberately halted generation - via our "■ Stop"
     // button OR the site's native stop. While set, the auto-resume watchdog
     // must NOT relaunch or re-run a tool from the halted turn.
@@ -500,6 +505,16 @@
 
     while (Date.now() - lastActiveAt < TIMEOUT) {
       if (A.stop) return { kind: "stopped" };
+      // SCROLL-AWAY RULE: while the user scrolls up, NOTHING is read or run.
+      // Hold here (and keep the inactivity clock alive, since this is the user
+      // browsing, not a stalled model) so no scroll-rendered history can be
+      // interpreted as a fresh command. Resumes as soon as the gesture window
+      // lapses; a genuine run that was already in flight is untouched.
+      if (scrollSuppressed()) {
+        lastActiveAt = Date.now();
+        await sleep(250);
+        continue;
+      }
       // NEVER let a deadline expire while the tab is in the background. A hidden
       // tab has no layout (innerText reads come back "", getBoundingClientRect is
       // 0x0) and Chrome throttles its timers, so every read here is unreliable -
@@ -1012,6 +1027,62 @@
     const name = call.tool;
     const args = call.arguments || {};
     if (!name) return ZS.FEEDBACK.parseError("malformed");
+    // SCROLL-AWAY RULE (final choke point): while the user is scrolling up
+    // through history nothing is executed - but the command is HELD, not
+    // cancelled. It used to return "skipped: conversation scrolled up", which
+    // dropped the call entirely: if the user happened to scroll just as a
+    // command became ready, the model was told its work had not run and the
+    // task stalled. The PR describes a hold, so wait the suppression window out
+    // and then proceed. A Stop still wins, and the wait is bounded.
+    if (scrollSuppressed()) {
+      diag("tool.holdScrolling", { name });
+      // Mark the hold so the busy surface keeps the Stop control visible while
+      // we wait; scrollSuppressed() would otherwise hide it for the whole wait.
+      A.held = true;
+      renderBar();
+      let waited = false;
+      try {
+        waited = await waitScrollWindow();
+      } finally {
+        A.held = false;
+      }
+      renderBar();
+      if (!waited) {
+        // Stopped by the user while parked - do not run the command.
+        return "ERROR: the command was not run - stopped by the user.";
+      }
+      diag("tool.resumeAfterScroll", { name });
+    }
+    // ── Fast liveness probe ────────────────────────────────────────────────
+    // A dead bridge used to cost the full tool budget before the loop learned it
+    // was offline, so the chat felt far slower than on other providers for the
+    // SAME work. A local bridge answers a ping in single-digit milliseconds when
+    // the socket is WARM - but a COLD/reconnecting socket was measured at 4314ms,
+    // so the budget must be generous (a false "offline" is far worse than a slow
+    // probe) and one retry is allowed before giving up. The probe is paid only
+    // when the cache is cold (>15s), so normal runs cost nothing.
+    if (!A._bridgeProbeOkAt || Date.now() - A._bridgeProbeOkAt > 15000) {
+      const probeOnce = (budget) => Promise.race([
+        bg({ type: "ping" }),
+        new Promise((res) => setTimeout(() => res({ ok: false, kind: "timeout" }), budget)),
+      ]);
+      let probe = await probeOnce(6000);
+      let probeOk = probe && (probe.ok !== false) && probe.kind !== "disconnected" && probe.kind !== "timeout";
+      if (!probeOk) {
+        // One more chance: a socket that was mid-reconnect on the first attempt
+        // is usually settled a couple of seconds later.
+        probe = await probeOnce(8000);
+        probeOk = probe && (probe.ok !== false) && probe.kind !== "disconnected" && probe.kind !== "timeout";
+      }
+      if (!probeOk) {
+        diag("bridge.preflightFail", { name, kind: (probe && probe.kind) || "none" });
+        A._bridgeProbeOkAt = 0;
+        ui.banner("warn", "Bridge offline",
+          "snapgentV3 bridge is unreachable - start it and keep the selected target app open.");
+        return ZS.FEEDBACK.bridgeOffline;
+      }
+      A._bridgeProbeOkAt = Date.now();
+    }
     // NEVER execute while the AI tab is backgrounded/minimized. This is the single
     // choke point for ALL execution (agentLoop's tool dispatch AND the bootstrap's
     // list_commands), so it closes the hole the loop-entry gate alone left open:
@@ -1251,9 +1322,47 @@
       diag("bridge.staleExtension", { name, error: r.error });
       return ZS.FEEDBACK.staleExtension;
     }
-    if (r.kind === "disconnected") return ZS.FEEDBACK.bridgeOffline;
+    if (r.kind === "disconnected") {
+      // A socket that is mid-reconnect reports "disconnected" even though the
+      // bridge is alive (measured: reconnect takes ~4.3s). Retry ONCE after a
+      // short settle before declaring the bridge offline - a false "offline"
+      // makes the model stop working and shows "tool failed" to the user.
+      //
+      // BUT only when the request provably never left. The rule lives in
+      // ZSGuard so the tested logic IS the running logic: `sent === false` means
+      // the bridge cannot have run it; `sent === true` may already have executed
+      // write_file / run_command / git_commit. A reply WITHOUT the field (an
+      // older bridge) is treated as unsafe for the same reason - re-sending a
+      // write that did land is worse than reporting the ambiguity.
+      if (!ZSGuard.mayRetryAfterDisconnect(r)) {
+        diag("bridge.noRetryAfterSend", { name, sent: r.sent });
+        ui.banner("warn", "Connection dropped",
+          `The bridge stopped answering while '${name}' was in flight. It may already have run - check the result before repeating it.`);
+        return ZSGuard.inFlightFailure(name);
+      }
+      diag("bridge.disconnectedRetry", { name });
+      await new Promise((res) => setTimeout(res, 1200));
+      const retry = await Promise.race([
+        bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }),
+        hardCap,
+      ]);
+      // The retry itself has to be judged by the same rule. A second attempt
+      // that goes out and then drops must NOT be reported as "bridge offline":
+      // the tool may have run, and the model would retry it again.
+      if (retry && retry.kind === "disconnected" && !ZSGuard.mayRetryAfterDisconnect(retry)) {
+        diag("bridge.noRetryAfterSend", { name, sent: retry.sent, attempt: 2 });
+        ui.banner("warn", "Connection dropped",
+          `The bridge stopped answering while '${name}' was in flight. It may already have run - check the result before repeating it.`);
+        return ZSGuard.inFlightFailure(name);
+      }
+      if (retry && retry.kind !== "disconnected") {
+        r = retry;
+      } else {
+        return ZS.FEEDBACK.bridgeOffline;
+      }
+    }
     if (r.kind === "timeout") {
-      return `ERROR: tool '${name}' timed out after ${name === "execute_luau" ? 20 : 120}s.\n${r.error}\nTry a shorter/simpler call or check that Roblox Studio is open and responsive.`;
+      return `ERROR: tool '${name}' timed out after ${name === "execute_luau" ? 20 : 120}s.\n${r.error}\nTry a shorter/simpler call or check that the selected target app is open and responsive.`;
     }
     if (name === "execute_luau") {
       const err = r.error || "";
@@ -1750,6 +1859,108 @@
   // re-execution IDEMPOTENT regardless of any isGenerating/lastGenAt heuristic
   // misfire - the hard part (is this a live turn?) can be wrong without harm.
   const executed = new Map(); // "conv|turnKey" → text prefix at dispatch time
+  // ── Scroll-away suppression ───────────────────────────────────────────────
+  // The user's own rule, requested after the replay bug: while they scroll UP
+  // through history, nothing about the agent may look alive. Scrolling a
+  // virtualized transcript renders different turns, which makes the "last
+  // rendered turn" lie about liveness (bar shows Stop, watchdog thinks a reply
+  // is still coming). Rather than keeping a growing pile of per-turn heuristics,
+  // we detect the gesture itself and SUPPRESS the busy surface for a short
+  // window. This is a UI/`watchdog` gate only: it never cancels a real run, it
+  // just stops the indicators (and the resume logic) from acting on a scroll.
+  const SCROLL_SUPPRESS_MS = 4000;
+  let scrollUpAt = 0;
+  let scrollSuppressUntil = 0;
+  function noteScrollUp() {
+    const now = Date.now();
+    scrollUpAt = now;
+    scrollSuppressUntil = now + SCROLL_SUPPRESS_MS;
+  }
+  const scrollSuppressed = () => Date.now() < scrollSuppressUntil;
+  // Hold until the suppression window lapses (see core/guard.js: logistics live
+  // there so they can be tested in node without a DOM).
+  const waitScrollWindow = () =>
+    ZSGuard.holdUntilScrollLapses({
+      isSuppressed: scrollSuppressed,
+      isStopped: () => !!A.stop,
+      sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+      capMs: SCROLL_SUPPRESS_MS * 2 + 500,
+    });
+  function installScrollDetector() {
+    try {
+      // Position must be tracked PER SCROLLABLE ELEMENT. The listener is on
+      // `document` in the capture phase, so it sees the transcript, the sidebar,
+      // code blocks and textareas alike. A single shared _lastScrollTop compared
+      // a value from one element against a value from another: scrolling the
+      // sidebar down to 900 and then the transcript (at 400) looked like an
+      // upward move of 500px and suppressed execution for no reason. A WeakMap
+      // keeps one last position per element and lets them be collected.
+      const tracker = ZSGuard.createScrollTracker(24);
+      // Is this target part of the CONVERSATION transcript? Both listeners must
+      // answer the same question, otherwise the scroll and wheel paths disagree
+      // about what counts as "scrolling history".
+      //
+      // `main` is deliberately NOT used as a fallback: it matches nearly the
+      // whole page, which would let a sidebar or composer gesture through. The
+      // provider's message selector is the real signal; a plain article is the
+      // only generic fallback, and a composer/editor is always excluded.
+      //
+      // The two listeners get DIFFERENT kinds of target, so the test has to look
+      // in both directions:
+      //   wheel  -> the element under the cursor, a DESCENDANT of the transcript,
+      //             so `closest()` walking up finds it;
+      //   scroll -> the element that scrolled, normally the transcript CONTAINER
+      //             (an ancestor of every message), so `closest()` finds nothing
+      //             and the event has to be accepted when the target CONTAINS a
+      //             message instead. Window-level scrolling reports `document`,
+      //             which has no `closest` at all and is the provider's scroller
+      //             for some layouts, so it is accepted as the transcript too.
+      //
+      // A filter that only walked up silently dropped scrollbar, keyboard and
+      // touch scrolling while the wheel path kept working - a regression on the
+      // exact gesture the suppression exists for.
+      const inTranscript = (t) => {
+        if (!t) return false;
+        // The window/document scroller is the transcript for window-level
+        // layouts; a composer or editor is never the transcript.
+        if (t === document || t === document.documentElement || t === window) return true;
+        if (!t.closest) return false;
+        if (t.closest("textarea, input, .cm-editor, [contenteditable='true']")) return false;
+        const msgSel = P.msgSel || "[data-message-author-role]";
+        // Upward: the target sits inside a message (wheel, inner scrollables).
+        if (t.closest(msgSel) || t.closest("article")) return true;
+        // Downward: the target is the scroll container that holds messages.
+        return !!(typeof t.querySelector === "function" && (t.querySelector(msgSel) || t.querySelector("article")));
+      };
+      const topOf = (t) => {
+        if (t && typeof t.scrollTop === "number" && t !== document && t !== document.documentElement) {
+          return { key: t, top: t.scrollTop };
+        }
+        return { key: document.documentElement, top: window.scrollY || document.documentElement.scrollTop || 0 };
+      };
+      const onScroll = (ev) => {
+        const target = ev && ev.target;
+        // The same transcript-only rule as the wheel listener below.
+        if (!inTranscript(target)) return;
+        const { key, top } = topOf(target);
+        // Moving UP through a turn is the problematic gesture. The 24px
+        // threshold ignores layout jitter and stream-driven auto-scroll (which
+        // only ever moves DOWN as the reply grows).
+        if (tracker.observe(key, top)) noteScrollUp();
+      };
+      // capture:true - ChatGPT scrolls inner containers, not just the window.
+      document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+      // WHEEL: only a gesture over the transcript counts. Scrolling up inside the
+      // sidebar, a code block or the composer is unrelated to replaying history,
+      // and used to hold execution as if the user had scrolled the conversation.
+      window.addEventListener("wheel", (ev) => {
+        if (!(ev && ev.deltaY < 0)) return;
+        if (!inTranscript(ev.target)) return;
+        noteScrollUp();
+      }, { passive: true });
+    } catch {}
+  }
+  installScrollDetector();
   function rememberExecuted(item) {
     if (!item) return;
     try {
@@ -2883,6 +3094,7 @@
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
     let bridgeOk = false, workspaceReady = false, workspaceProbePending = false, workspaceProbeAt = 0;
+    let workspaceProbeFails = 0;
     let studioDown = false, placeDown = false, appDown = false, addonOk = false, studioProcUp = false;
     let wasConnected = false, bridgeBannerEl = null;
 
@@ -3681,8 +3893,17 @@
           setupSeen = true;
           try { chrome.storage.local.set({ zsSetupSeen: true }); } catch {}
         }
+        // Workspace probe throttle. A 5 s floor was too tight: renderBar() is
+        // re-entrant (status timer + DOM mutations + this block's own finally()),
+        // so the probe could fire twice in a row and reach ~24 list_dir/min -
+        // measured 29,280 probe calls in one day, which starved real tool calls
+        // and made the bridge look unreachable. Backoff grows after a failure and
+        // success resets it to the floor.
+        const probeFloor = workspaceReady === false && workspaceProbeFails > 0
+          ? Math.min(5000 * Math.pow(2, Math.min(workspaceProbeFails, 5)), 300000)
+          : 30000;
         if (selectedTargetId === "vscode" && serverConnected && !workspaceProbePending &&
-            Date.now() - workspaceProbeAt >= 5000) {
+            Date.now() - workspaceProbeAt >= probeFloor) {
           workspaceProbeAt = Date.now();
           workspaceProbePending = true;
           ensureTools(false).then(() => {
@@ -3691,6 +3912,7 @@
               ((selected.tools || 0) > 0 || activeTools().length > 0);
             if (!workspaceTool) {
               workspaceReady = false;
+              workspaceProbeFails += 1;
               return;
             }
             return bg({
@@ -3700,13 +3922,17 @@
               timeout: 5000,
             }).then((result) => {
               workspaceReady = !!(result && result.ok);
+              workspaceProbeFails = workspaceReady ? 0 : workspaceProbeFails + 1;
             });
           }).catch((error) => {
             workspaceReady = false;
+            workspaceProbeFails += 1;
             console.warn("[snapgentV3] Could not verify VS Code workspace:", error);
           }).finally(() => {
             workspaceProbePending = false;
-            renderBar();
+            // Do NOT call renderBar() here: this block runs *inside* renderBar(),
+            // so it would recurse and re-arm the probe immediately - one of the
+            // causes of the list_dir probe storm.
           });
         } else if (selectedTargetId === "vscode" && !serverConnected) {
           workspaceReady = false;
@@ -3818,7 +4044,7 @@
       const b = document.createElement("div");
       b.className = "zs-banner limit";
       b.innerHTML = `<div class="zs-banner-t">⚠ snapgentV3 disconnected</div>
-        <div class="zs-banner-m">Bridge stopped. Run start.bat and keep Roblox Studio open.</div>
+        <div class="zs-banner-m">Bridge stopped. Run start.bat and keep the selected target app open.</div>
         <div class="zs-banner-acts"><button class="zs-banner-x">Close</button></div>`;
       b.querySelector(".zs-banner-x").addEventListener("click", () => { b.remove(); if (bridgeBannerEl === b) bridgeBannerEl = null; });
       root.appendChild(b);
@@ -4134,6 +4360,16 @@
 
     function inputCover(on) {
       const ed = P.getEditor();
+      // Scrolling up through history hides the busy cover as well: the user is
+      // browsing, not watching the agent. The INTENT flag stays untouched, so
+      // the cover returns by itself once the scroll window expires and the loop
+      // is still genuinely running.
+      if (on && scrollSuppressed()) {
+        if (cover) cover.style.display = "none";
+        if (ed) ed.classList.remove("zs-typing");
+        cancelAnimationFrame(coverRaf);
+        return;
+      }
       if (!on) {
         if (cover) { cover.style.display = "none"; cover.dataset.on = ""; }
         if (ed) ed.classList.remove("zs-typing");
@@ -4559,7 +4795,13 @@
         diag("stop.quiet"); // drain over: site quiet, Stopping… released
       }
     }
-    ui.showStop(A.running || A.toolRunning || A.stopping || (A.started && P.isHardGenerating()));
+    // While the user scrolls up through history the transcript re-renders and
+    // every liveness signal becomes unreliable, so the busy surface is
+    // suppressed outright (user rule, 14 Nov 2026): no Stop, no working cover.
+    // EXCEPTION: a command parked by the hold (A.held) keeps the Stop control
+    // visible - otherwise the suppression hides the only way to cancel it.
+    ui.showStop((A.held || !scrollSuppressed()) &&
+      (A.running || A.toolRunning || A.stopping || (A.started && P.isHardGenerating())));
 
     // Tool is executing on the MCP → timer on its chip.
     if (A.toolRunning && A.toolItem) {
@@ -4881,6 +5123,10 @@
     if (!A.started || A.running || A.starting || A.injecting) return;
     if (document.hidden) return;                         // AI tab not foreground → don't parse/exec off-screen (agentLoop gates too)
     if (A.userStopped) return;                          // user halted → never relaunch
+    // Scrolling up through history means the transcript is re-rendering, not the
+    // agent working: suppress resume entirely for the gesture window so no
+    // historical command can be re-dispatched (user rule, 14 Nov 2026).
+    if (scrollSuppressed()) return;
     if (P.isGenerating()) return;
     if (Date.now() - A.lastGenAt > RESUME_FRESH_MS) return; // not a fresh live turn
     const item = P.lastAssistant();

@@ -44,7 +44,7 @@
   "content_scripts": [
     {
       "matches": ["https://chat.deepseek.com/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/deepseek.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/deepseek.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
@@ -56,61 +56,61 @@
     },
     {
       "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/chatgpt.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/chatgpt.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://claude.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/claude.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/claude.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://gemini.google.com/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/gemini.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/gemini.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://www.kimi.ai/*", "https://kimi.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/kimi.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/kimi.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://chat.z.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/glm.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/glm.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://arena.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/arena.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/arena.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://www.meta.ai/*", "https://meta.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/meta.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/meta.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://ptero.pro/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/ptero.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/ptero.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://grok.com/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/grok.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/grok.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://chat.mistral.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/mistral.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/mistral.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
@@ -122,7 +122,7 @@
     },
     {
       "matches": ["https://chat.qwen.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "providers/qwen.js", "core/main.js"],
+      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/qwen.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }

@@ -306,36 +306,71 @@ const ZSProvider = (() => {
   // brace slice chopped markdown before the first "[" - and that corrupted text
   // is exactly what feeds kind:"text" loop context. Parsing does not need it:
   // extractToolAnywhere/CMD_KEY_RE. So strip only when the raw text actually
-  // carries the glued 2026-11 chrome.  // Shape B opens with the speaker word AND/OR the bare language label; both are
+  // carries the glued 2026-11 chrome.
+  // Shape B opens with the speaker word AND/OR the bare language label; both are
   // chrome, never content. Requiring the payload directly behind them keeps
   // ordinary prose ("Python is a language.") untouched.
-  const LANG_LABEL = /(?:json|javascript|js|html|css|python|bash|sh|shell|text|plaintext|xml|sql|lua|yaml)/i;
+  // A BARE LANGUAGE LABEL may sit between the speaker chrome and the payload
+  // ("ChatGPT said:ChatGPTJSON{...}"). Two traps this pattern has to avoid, both
+  // present in the original and both destructive:
+  //
+  //   1. No word boundary. Without `\b`, a reply starting "Should we proceed?"
+  //      was eaten by the `sh` alternative ("ould we proceed?"), and a leading
+  //      "Text of the file follows" was consumed whole.
+  //   2. Alternation order. `sh` comes before `shell`, so "shell\nls" matched
+  //      `sh` first and became "ell\nls". Longest-first ordering fixes that.
+  //
+  // Requiring a separator after the label (colon, newline, or a payload brace)
+  // keeps ordinary prose that merely STARTS with one of these words intact.
+  const LANG_LABEL_SEQ =
+    "javascript|plaintext|python|shell|bash|json|html|text|xml|sql|lua|yaml|css|js|sh";
+  const LANG_LABEL_PREFIX = new RegExp(
+    "^\\s*(?:" + LANG_LABEL_SEQ + ")\\b\\s*(?::\\s*|\\n\\s*|(?=[{[]))",
+    "i"
+  );
+  // Detectability probe: is a bare label glued in front of the payload at all?
+  const LANG_LABEL = new RegExp("^(?:" + LANG_LABEL_SEQ + ")\\b", "i");
   const LOOKS_GLUED = (t) => {
     if (!t) return false;
     // Burn the chrome in the SAME order the stripper does: speaker word, then a
     // second glued "ChatGPT", then the bare language label (see the verbatim
-    // sample above: "ChatGPT said:ChatGPTJSON{…}").
+    // sample above: "ChatGPT said:ChatGPTJSON{…}"). The label pass is the same
+    // LANG_LABEL_PREFIX the stripper uses, so detection and removal can never
+    // disagree about what counts as chrome.
     const payload = t.slice(0, 96)
-      .replace(/^\s*(?:chatgpt\s+(?:said|dit))\s*:?\s*/i, "")
+      .replace(SR_REPLY, "")
       .replace(/^chatgpt\s*/i, "")
-      .replace(new RegExp("^" + LANG_LABEL.source + "\\s*:?\\s*", "i"), "");
+      .replace(LANG_LABEL_PREFIX, "");
     if (!/^\s*[{[]/.test(payload)) return false;
     // Only a string that actually carried some chrome gets stripped.
     return payload.length < t.replace(/^\s+/, "").length;
   };
+  // Strip the 2026-11 speaker chrome from the START of a reply, and nothing else.
+  //
+  // `anything` is a BARE LANGUAGE LABEL glued in front of the payload ("ChatGPT
+  // said:ChatGPTJSON{...}"). Both belong to the reply's chrome, never to content.
+  //
+  // ANCHORED ON PURPOSE. This used to be a GLOBAL replace
+  // (/chatgpt\s+(?:said|dit)\s*:?/gi), which deleted the words from the middle of
+  // a payload too - a write_file whose content literally contained "ChatGPT
+  // said:" lost that text silently. The brace slice below had the same flaw: it
+  // cut everything before the first "{" or "[", so any prose that happened to
+  // precede a command envelope was destroyed.
+  //
+  // Takes ONE argument now; the callers used to pass two, so the second (the DOM
+  // item) was meaningless.
   const stripAssistantSrPrefix = (t) => {
     if (!t) return t;
     if (!LOOKS_GLUED(t)) return t;
-    let s = t.replace(SR_REPLY, "");
-    s = s.replace(/chatgpt\s+(?:said|dit)\s*:?/gi, "").replace(/^chatgpt/i, "");
-    s = s.replace(
-      /^\s*(?:json|javascript|js|html|css|python|bash|sh|shell|text|plaintext|xml|sql|lua|yaml)\s*\n?/i,
-      ""
-    );
-    // Belt and braces: the payload starts at its first brace/bracket.
-    const brace = s.search(/[{[]/);
-    if (brace > 0) s = s.slice(brace);
-    return s;
+    // Only the leading chrome, in the same order LOOKS_GLUED burns it. SR_REPLY
+    // is the speaker word ("ChatGPT said:" / "ChatGPT dit:"); the bare "ChatGPT"
+    // pass drops the doubled word the 2026-11 chrome repeats; the label pass
+    // removes a glued language name. All three are anchored, so a payload keeps
+    // its own text.
+    return t
+      .replace(SR_REPLY, "")
+      .replace(/^chatgpt\s*/i, "")
+      .replace(LANG_LABEL_PREFIX, "");
   };
 
   function classifyText(item, excludeSel) {
@@ -351,7 +386,7 @@ const ZSProvider = (() => {
     if (isAssistantItem(item)) {
       return stripAssistantSrPrefix(replyNodes(item)
         .filter((m) => !(excludeSel && m.closest(excludeSel)))
-        .map((m) => textWithout(m, excludeSel)).join("\n"), item);
+        .map((m) => textWithout(m, excludeSel)).join("\n"));
     }
     return isUserItem(item)
       ? stripSrPrefix(textWithout(item, excludeSel))
@@ -386,8 +421,17 @@ const ZSProvider = (() => {
   // a monotonic number, so the core's numeric "old id" shortcut simply doesn't
   // apply here (Number(uuid) is NaN and that guard is skipped) - the
   // settled-history guard covers the same case provider-agnostically.
-  const itemKey = (item) =>
-    (item && item.getAttribute ? item.getAttribute("data-message-id") : null) || null;
+  // The 2026-11 turn no longer carries data-message-id (measured live: 0 turns,
+  // 0 descendants), so the key MUST come from data-turn-key. Without it itemKey
+  // returned null and core's turnKey() fell back to a POSITIONAL index, which
+  // collides as soon as scrolling changes the rendered window - the guard then
+  // misses and the resume watchdog re-fires a historical tool.
+  const itemKey = (item) => {
+    if (!item || !item.getAttribute) return null;
+    return item.getAttribute("data-turn-key")
+      || item.getAttribute("data-message-id")
+      || null;
+  };
   const lastAssistantId = () => itemKey(lastAssistant());
 
   const chatIsEmpty = () => allItems().length === 0;
@@ -532,17 +576,52 @@ const ZSProvider = (() => {
     const item = lastAssistant();
     const len = streamText(item).length;
     const now = Date.now();
+    // A swap counts as NEW OUTPUT only when the arriving turn carries MORE text
+    // than the one we were tracking (a reply grows as it streams). Scrolling just
+    // brings an arbitrary older turn into view, usually at the same or a smaller
+    // length, so the idle clock must keep running in that case. Resetting it on
+    // every swap made a scroll look like generation for GEN_IDLE_MS, which
+    // wrongly showed a Stop button and let the watchdog re-fire old commands.
     if (item !== _streamItem || len < _streamMax - 400) {
-      _streamItem = item; _streamMax = len; _streamAt = now; return;
+      const arrivedLonger = len > _streamMax;
+      _streamItem = item;
+      _streamMax = len;
+      if (arrivedLonger) _streamAt = now;
+      return;
     }
+    // Same turn: only genuine growth refreshes the clock (a large shrink means
+    // the site re-rendered the turn, not that it is streaming).
     if (len > _streamMax) { _streamMax = len; _streamAt = now; }
   }
   const grewWithin = (ms) => _streamMax > 1 && Date.now() - _streamAt < ms;
+
+  // A turn that already has its injected result BELOW it is settled history: it
+  // cannot be streaming, no matter what sampleStream's growth clock last saw.
+  // Scrolling renders such turns as "last assistant", and without this the bar
+  // shows a Stop control and the watchdog considers the old command live.
+  const turnSettled = (item) => {
+    if (!item) return false;
+    try {
+      const all = allItems();
+      const i = all.indexOf(item);
+      if (i < 0) return false;
+      for (let j = i + 1; j < all.length; j++) {
+        const nx = all[j];
+        if (nx === item) continue;
+        if (isUserItem(nx) && /^\s*Output of '/.test(classifyText(nx, ".zs-chip") || "")) return true;
+        if (!isUserItem(nx)) return false;
+      }
+    } catch {}
+    return false;
+  };
 
   const WEDGE_MS = 10000;
   let _stopSince = 0;
   function genActive() {
     sampleStream();
+    // Settled history is never a live generation - checked FIRST so a scroll into
+    // an old command turn can never make the bar show Stop or the watchdog fire.
+    if (turnSettled(lastAssistant())) { _stopSince = 0; return false; }
     const stop = !!stopButton();
     const now = Date.now();
     if (stop) {
@@ -1093,6 +1172,10 @@ const ZSProvider = (() => {
     // Exported for test-chatgpt.js (the Node smoke test drives it against a stub
     // DOM). The core reads replies through itemText/classifyText, not this.
     textWithout,
+    // Internal helpers exposed ONLY so the Node tests can pin them down. They
+    // are pure string functions with no DOM dependency, and none of them is
+    // reachable from the core, so this does not widen the provider's surface.
+    __test: { stripAssistantSrPrefix, LOOKS_GLUED, turnSettled },
     // Vision OFF, like DeepSeek's text-only Expert tab. ChatGPT's free tier caps
     // image/file input separately from messages ("les fichiers, les images et
     // l'analyse sont indisponibles jusqu'à la réinitialisation de votre quota"),
@@ -1141,6 +1224,9 @@ const ZSProvider = (() => {
     scanError, isTooLongMsg, isBusyMsg,
     // actions
     attachImages, clearAttachments, openNewChat, conversationKey,
+    // Selector for a transcript turn, so core can tell a scroll of the
+    // conversation from a scroll of unrelated chrome (sidebar, composer).
+    msgSel: S.msg,
     installSendHooks, findToolBlockSpot,
     promptExtra: PROMPT_EXTRA,
     // ChatGPT summarises its own context aggressively and loses the "an
