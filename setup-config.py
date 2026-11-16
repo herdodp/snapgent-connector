@@ -250,6 +250,18 @@ def main() -> int:
             else:
                 print("EffectCraft CLI not found; install its Linux CLI and put effectcraft-cli on PATH.")
 
+        uvx_path = shutil.which("uvx")
+        if uvx_path:
+            _set_server(
+                servers,
+                "word",
+                uvx_path,
+                ["--from", "office-word-mcp-server", "word_mcp_server"],
+            )
+            print(f"Word MCP detected (uvx): {uvx_path}")
+        else:
+            print("uv not found; Word MCP not configured. Install uv from https://docs.astral.sh/uv/ and run this script again.")
+
         CONFIG_PATH.write_text(
             json.dumps(configuration, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",

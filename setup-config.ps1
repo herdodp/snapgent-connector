@@ -198,6 +198,25 @@ else {
     Write-Host "REA not found; install it with: npm install --global rea-agents"
 }
 
+$wordUvx = Get-Command uvx.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($wordUvx) {
+    $wordServer = [pscustomobject]@{
+        command = $wordUvx.Source
+        args = @('--from', 'office-word-mcp-server', 'word_mcp_server')
+        env = [pscustomobject]@{}
+    }
+    if ($configuration.mcpServers.PSObject.Properties['word']) {
+        $configuration.mcpServers.word = $wordServer
+    }
+    else {
+        $configuration.mcpServers | Add-Member -MemberType NoteProperty -Name word -Value $wordServer
+    }
+    Write-Host "Word MCP detected (uvx): $($wordUvx.Source)"
+}
+else {
+    Write-Host "uv not found; Word MCP not configured. Install uv from https://docs.astral.sh/uv/ and run this script again."
+}
+
 $json = ConvertTo-Json -InputObject $configuration -Depth 20
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ConfigPath, "$json`n", $utf8WithoutBom)

@@ -2,6 +2,20 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.10] - 2026-11-17
+
+### Added
+- **Setup: Word MCP server.** `setup-config.ps1` (Windows) and `setup-config.py` (macOS/Linux)
+  now detect `uvx` and register a `word` server (`office-word-mcp-server`) in `config.json`,
+  so Microsoft Word `.docx` files can be created, read and edited from the chat bar target
+  selector. If `uv` is not installed, the scripts print an install hint and the other
+  servers stay available. The server works on `.docx` files on disk and does not need
+  Microsoft Word to be installed.
+
+### Changed
+- Extension and Snapgent App versions bumped to **3.9.10**. The bridge is unchanged
+  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+
 ## [V3.9.9] - 2026-11-17
 
 ### Fixed
