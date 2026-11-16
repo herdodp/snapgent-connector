@@ -1358,6 +1358,17 @@
       if (retry && retry.kind !== "disconnected") {
         r = retry;
       } else {
+        // Record WHY we are declaring the bridge offline. Every path (socket closed,
+        // never opened, worker gave no answer) ends in the same message otherwise,
+        // so an "unreachable while the bridge is open" report could not be traced.
+        diag("bridge.offlineVerdict", {
+          name,
+          firstError: r && r.error,
+          firstSent: r && r.sent,
+          retryKind: retry ? retry.kind : null,
+          retryError: retry ? retry.error : "no response",
+          retrySent: retry ? retry.sent : null,
+        });
         return ZS.FEEDBACK.bridgeOffline;
       }
     }

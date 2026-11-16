@@ -2,6 +2,17 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.9] - 2026-11-17
+
+### Changed
+- **Extension: the "bridge offline" verdict is now traceable.** Before the extension reports
+  the bridge as offline, it records a `bridge.offlineVerdict` diagnostic with the command
+  name, the error and sent state of the first attempt, and the kind, error and sent state
+  of the retry. Every failure path used to end in the same message, so an "unreachable while
+  the bridge is open" report could not be traced. Behavior is unchanged; only logging was added.
+- Extension and Snapgent App versions bumped to **3.9.9**. The bridge is unchanged
+  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+
 ## [V3.9.8] - 2026-11-16
 
 ### Fixed
