@@ -122,20 +122,6 @@
       </div>
     </section>
 
-    <section class="section wrap" aria-labelledby="guard-title">
-      <h2 id="guard-title">Where it <mark>says no</mark>.</h2>
-      <p class="muted lede">These limits are built in, so they hold whatever the AI asks for. The examples below are from the built-in VS Code server.</p>
-      <dl class="guards">
-        <div><dt>Target isolation</dt><dd>The AI can only list and use the MCP server you selected. Other servers, even enabled ones, stay invisible, and a disabled server cannot be used.</dd></div>
-        <div><dt>delete_file</dt><dd>Deletes one file. Directories, the workspace root and anything under <code>.git</code> are refused.</dd></div>
-        <div><dt>apply_patch</dt><dd>Applies several exact replacements to one file. Each <code>old_text</code> must match exactly once, and nothing is written if any edit fails.</dd></div>
-        <div><dt>git_add</dt><dd>Stages the paths you name. Staging the whole workspace is refused.</dd></div>
-        <div><dt>git_commit</dt><dd>Commits what is already staged. It never stages files itself and has no amend option.</dd></div>
-        <div><dt>create_file, move_file, copy_file</dt><dd>Never overwrite an existing destination.</dd></div>
-        <div><dt>edit_file</dt><dd>Replaces an exact snippet, which must be unique unless <code>replace_all</code> is set.</dd></div>
-      </dl>
-    </section>
-
     <section class="section wrap" id="providers" aria-labelledby="prov-title">
       <div class="split split-tight">
         <div class="split-head">
@@ -209,7 +195,6 @@
           <div><dt>The AI answers without using tools</dt><dd>Remind it to use snapgentV3 commands, or start a new chat.</dd></div>
           <div><dt>The target does not respond</dt><dd>Check that the app is open and its MCP server is running, then switch the target in the selector. After a switch the page reloads, and a running session in that tab has to be started again.</dd></div>
         </dl>
-        <p class="note" style="margin-top:1.5rem">The <a href="https://github.com/herdodp/snapgent-connector#readme" target="_blank" rel="noopener">README</a> has the detection details for each system.</p>
       </div>
     </section>
   </main>
