@@ -4,12 +4,19 @@ All notable changes to snapgentV3 Free are documented here.
 
 ## [V3.9.9] - 2026-11-17
 
+### Fixed
+- **Extension: Background sessions now keep working in a hidden tab.** With the setting on,
+  the reply-wait loop in `waitForResponse` still parked a hidden tab: `waitVisible()` returned
+  at once, so the loop re-entered the park step every 400 ms and never read the reply. The
+  session looked stalled until the tab was shown again. The park step now respects the
+  setting. With the setting off, behavior is unchanged.
+
 ### Changed
 - **Extension: the "bridge offline" verdict is now traceable.** Before the extension reports
   the bridge as offline, it records a `bridge.offlineVerdict` diagnostic with the command
   name, the error and sent state of the first attempt, and the kind, error and sent state
   of the retry. Every failure path used to end in the same message, so an "unreachable while
-  the bridge is open" report could not be traced. Behavior is unchanged; only logging was added.
+  the bridge is open" report could not be traced. This change only adds logging.
 - Extension and Snapgent App versions bumped to **3.9.9**. The bridge is unchanged
   (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
 
