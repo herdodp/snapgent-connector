@@ -216,7 +216,7 @@ The **Word** target works differently from VS Code. It does not follow the open 
 1. Install `uv`, then start the launcher. Look for `Word MCP detected (uvx)` in its output.
 2. Open a supported AI chat site, start a new chat and click **Start**.
 3. In the **MCP target** selector on the chat bar, choose **Word**. If it is not listed, open **MCP servers** from the three-dots (...) menu on the snapgent bar and tick `word`, then reload the extension and refresh the chat tab.
-4. Describe the document you want, for example: *"Create a report in `D:\Documents\report.docx` with a title, three headings and a table."* Giving the full path of the `.docx` file is recommended, because this target does not use the VS Code workspace folder.
+4. Describe the document you want, for example: *"Create a report in `D:\Documents\report.docx` with a title, three headings and a table."* If you give only a file name (for example `report.docx`), the file is created inside the main Snapgent folder, the same folder that contains `start.bat`, `bridge.exe` and `config.json`, because this target does not use the VS Code workspace folder. To save it somewhere else, give the full path of the `.docx` file.
 5. To work on code again, switch the target back to **VS Code**.
 
 **First run:** the first time you use the Word target, `uvx` downloads `office-word-mcp-server` and its dependencies. Wait until the download finishes before sending more requests, and follow the progress in the bridge console (the terminal window running `start.bat`, `MacOS_Start.command` or `Linux_Start.sh`). If the Word target seems stuck or does not respond right after you select it, check that console first. Later runs are usually faster because `uvx` caches the package.
