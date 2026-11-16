@@ -197,6 +197,32 @@ Linux does not auto-detect Roblox Studio MCP. If you have a compatible Linux
 MCP executable, set `ZS_STUDIO_MCP_PATH` to its path before running the
 launcher; Roblox Studio itself may not be available on your Linux distribution.
 
+**Optional: use the Word target (`.docx`)**
+
+The **Word** target works differently from VS Code. It does not follow the open VS Code workspace, and it does **not** need Microsoft Word to be installed. It runs the `office-word-mcp-server` package, which creates, reads and edits `.docx` files directly on disk.
+
+*Requirements*
+
+- **`uv`** installed, so that `uvx` is available. Get it from [docs.astral.sh/uv](https://docs.astral.sh/uv/).
+- Internet access on the first run, because `uvx` downloads `office-word-mcp-server` when it is first used. This first download can take a while, so wait for it to finish and watch its progress in the bridge console window.
+- The bridge started with the normal launcher (`start.bat`, `MacOS_Start.command` or `Linux_Start.sh`) **after** `uv` is installed.
+
+*How it is set up*
+
+`setup-config.ps1` (Windows) and `setup-config.py` (macOS/Linux) look for `uvx` and, when found, register a `word` server in the local `config.json`. When `uv` is missing, the launcher prints `uv not found; Word MCP not configured` and the other targets keep working. If you install `uv` later, close the launcher and start it again.
+
+*How to use*
+
+1. Install `uv`, then start the launcher. Look for `Word MCP detected (uvx)` in its output.
+2. Open a supported AI chat site, start a new chat and click **Start**.
+3. In the **MCP target** selector on the chat bar, choose **Word**. If it is not listed, open **MCP servers** from the three-dots (...) menu on the snapgent bar and tick `word`, then reload the extension and refresh the chat tab.
+4. Describe the document you want, for example: *"Create a report in `D:\Documents\report.docx` with a title, three headings and a table."* Giving the full path of the `.docx` file is recommended, because this target does not use the VS Code workspace folder.
+5. To work on code again, switch the target back to **VS Code**.
+
+**First run:** the first time you use the Word target, `uvx` downloads `office-word-mcp-server` and its dependencies. Wait until the download finishes before sending more requests, and follow the progress in the bridge console (the terminal window running `start.bat`, `MacOS_Start.command` or `Linux_Start.sh`). If the Word target seems stuck or does not respond right after you select it, check that console first. Later runs are usually faster because `uvx` caches the package.
+
+Tip: close the `.docx` file in Word (or any other viewer) before asking the AI to edit it, so the file is not locked.
+
 **④ Start a session**
 
 1. Open a supported AI chat site and start a new chat.
