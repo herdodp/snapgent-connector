@@ -675,6 +675,9 @@ div[contenteditable].zs-typing {
 
 /* ── tool cards (replace tool JSON / sys prompt / results) ──────── */
 .zs-hidden > *:not(.zs-chip) { display: none !important; }
+/* Partial mask: the container also holds the model's answer (ChatGPT 2026-11
+   dual-side turns), so only the subtree carrying the injected text is hidden. */
+.zs-hidden-part { display: none !important; }
 /* hide the code block / paragraph(s) containing the raw tool call */
 .zs-tool-hide { display: none !important; }
 /* Gemini: Angular recreates the <code-block> elements inside a reply (once at

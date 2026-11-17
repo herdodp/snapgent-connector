@@ -49,6 +49,11 @@ function el(tag, opts, children) {
       return !!attrMatch && attrMatch[1] in attrs;
     }),
   };
+  // children: the provider walks a node's ELEMENT children to tell the user
+  // block apart from the reply block in the 2026-11 sibling layout, so the stub
+  // must expose it the way the DOM does.
+  node.children = node.childNodes.filter((c) => c && c.nodeType === 1);
+  for (const c of node.childNodes) if (c && c.nodeType === 1) c.parentElement = node;
   node.querySelector = (sel) => {
     const hit = (n) => {
       if (n.nodeType !== 1) return null;
@@ -447,4 +452,52 @@ ok("mobile textarea text can be read", P.editorText() === "");
   withChat([a, out]);
   ok("the trailing turn is not settled even when an earlier one is",
     P.__test.turnSettled(out) === false);
+}
+
+// ── Dual-side turn: mask the injected bubble, never the model's answer ─────
+// ChatGPT 2026-11 groups one user message and the reply it produced inside a
+// single [data-turn-key]. Hiding that container erased the answer too, so a run
+// of tool results rendered as bare result chips with no text between them.
+// The provider must point the core at the bubble subtree only.
+{
+  const bubble = el("div", { class: "group/user-message" }, ["Output of 'read_file': ok"]);
+  const bubbleWrap = el("div", { class: "flex w-full" }, [bubble]);
+  const reply = el("div", { class: "markdown" }, ["Here is what the file says."]);
+  const turn = el("div", { attrs: { "data-turn-key": "t-dual" } }, [bubbleWrap, reply]);
+
+  const masked = P.injectedHideNode(turn);
+  ok("dual-side turn masks only the bubble wrapper", masked === bubbleWrap);
+  ok("dual-side turn never masks the whole turn", masked !== turn);
+  ok("the answer node is outside the masked wrapper", !masked || masked.querySelector(".markdown") === null);
+
+  const direct = el("div", { attrs: { "data-turn-key": "t-direct" } }, [bubble, reply]);
+  ok("a bubble that is a direct child is masked itself", P.injectedHideNode(direct) === bubble);
+
+  ok("legacy bare user message falls back to whole-item masking",
+    P.injectedHideNode(bubble) === null);
+  ok("an assistant-only turn has nothing to mask",
+    P.injectedHideNode(el("div", { attrs: { "data-turn-key": "t-a" } },
+      [el("div", { class: "markdown" }, ["plain answer"])])) === null);
+
+  // Measured live 2026-11-17: the two sides are SIBLINGS under one stack, so
+  // climbing to the turn's direct child masked the answer as well - every
+  // injected turn collapsed to a 36px chip (masked subtree held 2043 chars
+  // including "ChatGPT said:"). The masked node must be the user block only.
+  const youH4 = el("h4", { class: "sr-only m-0" }, ["You said:You"]);
+  const userBubble = el("div", { class: "group/user-message flex flex-col items-end gap-2" },
+    ["Output of 'run_command': ok"]);
+  const userBlock = el("div", { class: "block-BQZwFn" }, [youH4, userBubble]);
+  const gptH4 = el("h4", { class: "sr-only m-0" }, ["ChatGPT said:ChatGPT"]);
+  const replyBlock = el("div", { class: "block-BQZwFn" },
+    [gptH4, el("div", { class: "markdown" }, ["Saya periksa status proses."])]);
+  const stack = el("div", { class: "flex flex-col stack-eQ550z" }, [userBlock, replyBlock]);
+  const sided = el("div", { class: "flex flex-col gap-1.5" }, [stack]);
+  const sidedTurn = el("div", { attrs: { "data-turn-key": "t-sib" } }, [sided]);
+  const maskedSib = P.injectedHideNode(sidedTurn);
+
+  ok("sibling layout masks the user block, not the shared stack", maskedSib === userBlock);
+  ok("sibling layout keeps the reply block visible",
+    !maskedSib || maskedSib.querySelector(".markdown") === null);
+  ok("sibling layout never returns the wrapper or the turn",
+    maskedSib !== sided && maskedSib !== sidedTurn);
 }
