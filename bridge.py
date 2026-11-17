@@ -580,6 +580,15 @@ class Bridge:
             )
             return
         try:
+            # Per-tab workspace sessions: the extension stamps every content-
+            # script request with its Chrome tab id. The VS Code MCP server
+            # keys each tab's pinned workspace on it, so two chat tabs can
+            # work on two different projects at the same time. Requests
+            # without a tab (popup) keep the global workspace resolution.
+            tab_id = request.get("tab_id")
+            if tab_id is not None:
+                arguments = dict(arguments)
+                arguments.setdefault("__zs_session", str(tab_id))
             result = await server.call_tool(tool_name, arguments, timeout_seconds)
             text_parts = []
             images = []

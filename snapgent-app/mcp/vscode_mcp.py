@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import unquote, urlparse
@@ -25,17 +26,75 @@ MAX_FILE_CHARS = 200_000
 SAFE_PROJECT_SCRIPTS = {"build", "check", "format", "lint", "test", "typecheck"}
 
 
-def _vscode_active_folder() -> Optional[Path]:
-    # Standalone app override: the host app passes the folder the user picked.
-    override = os.environ.get("ZS_WORKSPACE")
+def _lock_file_path() -> Path:
+    # The lock file pins one workspace folder for the duration of a session so
+    # switching to another VS Code window never silently changes the project a
+    # running session operates on. Override with ZS_WORKSPACE_LOCK (the host app
+    # uses this to keep the file inside its own data dir).
+    override = os.environ.get("ZS_WORKSPACE_LOCK")
     if override:
-        try:
-            candidate = Path(override).expanduser().resolve()
-        except (OSError, ValueError):
-            candidate = None
-        if candidate is not None and candidate.is_dir():
-            return candidate
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / ".snapgent_workspace.lock"
+    return Path(__file__).resolve().parent / ".snapgent_workspace.lock"
+
+
+def _read_workspace_lock() -> Optional[Path]:
+    # Returns the locked folder only while it still exists on disk; an invalid
+    # lock never blocks the tools - resolution just falls through to the next
+    # source (and a missing folder therefore cannot lock the user out).
+    lock_file = _lock_file_path()
+    if not lock_file.is_file():
         return None
+    try:
+        data = json.loads(lock_file.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw = data.get("path") if isinstance(data, dict) else None
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        candidate = Path(raw).expanduser().resolve()
+    except (OSError, ValueError):
+        return None
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
+def _write_workspace_lock(root: Path) -> None:
+    lock_file = _lock_file_path()
+    payload = {"path": str(root), "locked_at": time.time()}
+    tmp = lock_file.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, lock_file)
+
+
+def _clear_workspace_lock() -> bool:
+    lock_file = _lock_file_path()
+    if not lock_file.is_file():
+        return False
+    try:
+        lock_file.unlink()
+    except OSError as error:
+        raise RuntimeError(f"Could not remove the workspace lock: {error}") from error
+    return True
+
+
+def _parse_window_uri(uri: str) -> Optional[Path]:
+    # VS Code stores window folders as file:// URIs in storage.json.
+    try:
+        parsed = urlparse(uri)
+        path = unquote(parsed.path)
+        if sys.platform == "win32" and re.match(r"^/[A-Za-z]:/", path):
+            path = path[1:]
+        candidate = Path(path).resolve()
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.is_dir() else None
+
+
+def _active_window_folder() -> Optional[Path]:
     if sys.platform == "win32":
         result = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq Code.exe", "/NH"],
@@ -71,17 +130,122 @@ def _vscode_active_folder() -> Optional[Path]:
         )
 
         for uri in uris:
-            try:
-                parsed = urlparse(uri)
-                path = unquote(parsed.path)
-                if sys.platform == "win32" and re.match(r"^/[A-Za-z]:/", path):
-                    path = path[1:]
-                candidate = Path(path).resolve()
-            except (OSError, ValueError):
-                continue
-            if candidate.is_dir():
+            candidate = _parse_window_uri(uri)
+            if candidate is not None:
                 return candidate
     return None
+
+
+def list_vscode_windows() -> List[Dict[str, Any]]:
+    # Every project folder VS Code currently has open, focused window first.
+    # The extension offers these in its pre-start workspace picker so each chat
+    # tab can bind to a DIFFERENT project before its session locks one in.
+    # Tolerant by design: an unreadable storage.json yields fewer rows, never
+    # an error that would block the picker.
+    entries: List[Dict[str, Any]] = []
+    seen = set()
+    for storage_path in _vscode_storage_paths():
+        if not storage_path.is_file():
+            continue
+        try:
+            data = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        windows_state = data.get("windowsState") or {}
+        windows = [windows_state.get("lastActiveWindow") or {}]
+        windows.extend(window or {} for window in (windows_state.get("openedWindows") or []))
+        for index, window in enumerate(windows):
+            folder = window.get("folder")
+            if not isinstance(folder, str) or not folder:
+                continue
+            candidate = _parse_window_uri(folder)
+            if candidate is None or str(candidate) in seen:
+                continue
+            seen.add(str(candidate))
+            entries.append({"name": candidate.name, "path": str(candidate), "active": index == 0})
+    return entries
+
+
+# ── Per-tab session workspaces ──────────────────────────────────────────────
+# The bridge stamps every tool call from a chat tab with that tab's id
+# (__zs_session). Each tab can pin its own workspace here, so two sessions in
+# two tabs work on two different projects at the same time. The registry
+# persists next to the lock file so it survives an MCP server restart.
+_SESSION_WORKSPACES: Dict[str, str] = {}
+_SESSIONS_LOADED = False
+_CURRENT_SESSION: Optional[str] = None
+
+
+def _sessions_file_path() -> Path:
+    return _lock_file_path().parent / ".snapgent_sessions.json"
+
+
+def _load_sessions() -> None:
+    global _SESSION_WORKSPACES, _SESSIONS_LOADED
+    if _SESSIONS_LOADED:
+        return
+    _SESSIONS_LOADED = True
+    sessions_file = _sessions_file_path()
+    if not sessions_file.is_file():
+        return
+    try:
+        data = json.loads(sessions_file.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    recovered: Dict[str, str] = {}
+    for key, value in data.items():
+        raw = value.get("path") if isinstance(value, dict) else value
+        if isinstance(raw, str) and raw:
+            recovered[str(key)] = raw
+    _SESSION_WORKSPACES = recovered
+
+
+def _save_sessions() -> None:
+    sessions_file = _sessions_file_path()
+    try:
+        tmp = sessions_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_SESSION_WORKSPACES, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, sessions_file)
+    except OSError:
+        pass  # the in-memory registry still covers this run
+
+
+def _session_workspace(session: Optional[str]) -> Optional[Path]:
+    # The pinned folder only while it still exists - a deleted project can
+    # never hold its session hostage (same rule as the global lock).
+    if not session:
+        return None
+    _load_sessions()
+    raw = _SESSION_WORKSPACES.get(str(session))
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        candidate = Path(raw).expanduser().resolve()
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.is_dir() else None
+
+
+def _set_session_workspace(session: str, root: Path) -> None:
+    _load_sessions()
+    _SESSION_WORKSPACES[str(session)] = str(root)
+    _save_sessions()
+
+
+def _clear_session_workspace(session: str) -> bool:
+    _load_sessions()
+    if str(session) not in _SESSION_WORKSPACES:
+        return False
+    _SESSION_WORKSPACES.pop(str(session))
+    _save_sessions()
+    return True
+
+
+def _has_session_workspaces() -> bool:
+    _load_sessions()
+    return any(_session_workspace(key) is not None for key in list(_SESSION_WORKSPACES))
 
 
 def _vscode_storage_paths() -> List[Path]:
@@ -105,7 +269,46 @@ def _vscode_storage_paths() -> List[Path]:
     ]
 
 
+def _vscode_active_folder() -> Optional[Path]:
+    # Resolution order: explicit ZS_WORKSPACE override (the standalone app's
+    # picked folder), then the session lock, then the folder of the VS Code
+    # window that is currently focused. The lock in the middle is what keeps a
+    # running session on its project while the user browses other VS Code
+    # windows.
+    override = os.environ.get("ZS_WORKSPACE")
+    if override:
+        try:
+            candidate = Path(override).expanduser().resolve()
+        except (OSError, ValueError):
+            return None
+        if candidate.is_dir():
+            return candidate
+        return None
+    locked = _read_workspace_lock()
+    if locked is not None:
+        return locked
+    return _active_window_folder()
+
+
+def _workspace_source() -> str:
+    if _CURRENT_SESSION and _session_workspace(_CURRENT_SESSION) is not None:
+        return "session"
+    override = os.environ.get("ZS_WORKSPACE")
+    if override and Path(override).expanduser().is_dir():
+        return "app"
+    if _read_workspace_lock() is not None:
+        return "lock"
+    return "vscode-window"
+
+
 def get_root() -> Path:
+    # Per-tab session first: each chat tab pins its own workspace through
+    # lock_workspace (the bridge injects the tab id as __zs_session). Without a
+    # session (or before that tab pinned anything) the global chain applies:
+    # app-picked folder → global lock → focused VS Code window.
+    session_ws = _session_workspace(_CURRENT_SESSION)
+    if session_ws is not None:
+        return session_ws
     active = _vscode_active_folder()
     if active is None:
         raise RuntimeError("Open a project folder in VS Code before using the VS Code MCP server.")
@@ -163,11 +366,68 @@ def _run_process(command: List[str], root: Path, timeout: int = 30) -> str:
 
 def get_workspace_info() -> Dict[str, Any]:
     root = get_root()
+    source = _workspace_source()
     return {
         "name": root.name,
         "path": str(root),
         "is_git_repository": (root / ".git").exists(),
+        "workspace_locked": source in ("session", "lock"),
+        "workspace_source": source,
+        "workspace_session": _CURRENT_SESSION if source == "session" else None,
     }
+
+
+def lock_workspace(path: str = "") -> Dict[str, Any]:
+    # Pin the workspace for this session. With no path, the folder VS Code
+    # currently has focused is used - deliberately IGNORING any existing lock,
+    # because "start a session" must re-pin to the window the user is looking
+    # at right now, not to whatever a previous session left behind. A tab id
+    # (__zs_session, injected by the bridge) pins THAT tab only, so several
+    # chat tabs can each hold a different project at the same time.
+    if isinstance(path, str) and path.strip():
+        target = Path(path).expanduser()
+        if not target.is_dir():
+            raise FileNotFoundError(f"Not a directory: {path}")
+        root = target.resolve()
+    else:
+        override = os.environ.get("ZS_WORKSPACE")
+        root = None
+        if override:
+            try:
+                root = Path(override).expanduser().resolve()
+            except (OSError, ValueError):
+                root = None
+            if root is not None and not root.is_dir():
+                root = None
+        if root is None:
+            root = _active_window_folder()
+        if root is None:
+            raise RuntimeError("No workspace to lock: open a project folder in VS Code, or pass an explicit path.")
+    session = _CURRENT_SESSION
+    if session:
+        _set_session_workspace(session, root)
+        return {"locked": True, "session": session, "name": root.name, "path": str(root)}
+    _write_workspace_lock(root)
+    return {"locked": True, "name": root.name, "path": str(root)}
+
+
+def unlock_workspace() -> Dict[str, Any]:
+    # A tab may only clear its OWN session pin; the global lock (and the
+    # app-picked folder) belong to the machine, not to one chat tab.
+    if _CURRENT_SESSION:
+        removed = _clear_session_workspace(_CURRENT_SESSION)
+        return {"locked": False, "session": _CURRENT_SESSION, "removed": removed}
+    removed = _clear_workspace_lock()
+    result: Dict[str, Any] = {"locked": False, "removed": removed}
+    override = os.environ.get("ZS_WORKSPACE")
+    if override:
+        try:
+            app_pinned = Path(override).expanduser().is_dir()
+        except (OSError, ValueError):
+            app_pinned = False
+        if app_pinned:
+            result["note"] = "The app-pinned workspace (ZS_WORKSPACE) still applies."
+    return result
 
 
 def get_project_info() -> Dict[str, Any]:
@@ -560,6 +820,9 @@ def _tool(name: str, description: str, properties: Dict[str, Any], required: Opt
 STR = {"type": "string"}
 TOOLS = [
     _tool("get_workspace_info", "Get the active VS Code workspace name, path, and Git status.", {}),
+    _tool("list_vscode_windows", "List every project folder VS Code currently has open (focused window first) with name and path.", {}),
+    _tool("lock_workspace", "Pin the session to one workspace folder so switching to another VS Code window does NOT change the workspace. Call with no arguments at session start to pin the folder VS Code currently has focused, or pass a path to pin that folder. Each chat tab pins its own workspace.", {"path": STR}),
+    _tool("unlock_workspace", "Remove the workspace pin and follow the focused VS Code window again.", {}),
     _tool("get_project_info", "Inspect common project manifests and package scripts.", {}),
     _tool("list_dir", "List files and folders in the workspace.", {"path": STR}),
     _tool("list_tree", "List a bounded tree of workspace files and folders.", {"path": STR, "max_depth": {"type": "integer", "minimum": 0, "maximum": 8}}),
@@ -593,6 +856,9 @@ TOOLS = [
 def tool_dispatch(name: str, args: Dict[str, Any]) -> Any:
     handlers = {
         "get_workspace_info": lambda: get_workspace_info(),
+        "list_vscode_windows": lambda: list_vscode_windows(),
+        "lock_workspace": lambda: lock_workspace(args.get("path", "")),
+        "unlock_workspace": lambda: unlock_workspace(),
         "get_project_info": lambda: get_project_info(),
         "list_dir": lambda: list_dir(args.get("path", ".")),
         "list_tree": lambda: list_tree(args.get("path", "."), args.get("max_depth", 3)),
@@ -633,6 +899,7 @@ def send_message(message: Dict[str, Any]) -> None:
 
 
 def handle_request(request: Dict[str, Any]) -> None:
+    global _CURRENT_SESSION
     method = request.get("method")
     request_id = request.get("id")
     params = request.get("params") or {}
@@ -641,19 +908,26 @@ def handle_request(request: Dict[str, Any]) -> None:
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "vscode-mcp", "version": "2.0.0"},
+            "serverInfo": {"name": "vscode-mcp", "version": "2.1.0"},
         } if method == "initialize" else {}
         send_message({"jsonrpc": "2.0", "id": request_id, "result": result})
         return
 
     if method == "tools/list":
-        tools = TOOLS if _vscode_active_folder() is not None else []
+        # Also advertise when only per-tab session pins exist: a locked session
+        # must keep its tools even with no VS Code window focused (or open).
+        tools = TOOLS if (_vscode_active_folder() is not None or _has_session_workspaces()) else []
         send_message({"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools}})
         return
 
     if method == "tools/call":
         try:
-            output = tool_dispatch(params.get("name", ""), params.get("arguments") or {})
+            arguments = dict(params.get("arguments") or {})
+            # Reserved session key injected by the bridge from the calling
+            # chat tab. Popped here so tools never see it in their arguments.
+            session = arguments.pop("__zs_session", None)
+            _CURRENT_SESSION = str(session) if session is not None and str(session) else None
+            output = tool_dispatch(params.get("name", ""), arguments)
             text = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
             send_message({
                 "jsonrpc": "2.0",
@@ -669,6 +943,8 @@ def handle_request(request: Dict[str, Any]) -> None:
                 "id": request_id,
                 "error": {"code": -32603, "message": str(error)},
             })
+        finally:
+            _CURRENT_SESSION = None
         return
 
     if method == "notifications/initialized":

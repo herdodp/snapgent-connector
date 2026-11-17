@@ -2,6 +2,44 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.12] - 2026-11-18
+
+### Fixed
+- **Sessions no longer follow the focused VS Code window.** With several VS Code
+  windows open, switching focus silently moved the running session's file tools
+  to the other project. Each session now pins its workspace at start.
+
+### Added
+- **One session per chat tab.** The extension stamps every tool call with its
+  tab id; the bridge forwards it and the VS Code MCP server keeps one pinned
+  workspace per tab, so two chat tabs (e.g. DeepSeek on `bpr`, another tab on
+  `psak414`) work on two different projects at the same time.
+- **Project picker before Start.** A new pill in the bar (VS Code target, Ready
+  state) lists every project folder the open VS Code windows contain (focused
+  first). The chosen folder is what Start locks for that tab.
+- `list_vscode_windows` MCP tool; `lock_workspace` / `unlock_workspace` operate
+  per-tab when called from a chat tab and on the global lock otherwise. The
+  per-tab registry persists in `.snapgent_sessions.json` next to
+  `vscode_mcp.exe` (or `ZS_WORKSPACE_LOCK`'s folder) across MCP restarts.
+- Sessions on the VS Code target lock automatically at start; a toast shows the
+  locked project name.
+- MCP settings popup shows a **VS Code workspace** row (name, path, lock state)
+  with manual **Lock** / **Unlock** buttons (per-tab).
+- The status bar names the opened project: `Active · N tools · VS Code ·
+  <folder>` with a 🔒 glyph when pinned; hover shows the full path and lock
+  state. The Ready line names the workspace that will be used.
+- `get_workspace_info` reports `workspace_locked`, `workspace_source`
+  (`session`, `lock`, `app` or `vscode-window`) and `workspace_session`.
+
+### Changed
+- Workspace status probe switched from `list_dir` to `get_workspace_info`.
+- Resolution order in the MCP server: calling tab's session pin →
+  `ZS_WORKSPACE` (app-picked folder) → global lock → focused VS Code window.
+  An invalid pin falls through, so a deleted folder can never block the tools.
+- Extension and Snapgent App versions bumped to **3.9.12** / **0.1.2**. Both
+  `bridge.py` (tab-id forwarding) and `vscode_mcp.py` changed; `bridge.exe` and
+  `vscode_mcp.exe` must be rebuilt.
+
 ## [V3.9.11] - 2026-11-17
 
 ### Added

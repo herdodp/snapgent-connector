@@ -285,6 +285,35 @@ html.zs-light #zs-target-menu {
 }
 .zs-target-wrap svg { position: absolute; right: 8px; pointer-events: none; opacity: 0.65; }
 
+/* Project folder picker (VS Code target, before Start): same pill and
+   dropdown shell as the MCP target selector above. */
+#zs-ws-btn {
+  max-width: min(130px, 30vw); padding: 0 16px 0 0;
+  color: inherit; background: transparent; border: 0; outline: 0;
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+#zs-ws-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.4); outline-offset: 4px; border-radius: 6px; }
+#zs-ws-menu {
+  position: fixed; z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(240px, calc(100vw - 16px)); min-width: 0; overflow-y: auto;
+  padding: 0 0 6px;
+  background: #161618; color: #ececee;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  font-size: 12px; animation: zs-pop 0.16s ease-out;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.22) transparent;
+}
+#zs-ws-wrap[hidden] { display: none; } /* .zs-target-wrap's display would otherwise defeat the hidden attribute */
+#zs-ws-menu[hidden] { display: none; }
+#zs-ws-menu .zs-target-opt { width: 100%; }
+#zs-ws-menu .zs-target-cur { cursor: default; }
+html.zs-light #zs-ws-menu {
+  background: #ffffff; color: #1f2937; border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.18); scrollbar-color: rgba(0,0,0,0.25) transparent;
+}
+
 /* model switcher: names the current AI and opens the provider menu */
 #zs-switch {
   flex: none; display: flex; align-items: center; gap: 5px;

@@ -33,3 +33,8 @@ devtools/
 Thumbs.db
 desktop.ini
 __pycache__/
+
+# Snapgent runtime artifacts (created next to vscode_mcp.py when running from source)
+.snapgent_workspace.lock
+.snapgent_sessions.json
+*.tmp
