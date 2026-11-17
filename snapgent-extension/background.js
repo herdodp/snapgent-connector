@@ -286,6 +286,20 @@ async function send(obj, timeout = REQUEST_TIMEOUT_DEFAULT) {
   });
 }
 
+// ── fire-and-forget progress frames ─────────────────────────────────────
+// A progress frame is advisory: it carries no result and the bridge answers it with
+// silence (no id, no reply). It must therefore NEVER register a pending request -
+// doing that would fabricate a "timeout" a minute later for something that worked.
+function pushFrame(frame) {
+  if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify({ type: "stream", frame }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Ask the bridge whether a Roblox Studio instance is actually connected to the
 // MCP server. Broadcasts only on change so the UI updates promptly but quietly.
 let studioProbing = false;
@@ -440,6 +454,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(r);
         break;
       }
+      case "stream":
+        // Loading/progress frame from the page. Answer immediately with whether it
+        // went out; the caller uses it for UI only and never treats it as a result.
+        sendResponse({ ok: pushFrame(msg.frame || {}) });
+        break;
       case "restart_mcp": {
         const r = await send({ type: "restart_mcp" }, 30000);
         sendResponse(r);

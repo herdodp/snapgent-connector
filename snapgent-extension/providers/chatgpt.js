@@ -164,6 +164,44 @@ const ZSProvider = (() => {
     return isTurnKeyItem(item) && !turnHasUserBubble(item);
   };
 
+  // Masking a whole turn in the 2026-11 layout erased the model's own answer,
+  // because one [data-turn-key] holds our injected user bubble AND the reply the
+  // model wrote after reading it. That left "· result" chips with no visible
+  // narration between them.
+  //
+  // First fix (2026-11-13) climbed to the turn's direct child - and that is STILL
+  // too high on the 17 Nov markup, where both sides live as SIBLINGS under one
+  // stack inside the turn:
+  //   [data-turn-key]
+  //     div.zs-chip                    ← our chip (visible)
+  //     div                            ← box wrapping everything below
+  //       div.stack
+  //         div.user-block             ← h4 "You said:" + div.group/user-message
+  //         div.reply-block            ← h4 "ChatGPT said:" + the answer
+  // Masking the stack hid the ANSWER as well: measured live, the masked subtree
+  // carried 2043 chars including "ChatGPT said:", so every injected turn
+  // collapsed to a 36px chip with no narration (reported 2026-11-17).
+  //
+  // Climb from the bubble only while the parent adds NO sibling content besides a
+  // screen-reader heading, so the masked node is the user block alone. Legacy
+  // surfaces (a bare user message element) still return null and the core masks
+  // the item itself.
+  const injectedHideNode = (item) => {
+    if (!item || !item.querySelector || !isTurnKeyItem(item)) return null;
+    const bubble = item.querySelector('[class*="group/user-message"]');
+    if (!bubble || bubble === item) return null;
+    let node = bubble;
+    while (node.parentElement && node.parentElement !== item) {
+      const parent = node.parentElement;
+      const hasOtherSide = [...parent.children].some(
+        (child) => child !== node && !/^H[1-6]$/.test(child.tagName)
+      );
+      if (hasOtherSide) break;
+      node = parent;
+    }
+    return node === item ? null : node;
+  };
+
   // The assistant reply inside a new-style turn comes in TWO shapes, and they
   // alternate between replies:
   //   A) fenced code  → <div class="… zs-cmd-mask"> … <pre>{"command":…}</pre>
@@ -1209,6 +1247,8 @@ const ZSProvider = (() => {
     },
     // turns
     allItems, isUserItem, isAssistantItem, itemText, classifyText,
+    // camouflage: which subtree of a dual-side turn carries the injected text
+    injectedHideNode,
     assistantCount, userCount, lastAssistant, lastAssistantId, itemKey, readAssistant,
     streamLen, snapshot,
     // composer / state

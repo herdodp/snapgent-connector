@@ -1257,8 +1257,26 @@
     const stopWatch = new Promise((res) => {
       stopTimer = setInterval(() => { if (A.stop) res({ ok: false, kind: "stopped" }); }, 150);
     });
+    // Publish "still loading" frames while the bridge works. A long tool (a package
+    // build, a big search) used to be completely invisible until it finished; now
+    // `GET http://127.0.0.1:<PORT+1>/events` on the bridge streams these so the run
+    // is observable while it happens. Advisory only: never awaited, never fatal.
+    const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const loadingAt = Date.now();
+    const loadingTick = setInterval(() => {
+      bg({
+        type: "stream",
+        frame: { phase: "tool_loading", tool: name, id: callId, ms: Date.now() - loadingAt },
+      }).catch(() => {});
+    }, 1000);
+    bg({ type: "stream", frame: { phase: "tool_start", tool: name, id: callId } }).catch(() => {});
     let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }), hardCap, stopWatch]);
+    clearInterval(loadingTick);
     clearInterval(stopTimer);
+    bg({
+      type: "stream",
+      frame: { phase: "tool_end", tool: name, id: callId, ms: Date.now() - loadingAt, ok: !!r && r.ok !== false },
+    }).catch(() => {});
     if (r && r.kind === "stopped") return "(stopped by user)";
     if (!r) return ZS.FEEDBACK.bridgeOffline;
     // The MCP server answers SUCCESSFULLY (ok:true) when no Studio is attached
@@ -2580,6 +2598,7 @@
     const chip = item.querySelector(".zs-chip");
     if (chip) chip.remove();
     item.classList.remove("zs-hidden");
+    item.querySelectorAll(".zs-hidden-part").forEach((e) => e.classList.remove("zs-hidden-part"));
     item.querySelectorAll(".zs-tool-hide").forEach((e) => e.classList.remove("zs-tool-hide"));
     item.querySelectorAll(".zs-cmd-mask").forEach((e) => e.classList.remove("zs-cmd-mask"));
     delete item.dataset.zs;
@@ -2589,6 +2608,36 @@
     delete item.dataset.zRegenLen;
     delete item.dataset.zRegenAt;
     delete item.__zsChip;
+  }
+
+  // Injections live in a container that, on ChatGPT's 2026-11 layout, ALSO
+  // holds the answer the model wrote. Masking the container therefore hid the
+  // answer (chips with no narration between them). A provider can name the
+  // exact subtree holding the injected text; everything else stays visible.
+  function injectedHidePart(item) {
+    try {
+      return item && (P.injectedHideNode ? P.injectedHideNode(item) : null);
+    } catch { return null; }
+  }
+  function hideInjectedWhole(item) {
+    const part = injectedHidePart(item);
+    if (part) {
+      item.classList.remove("zs-hidden");
+      part.classList.add("zs-hidden-part");
+      return;
+    }
+    item.classList.add("zs-hidden");
+  }
+  function unhideInjectedWhole(item) {
+    const part = injectedHidePart(item);
+    if (part) part.classList.remove("zs-hidden-part");
+    item.classList.remove("zs-hidden");
+  }
+  function injectedWholeHidden(item) {
+    if (item.classList.contains("zs-hidden")) return true;
+    const part = injectedHidePart(item);
+    if (part && part.classList.contains("zs-hidden-part")) return true;
+    return !!item.querySelector(".zs-hidden-part");
   }
 
   const decorate = {
@@ -2629,11 +2678,13 @@
       }
 
       if (whole) {
-        // Fully injected turn (result / sys) → hide the whole item.
+        // Fully injected turn (result / sys) → hide what carries the injected
+        // text. On a dual-side turn that is only the user bubble, so the
+        // model's answer in the same container survives (see injectedHidePart).
         if (chip.parentElement !== item) item.insertBefore(chip, item.firstChild);
-        item.classList.add("zs-hidden");
+        hideInjectedWhole(item);
       } else {
-        item.classList.remove("zs-hidden");
+        unhideInjectedWhole(item);
         // findToolBlockSpot ALSO applies the .zs-tool-hide classes (its real job);
         // we call it for that even when we don't use its returned position.
         const spot = P.findToolBlockSpot(item, chip);
@@ -2797,7 +2848,7 @@
         const hasImg = !isErr && IMAGE_FEEDBACK_RE.test(txt);
         if (hasImg && m) rememberImageTool(m[1]);
         const sig = (m ? m[1] : "note") + "|" + (isErr ? "err" : hasImg ? "img" : "result");
-        if (item.dataset.zsig !== sig || !item.classList.contains("zs-hidden") || chipGone) {
+        if (item.dataset.zsig !== sig || !injectedWholeHidden(item) || chipGone) {
           this.chip(item, {
             label: m ? `${m[1]} · result` : "result",
             category: hasImg ? "screen" : m ? ZS.toolCategory(m[1]) : "tool",
@@ -5126,19 +5177,28 @@
     if (A.injectHideUntil && Date.now() < A.injectHideUntil) {
       const users = items.filter((it) => P.isUserItem(it));
       const last = users[users.length - 1];
-      if (last && !last.classList.contains("zs-hidden") &&
+      if (last && !injectedWholeHidden(last) &&
           users.length > (A.injectPreUser || 0)) {
-        last.classList.add("zs-hidden");
+        hideInjectedWhole(last);
         A.injectHideUntil = 0; // one-shot: this turn is now masked
         diag("result.prehide", { users: users.length });
       }
     }
     for (const item of items) {
-      if (item.classList.contains("zs-hidden")) continue;
+      if (item.classList.contains("zs-hidden")) {
+        // The optimistic pre-hide masks the node before the bubble exists. Once
+        // the bubble renders, downgrade to a partial mask so the answer stays.
+        const part = injectedHidePart(item);
+        if (part) {
+          item.classList.remove("zs-hidden");
+          part.classList.add("zs-hidden-part");
+        }
+        continue;
+      }
       const txt = P.classifyText(item, ".zs-chip");
       if (txt.includes(ZS.SYS_MARKER) ||
           (P.isUserItem(item) && ZSParse.isInjectedFeedback(txt))) {
-        item.classList.add("zs-hidden");
+        hideInjectedWhole(item);
       }
     }
   }

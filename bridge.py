@@ -2,6 +2,7 @@
 """Cross-platform local WebSocket bridge for Snapgent MCP servers."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -29,6 +30,11 @@ CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
+# Live progress channel: GET /events (SSE) + GET /status on a plain HTTP port next to
+# the websocket, so any consumer (curl, browser, an API wrapper) can watch what the
+# bridge is doing while a tool call is still running instead of waiting for the result.
+STREAM_PORT = int(os.environ.get("ZS_BRIDGE_STREAM_PORT", str(PORT + 1)))
+STREAM_BACKLOG = 200
 MCP_PROTOCOL_VERSION = "2024-11-05"
 BRIDGE_VERSION = "3.9.7"
 MAX_LOG_CHARS = 1000
@@ -301,6 +307,78 @@ class MCPServer:
             raise
 
 
+class EventHub:
+    """Fan-out of bridge progress frames to HTTP (SSE) and websocket consumers.
+
+    Nothing here changes the tool result path: a frame is advisory only, so a slow or
+    absent subscriber can never block or fail a tool call.
+    """
+
+    def __init__(self, backlog: int = STREAM_BACKLOG) -> None:
+        self._backlog = backlog
+        self._recent: List[Dict[str, Any]] = []
+        self._subs: set = set()
+        self._seq = 0
+        self._busy: Dict[str, Dict[str, Any]] = {}
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "seq": self._seq,
+            "queue": len(self._busy),
+            "busy": [dict(entry) for entry in self._busy.values()],
+            "subscribers": len(self._subs),
+        }
+
+    def publish(self, event: str, **payload: Any) -> Dict[str, Any]:
+        self._seq += 1
+        frame = {"seq": self._seq, "at": time.time(), "event": event, **payload}
+        self._recent.append(frame)
+        if len(self._recent) > self._backlog:
+            del self._recent[: len(self._recent) - self._backlog]
+        for queue in list(self._subs):
+            try:
+                queue.put_nowait(frame)
+            except asyncio.QueueFull:
+                # A stalled reader loses frames; it must never stall the bridge.
+                pass
+        return frame
+
+    def begin(self, call_id: Any, tool: Optional[str], **extra: Any) -> Dict[str, Any]:
+        entry = {"id": call_id, "tool": tool, "started": time.time(), **extra}
+        self._busy[str(call_id)] = entry
+        return self.publish("tool_start", **entry)
+
+    def end(self, call_id: Any, ok: bool = True, **extra: Any) -> Dict[str, Any]:
+        entry = self._busy.pop(str(call_id), {})
+        started = entry.get("started", time.time())
+        frame = {
+            "id": call_id,
+            "tool": entry.get("tool"),
+            "ok": bool(ok),
+            "ms": int((time.time() - started) * 1000),
+            **extra,
+        }
+        return self.publish("tool_end", **frame)
+
+    def busy_for(self, call_id: Any) -> Optional[Dict[str, Any]]:
+        return self._busy.get(str(call_id))
+
+    @contextlib.asynccontextmanager
+    async def subscribe(self, since: int = 0):
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
+        for frame in self._recent:
+            if frame["seq"] > since:
+                try:
+                    queue.put_nowait(frame)
+                except asyncio.QueueFull:
+                    break
+        self._subs.add(queue)
+        try:
+            yield queue
+        finally:
+            self._subs.discard(queue)
+
+
 class Bridge:
     def __init__(self) -> None:
         self.servers: Dict[str, MCPServer] = {}
@@ -308,6 +386,7 @@ class Bridge:
         self._client_lock = asyncio.Lock()
         self._catalog: List[Dict[str, Any]] = []
         self._last_studio: Optional[bool] = None
+        self.hub = EventHub()
 
     def load_config(self) -> Dict[str, Dict[str, Any]]:
         if not CONFIG_PATH.exists():
@@ -524,6 +603,21 @@ class Bridge:
             await self._change_server(websocket, request, remove=False)
         elif kind == "remove_server":
             await self._change_server(websocket, request, remove=True)
+        elif kind in ("stream", "progress"):
+            # Fire-and-forget progress frame (from the extension or any client): relay it
+            # to every websocket client and to the HTTP /events subscribers. No reply is
+            # sent - the sender already moved on, and a reply would look like a result.
+            nested = request.get("frame")
+            payload = {k: v for k, v in request.items() if k not in ("type", "frame", "id")}
+            if isinstance(nested, dict):
+                payload.update(nested)
+            event = payload.pop("event", None) or ("stream" if kind == "stream" else "progress")
+            self.hub.publish(str(event), **payload)
+        elif kind == "stream_status":
+            await self._send_client(
+                websocket,
+                {"type": "stream_status", "id": request_id, **self.hub.snapshot()},
+            )
         else:
             await self._send_client(
                 websocket,
@@ -579,6 +673,8 @@ class Bridge:
                 },
             )
             return
+        call_id = request_id if request_id is not None else f"{tool_name}-{int(time.time() * 1000)}"
+        self.hub.begin(call_id, name, server=server.server_id)
         try:
             result = await server.call_tool(tool_name, arguments, timeout_seconds)
             text_parts = []
@@ -609,9 +705,11 @@ class Bridge:
                     websocket,
                     {"type": "tool_result", "id": request_id, "ok": True, "text": text, "images": images},
                 )
+            self.hub.end(call_id, ok=not result.get("isError"), chars=len(text))
             log(f"<- {name} ({text[:120].replace(chr(10), ' ')})")
         except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
             message = str(error)
+            self.hub.end(call_id, ok=False, error=message[:200])
             await self._send_client(
                 websocket,
                 {
@@ -745,6 +843,72 @@ def subprocess_run(command: List[str], timeout: int) -> str:
     return result.stdout
 
 
+async def _start_stream_server(hub: "EventHub") -> Any:
+    """Plain HTTP side channel so progress can be watched while a call is still running.
+
+    GET /events (SSE, also /stream) replays the recent backlog then streams live frames;
+    GET /status gives a one-shot snapshot; POST /push lets any local process publish a
+    frame. Every write is advisory - a dead reader can never fail a tool call.
+    """
+    from aiohttp import web
+
+    async def events(request: Any) -> Any:
+        try:
+            since = int(request.query.get("since", "0"))
+        except (TypeError, ValueError):
+            since = 0
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await response.prepare(request)
+        async with hub.subscribe(since) as queue:
+            await response.write(b": connected\n\n")
+            while True:
+                try:
+                    frame = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    await response.write(b": ping\n\n")
+                    continue
+                except asyncio.CancelledError:
+                    raise
+                body = json.dumps(frame, ensure_ascii=False)
+                chunk = f"id: {frame['seq']}\nevent: {frame['event']}\ndata: {body}\n\n"
+                await response.write(chunk.encode("utf-8"))
+        return response
+
+    async def status(request: Any) -> Any:
+        return web.json_response({"version": BRIDGE_VERSION, **hub.snapshot()})
+
+    async def push(request: Any) -> Any:
+        try:
+            frame = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(frame, dict):
+            return web.json_response({"ok": False, "error": "object expected"}, status=400)
+        event = frame.pop("event", "stream")
+        hub.publish(str(event), **frame)
+        return web.json_response({"ok": True, **hub.snapshot()})
+
+    app = web.Application()
+    app.router.add_get("/events", events)
+    app.router.add_get("/stream", events)
+    app.router.add_get("/status", status)
+    app.router.add_post("/push", push)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, HOST, STREAM_PORT)
+    await site.start()
+    log(f"progress channel: http://{HOST}:{STREAM_PORT}/events (SSE), /status, POST /push")
+    return runner
+
+
 async def run() -> None:
     if websockets is None:
         raise RuntimeError(
@@ -763,6 +927,11 @@ async def run() -> None:
     )
     log(f"snapgent bridge v{BRIDGE_VERSION}")
     log(f"listening on ws://{HOST}:{PORT} - load the extension and open a supported AI chat")
+    stream_runner = None
+    try:
+        stream_runner = await _start_stream_server(bridge.hub)
+    except Exception as error:  # never let the side channel stop the bridge
+        log(f"progress channel disabled: {type(error).__name__}: {error}")
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     async def _startup_then_monitor() -> None:
@@ -785,6 +954,8 @@ async def run() -> None:
     finally:
         monitor_task.cancel()
         await asyncio.gather(monitor_task, return_exceptions=True)
+        if stream_runner is not None:
+            await stream_runner.cleanup()
         server.close()
         await server.wait_closed()
         await bridge.stop_servers()

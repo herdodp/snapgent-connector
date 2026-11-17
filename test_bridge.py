@@ -250,6 +250,46 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await server.stop()
 
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_stream_frame_is_relayed_without_a_reply(self):
+        # A progress frame is advisory: the bridge must publish it and stay silent.
+        # Replying would make the extension mistake a progress frame for a result.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            async with self._ws_client(root, MOCK_MCP) as client:
+                await client.send(json.dumps({
+                    "type": "stream",
+                    "frame": {"phase": "tool_loading", "tool": "echo", "id": "call-1"},
+                }))
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(client.recv(), timeout=0.5)
+
+    async def test_event_hub_publishes_start_and_end(self):
+        hub = bridge.EventHub()
+        # A bare advisory frame must not make the bridge look busy.
+        hub.publish("stream", phase="tool_loading", tool="echo")
+        self.assertEqual(hub.snapshot()["queue"], 0)
+        hub.begin("call-2", "echo", server="mock")
+        busy = hub.snapshot()
+        self.assertEqual(busy["queue"], 1)
+        self.assertEqual(busy["busy"][0]["tool"], "echo")
+        hub.end("call-2", ok=True, chars=4)
+        self.assertEqual(hub.snapshot()["queue"], 0)
+        events = [frame["event"] for frame in hub._recent]
+        self.assertIn("tool_start", events)
+        self.assertIn("tool_end", events)
+        end_frame = [f for f in hub._recent if f["event"] == "tool_end"][0]
+        self.assertGreaterEqual(end_frame["ms"], 0)
+        self.assertTrue(end_frame["ok"])
+
+    async def test_hub_subscriber_receives_frames_live(self):
+        hub = bridge.EventHub()
+        async with hub.subscribe() as queue:
+            hub.publish("tool_start", tool="echo")
+            frame = await asyncio.wait_for(queue.get(), timeout=1)
+            self.assertEqual(frame["event"], "tool_start")
+            self.assertEqual(frame["tool"], "echo")
+
     def test_duplicate_tool_names_are_server_qualified(self):
         first = bridge.MCPServer("roblox", {})
         second = bridge.MCPServer("effectcraft", {})

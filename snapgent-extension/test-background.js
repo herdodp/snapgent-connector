@@ -62,7 +62,7 @@ const internals = new Function(
   "chrome",
   "WebSocket",
   "ZSGuard",
-  src + "\n; return { send, failAllPending, pending, setConnected: (v) => { connected = v; }, setWs: (w) => { ws = w; } };"
+  src + "\n; return { send, failAllPending, pending, pushFrame, setConnected: (v) => { connected = v; }, setWs: (w) => { ws = w; } };"
 )(global.chrome, global.WebSocket, ZSGuard);
 
 const { send, failAllPending, pending } = internals;
@@ -128,6 +128,24 @@ const { send, failAllPending, pending } = internals;
     ok("ping is a known message type", !(reply && reply.error === "unknown message"));
     ok("ping answers a structured failure when the bridge is down",
       reply && (reply.ok === true || typeof reply.kind === "string"));
+  }
+  // ── progress frames (pushFrame) ──────────────────────────────────────
+  // A progress frame is advisory: it must go out, it must carry no id (the
+  // bridge sends no reply), and it must NEVER register a pending request -
+  // otherwise a successful run would later "time out" for no reason.
+  {
+    const sent = [];
+    internals.setConnected(true);
+    internals.setWs({ readyState: 1, send: (t) => sent.push(t), close() {}, addEventListener() {} });
+    const before = pending.size;
+    const pushed = internals.pushFrame({ phase: "tool_loading", tool: "run_command" });
+    let frame = {};
+    try { frame = JSON.parse(sent[0] || "{}"); } catch (e) { frame = {}; }
+    ok("stream: pushFrame puts a frame on the socket",
+      pushed === true && frame.type === "stream");
+    ok("stream: the frame keeps its phase", frame.frame && frame.frame.phase === "tool_loading");
+    ok("stream: no id is attached (bridge must stay silent)", frame.id === undefined);
+    ok("stream: no pending request is registered", pending.size === before);
   }
 })().catch((e) => {
   console.error(e);
