@@ -85,7 +85,7 @@ def _vscode_storage_paths() -> List[Path]:
         config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         return [
             config / product / "User" / "globalStorage" / "storage.json"
-            for product in ("Code", "Code - Insiders", "VSCodium")
+            for product in ("Code", "Code - Insiders", "VSCodium", "Code - OSS")
         ]
 
     support = Path.home() / "Library" / "Application Support"
