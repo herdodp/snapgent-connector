@@ -24,7 +24,11 @@
     "http://127.0.0.1/*",
     "ws://127.0.0.1/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:17613"
+  },
   "background": {
+    "scripts": ["background.js"],
     "service_worker": "background.js"
   },
   "icons": {
