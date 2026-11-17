@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "snapgentV3",
-  "version": "3.9.10",
+  "version": "3.9.11",
   "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Grok, Kimi, GLM, Qwen, Arena, Meta AI, Ptero or Mistral into a VS Code agent through a local bridge.",
   "permissions": ["storage"],
   "host_permissions": [
@@ -44,7 +44,7 @@
   "content_scripts": [
     {
       "matches": ["https://chat.deepseek.com/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/deepseek.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/deepseek.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
@@ -56,61 +56,61 @@
     },
     {
       "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/chatgpt.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/chatgpt.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://claude.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/claude.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/claude.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://gemini.google.com/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/gemini.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/gemini.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://www.kimi.ai/*", "https://kimi.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/kimi.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/kimi.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://chat.z.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/glm.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/glm.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://arena.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/arena.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/arena.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://www.meta.ai/*", "https://meta.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/meta.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/meta.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://ptero.pro/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/ptero.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/ptero.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://grok.com/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/grok.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/grok.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://chat.mistral.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/mistral.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/mistral.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
@@ -122,7 +122,7 @@
     },
     {
       "matches": ["https://chat.qwen.ai/*"],
-      "js": ["core/config.js", "core/parser.js", "core/guard.js", "providers/qwen.js", "core/main.js"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/qwen.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }

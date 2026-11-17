@@ -2055,6 +2055,47 @@
     workspaceSkills = allSkills.filter((s) => isSkillEnabled(s.name));
   }
 
+  // â”€â”€ Antislop: bundled skill (core/antislop-data.js), Word + VS Code only â”€â”€
+  // Word: a condensed rule set goes straight into the system prompt (there is no
+  // workspace the model could read). VS Code: the skill files are installed into
+  // .snapgent/skills/ (never overwriting) and the model reads them on demand.
+  const ANTISLOP_KEY = "zsAntislopEnabled";
+  const ANTISLOP_TARGETS = ["word", "vscode"];
+  let antislopEnabled = false; // off until the user turns it on
+  try {
+    chrome.storage.local.get(ANTISLOP_KEY, (r) => { antislopEnabled = !!(r && r[ANTISLOP_KEY]); });
+  } catch (error) {
+    console.warn("[snapgentV3] Could not load Antislop toggle:", error);
+  }
+  function antislopApplies(id = selectedTargetId) { return ANTISLOP_TARGETS.includes(id); }
+  function antislopNames() {
+    return typeof ZS_ANTISLOP === "undefined" ? [] : Object.keys(ZS_ANTISLOP.vscode);
+  }
+  function antislopWordRules() {
+    return selectedTargetId === "word" && antislopEnabled && typeof ZS_ANTISLOP !== "undefined" ? ZS_ANTISLOP.word : "";
+  }
+  // Returns { ok:true } or { ok:false, error }. Installing never overwrites an existing skill.
+  async function setAntislopEnabled(on) {
+    if (on && selectedTargetId === "vscode") {
+      const createTool = activeTools().find((t) => bareToolName(t.name) === "create_file");
+      if (!createTool) return { ok: false, error: "create_file is not available on this server." };
+      await loadWorkspaceSkills();
+      for (const name of antislopNames()) {
+        if (allSkills.some((s) => s.name === name)) continue;
+        const r = await bg({ type: "call_tool", name: createTool.name,
+          arguments: { path: `.snapgent/skills/${name}/SKILL.md`, content: ZS_ANTISLOP.vscode[name] }, timeout: 8000 });
+        if (!r || !r.ok) return { ok: false, error: (r && (r.error || r.text)) || "Could not install " + name + "." };
+      }
+    }
+    antislopEnabled = !!on;
+    try { chrome.storage.local.set({ [ANTISLOP_KEY]: antislopEnabled }); } catch {}
+    if (selectedTargetId === "vscode") {
+      for (const name of antislopNames()) setSkillEnabled(name, on);
+      await loadWorkspaceSkills();
+    }
+    return { ok: true };
+  }
+
   // Scan .snapgent/skills/*/SKILL.md and fill workspaceSkills with name +
   // one-line description (progressive disclosure: bodies are read on demand by
   // the model via read_file). Never throws; on any problem the list stays empty.
@@ -2164,6 +2205,7 @@
       targetServer: selectedTargetId,
       targetName: ui.getTargetName(),
       skills: workspaceSkills,
+      antislopRules: antislopWordRules(),
     });
   }
 
@@ -3575,6 +3617,24 @@
       if (selectedTargetId === "vscode") loadWorkspaceSkills().then(() => { if (pop.isConnected) render(); });
     }
 
+    // Skills section of the Switch AI menu: the bundled Antislop row first, then
+    // the workspace skills (VS Code only). Rows that do not apply to the selected
+    // MCP target are dimmed and disabled. Switching target reloads the page, so
+    // this only needs to be right when the menu is built.
+    function skillsSectionHtml() {
+      const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const bundled = antislopNames();
+      const wsOk = selectedTargetId === "vscode";
+      const row = (cls, attr, name, meta, checked, dim) =>
+        `<label class="zs-mcp-row zs-skill-row${dim ? " zs-skill-dim" : ""}"${dim ? ' title="Not available for this MCP target"' : ""}><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">${esc(name)}</span><span class="zs-mcp-row-meta">${esc(meta)}</span></span><input type="checkbox" class="zs-mcp-check ${cls}" ${attr} ${checked ? "checked" : ""} ${dim ? "disabled" : ""}><span class="zs-mcp-toggle"></span></label>`;
+      let rows = row("zs-antislop-check", "", "Antislop", "Natural writing in Word, no AI-slop code or design in VS Code", antislopEnabled, !antislopApplies());
+      for (const s of allSkills) {
+        if (bundled.includes(s.name)) continue;
+        rows += row("zs-skill-check", `data-name="${esc(s.name)}"`, s.name, s.description, isSkillEnabled(s.name), !wsOk);
+      }
+      return `<section class="zs-menu-sec"><div class="zs-sec-label"><span>Skills</span></div>${rows}<div class="zs-mcp-pop-note" id="zs-skills-msg">Changes apply to the next chat session.</div></section>`;
+    }
+
     function buildMenu() {
       const here = (P.displayName || "").toLowerCase();
       const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
@@ -3591,12 +3651,29 @@
          <section class="zs-menu-sec">
            <div class="zs-sec-label zs-sec-label-row"><span>Switch AI</span><span><button id="zs-skills-settings" class="zs-gear" title="Skills" aria-label="Skills">&#9733;</button><button id="zs-mcp-settings" class="zs-gear" title="MCP settings" aria-label="MCP settings">&#9881;</button></span></div>
            <div class="zs-site-grid">${sites}</div>
-         </section>`;
+         </section>
+         ${skillsSectionHtml()}`;
       const open = (url) => { try { window.open(url, "_blank", "noopener"); } catch {} menuEl.hidden = true; };
       menuEl.querySelectorAll("button.zs-site-opt, .zs-tip-opt").forEach((b) =>
         b.addEventListener("click", () => open(b.dataset.u)));
       const gear = menuEl.querySelector("#zs-mcp-settings");
       if (gear) gear.addEventListener("click", (e) => { e.stopPropagation(); menuEl.hidden = true; openMcpSettings(); });
+      const skillsMsg = menuEl.querySelector("#zs-skills-msg");
+      const antiBox = menuEl.querySelector(".zs-antislop-check");
+      if (antiBox) antiBox.addEventListener("change", async () => {
+        const want = antiBox.checked;
+        antiBox.disabled = true;
+        const res = await setAntislopEnabled(want);
+        antiBox.disabled = false;
+        if (!res.ok) {
+          antiBox.checked = !want;
+          if (skillsMsg) skillsMsg.textContent = res.error;
+        } else if (skillsMsg) {
+          skillsMsg.textContent = "Changes apply to the next chat session.";
+        }
+      });
+      menuEl.querySelectorAll(".zs-skill-check").forEach((box) =>
+        box.addEventListener("change", () => setSkillEnabled(box.dataset.name, box.checked)));
       const starBtn = menuEl.querySelector("#zs-skills-settings");
       if (starBtn) starBtn.addEventListener("click", (e) => { e.stopPropagation(); menuEl.hidden = true; openSkillsSettings(); });
     }

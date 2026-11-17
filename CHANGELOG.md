@@ -2,6 +2,24 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.11] - 2026-11-17
+
+### Added
+- **Extension: Skills section in the Switch AI menu.** It sits below the AI grid. The first
+  row is a bundled **Antislop** toggle (off by default). Skills in `.snapgent/skills/`, including
+  imported ones, appear in the same list with the same toggle.
+- **Antislop for Word.** A condensed writing rule set is added to the system prompt, so the AI
+  avoids empty AI vocabulary, forced rhythm, filler, em dashes and invented facts.
+- **Antislop for VS Code.** `antislop`, `antislop-ui` and `antislop-code` are installed into
+  `.snapgent/skills/` when the toggle is turned on. Existing files are never overwritten.
+- For MCP targets other than Word and VS Code, the Antislop row is dimmed and disabled.
+- Antislop is by Miqdad Badjuber (MIT), https://github.com/miqdadbadjuber/anti-slop, bundled
+  from commit 35b54dc. New file: `core/antislop-data.js`.
+
+### Changed
+- Extension and Snapgent App versions bumped to **3.9.11**. The bridge is unchanged
+  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+
 ## [V3.9.10] - 2026-11-17
 
 ### Added

@@ -174,6 +174,7 @@ const ZS = (() => {
       targetServer = "vscode",
       targetName = "VS Code",
       skills = [],
+      antislopRules = "",
     } = opts;
 
     if (targetServer !== "roblox") {
@@ -197,7 +198,7 @@ Rules:
         ? "\n\nAvailable skills (reusable instructions stored in the workspace). When a task matches a skill's description, first read its SKILL.md with read_file, then follow it. Skills are guidance only: never run a skill's scripts without the user's confirmation.\n" +
           skills.map((s) => `- ${s.name}: ${s.description} (path: ${s.path || ".snapgent/skills/" + s.name + "/SKILL.md"})`).join("\n")
         : "";
-      return prompt + skillsBlock + (providerNotes ? "\n\n" + providerNotes : "") +
+      return prompt + skillsBlock + (antislopRules ? "\n\nWriting rules (always apply to any text you write):\n" + antislopRules : "") + (providerNotes ? "\n\n" + providerNotes : "") +
         (customPrompt ? `\n\nUser's Custom prompt:\n${customPrompt}` : "");
     }
 

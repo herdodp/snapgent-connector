@@ -474,6 +474,11 @@ button.zs-site-opt:hover .zs-site-go { opacity: 1; transform: translateX(0); }
 .zs-mcp-check:checked + .zs-mcp-toggle { background: #34d399; }
 .zs-mcp-check:checked + .zs-mcp-toggle::after { transform: translateX(15px); }
 .zs-mcp-check:focus-visible + .zs-mcp-toggle { outline: 2px solid rgba(255, 255, 255, 0.5); outline-offset: 2px; }
+/* Skills section in the Switch AI menu: dimmed row when the skill does not apply to the selected MCP target */
+.zs-skill-row { padding: 6px 4px; }
+.zs-skill-row.zs-skill-dim { opacity: 0.38; cursor: not-allowed; }
+.zs-skill-row.zs-skill-dim:hover { background: transparent; }
+.zs-skill-row.zs-skill-dim .zs-mcp-toggle { pointer-events: none; }
 html.zs-light .zs-mcp-pop-card { background: #ffffff; color: #1f2937; border-color: rgba(0, 0, 0, 0.1); }
 html.zs-light .zs-mcp-pop-head, html.zs-light .zs-mcp-row-name { color: #111827; }
 html.zs-light .zs-mcp-pop-head { border-bottom-color: rgba(0, 0, 0, 0.07); }
