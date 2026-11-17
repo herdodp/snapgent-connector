@@ -4989,15 +4989,20 @@
   //  WIRING
   // ════════════════════════════════════════════════════════════════════════
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.type === "zs-status") {
       ui.setStatus({ connected: msg.connected, mcpAlive: msg.mcpAlive, studio: msg.studio, studioApp: msg.studioApp, studioProc: msg.studioProc, tools: msg.tools, servers: msg.servers });
     }
     if (msg && msg.type === "zs-resume") {
-      // Manual "resume the pending command" - from the popup or a bar button.
+      // Manual "resume the pending command" - from the popup's Resume button.
+      // Answer the caller so the button can say whether it actually dispatched.
       resumePending({ force: !!(msg.force) })
-        .then((r) => diag("resume.request", r))
-        .catch(() => {});
+        .then((r) => {
+          diag("resume.request", r);
+          try { sendResponse && sendResponse(r); } catch {}
+        })
+        .catch(() => { try { sendResponse && sendResponse({ ok: false, why: "error" }); } catch {} });
+      return true; // keep the channel open for the async response
     }
     if (msg && msg.type === "zs-open-menu") {
       ui.openMenu(false); // from the popup's Settings button — opens at the top (Switch AI)
