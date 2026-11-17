@@ -1691,6 +1691,14 @@
           //     the auto-resume watchdog refuses to re-fire an "executed" turn.
           // Parking first keeps all of that truthful: we only commit once we are
           // foreground and about to really dispatch.
+          // Replay guard: this EXACT call already ran in this turn (same tool,
+          // same canonical arguments). Re-running it cannot produce new
+          // information - it only spams the bridge and the transcript. Checked
+          // before the park so a hidden tab does not queue a duplicate either.
+          if (executedCalls.has(turnKey(res.item), call)) {
+            diag("tool.skip.duplicateCall", { name: call.tool });
+            break;
+          }
           if (document.hidden && !A.stop) {
             diag("tool.parkBeforeDispatch", { name: call.tool });
             if (!(await waitVisible()) || A.stop) break;
@@ -1707,6 +1715,7 @@
           // watchdog never re-fires it after a scroll re-render wipes the node's
           // zloop/zResume markers (see the `executed` map).
           rememberExecuted(res.item);
+          executedCalls.remember(turnKey(res.item), call);
           diag("tool.start", { name: call.tool });
           const feedback = await runTool(call);
           A.toolRunning = false;
@@ -1893,6 +1902,12 @@
   // re-execution IDEMPOTENT regardless of any isGenerating/lastGenAt heuristic
   // misfire - the hard part (is this a live turn?) can be wrong without harm.
   const executed = new Map(); // "conv|turnKey" → text prefix at dispatch time
+  // Per-CALL replay guard. The map above keys on a text prefix, which the site
+  // invalidates whenever it re-renders the answer after a result lands - the
+  // reason one identical `list_dir` ran again every 30s for 20 minutes. Keyed on
+  // (turn, tool, canonical args) a call can only run once per turn. See
+  // ZSGuard.createCallMemory (and test-guard.js) for the rule itself.
+  const executedCalls = ZSGuard.createCallMemory({ limit: 64 });
   // ── Scroll-away suppression ───────────────────────────────────────────────
   // The user's own rule, requested after the replay bug: while they scroll UP
   // through history, nothing about the agent may look alive. Scrolling a
@@ -5349,8 +5364,18 @@
     if (isRememberedExecuted(item, txt)) return;
     // Resume only when a COMPLETE, parseable command is present - and re-attempt
     // if the turn has GROWN since our last try.
-    if (!ZSParse.parseToolCalls(txt).length) return;
+    const parsed = ZSParse.parseToolCalls(txt);
+    if (!parsed.length) return;
     const len = txt.length;
+    // Per-call replay guard: the reply may have been re-rendered (which defeats
+    // the text-prefix check above), yet the commands it carries already ran.
+    if (parsed.every((c) => executedCalls.has(turnKey(item), c))) {
+      if (A._skipDupTurn !== turnKey(item)) {
+        A._skipDupTurn = turnKey(item);
+        diag("resume.skip.duplicateCall", { len });
+      }
+      return;
+    }
     if (item.dataset.zResume && Number(item.dataset.zResumeLen || 0) >= len) return;
     item.dataset.zResume = "1";
     item.dataset.zResumeLen = String(len);
@@ -5390,8 +5415,14 @@
     if (P.turnHalted && P.turnHalted(item)) return { ok: false, why: "halted" };
     const txt = P.itemText(item);
     if (!ZSParse.hasToolSignature(txt)) return { ok: false, why: "no-command" };
-    if (!ZSParse.parseToolCalls(txt).length) return { ok: false, why: "unparseable" };
+    const parsedPending = ZSParse.parseToolCalls(txt);
+    if (!parsedPending.length) return { ok: false, why: "unparseable" };
     if (isRememberedExecuted(item, txt)) return { ok: false, why: "already" };
+    // Every command in this reply already ran in this turn - a re-rendered
+    // reply, not a pending one.
+    if (parsedPending.every((c) => executedCalls.has(turnKey(item), c))) {
+      return { ok: false, why: "already-call" };
+    }
     if (!force) {
       if (document.hidden) return { ok: false, why: "hidden" };
       if (P.isGenerating()) return { ok: false, why: "generating" };

@@ -139,8 +139,70 @@ const ZSGuard = (() => {
     return { shouldProbe: true, close: !o.pongAnswered };
   }
 
+  // ── Per-call execution memory ───────────────────────────────────────────
+  // The turn-level `executed` map keys on a TEXT PREFIX of the reply, so it
+  // misses a replayed call whose text changed: the site re-renders the answer
+  // once a tool result lands below it, startsWith() no longer holds, and the
+  // watchdog (or a stale tab) dispatches the SAME command again - measured live
+  // as one identical `list_dir` every 30 s for 20+ minutes while nothing else
+  // ran. It also cannot tell one call from another inside a reply that carries
+  // several commands.
+  //
+  // This memory keys on (turn key, tool name, canonical arguments): the same
+  // call in the same turn can only ever run once, no matter how the reply text
+  // is re-rendered. Different arguments, or the same call in another turn, are
+  // still allowed - that is ordinary agent behaviour.
+  function createCallMemory(opts) {
+    const o = opts || {};
+    const limit = o.limit > 0 ? o.limit : 64;
+    const map = new Map(); // turnKey -> Set(signature)
+    // Order-independent serialisation, so {"a":1,"b":2} and {"b":2,"a":1} are
+    // the same call (models reorder keys between retries of one command).
+    const canon = (v) => {
+      if (v === null || typeof v !== "object") {
+        try { return JSON.stringify(v); } catch { return String(v); }
+      }
+      if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+      const keys = Object.keys(v).sort();
+      return "{" + keys.map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+    };
+    const signature = (call) => {
+      if (!call || typeof call !== "object") return "";
+      const name = String(call.tool || call.command || "");
+      const raw = call.arguments != null ? call.arguments : call.params;
+      let body;
+      try {
+        body = typeof raw === "string" ? raw : canon(raw == null ? {} : raw);
+      } catch {
+        body = String(raw);
+      }
+      return (name || "?") + "|" + body;
+    };
+    return {
+      signature,
+      remember(turnKey, call) {
+        const sig = signature(call);
+        if (!turnKey || !sig) return;
+        let set = map.get(turnKey);
+        if (!set) {
+          if (map.size >= limit) map.delete(map.keys().next().value);
+          set = new Set();
+          map.set(turnKey, set);
+        }
+        set.add(sig);
+      },
+      has(turnKey, call) {
+        const set = map.get(turnKey);
+        return !!(set && set.has(signature(call)));
+      },
+      size() { return map.size; },
+      clear() { map.clear(); },
+    };
+  }
+
   return {
     mayRetryAfterDisconnect,
+    createCallMemory,
     inFlightFailure,
     holdUntilScrollLapses,
     createScrollTracker,

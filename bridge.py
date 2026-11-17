@@ -40,6 +40,15 @@ BRIDGE_VERSION = "3.9.7"
 MAX_LOG_CHARS = 1000
 MAX_CONCURRENT_REQUESTS = 32
 BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
+# Transport-level replay guard. Two live extension instances can share this bridge
+# (the daily Chrome and the CDP test Chrome both load the same unpacked folder), and
+# a stale instance keeps re-sending one identical call - measured: the same
+# `list_dir` every 30-40 s for over an hour because that process still runs the old
+# bundle in memory. Re-running it cannot yield new information, so an identical call
+# that arrives AGAIN right after itself is answered from the previous result.
+# Deliberately narrow: only a consecutive repeat (list_dir -> write_file -> list_dir
+# is never suppressed) and only within this window.
+DUPLICATE_CALL_TTL = 300.0
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -506,7 +515,15 @@ class Bridge:
     async def handle_client(self, websocket: Any, _path: Optional[str] = None) -> None:
         async with self._client_lock:
             self.clients.add(websocket)
-        log("extension connected")
+        try:
+            _hdr = {}
+            _req = getattr(websocket, "request", None)
+            if _req is not None and getattr(_req, "headers", None) is not None:
+                _hdr = {k: _req.headers.get(k) for k in ("Origin", "User-Agent", "Sec-WebSocket-Protocol")}
+            _peer = getattr(websocket, "remote_address", None)
+        except Exception:
+            _hdr, _peer = {}, None
+        log(f"extension connected path={_path!r} peer={_peer} nclients={len(self.clients)} hdr={_hdr}")
         await self._send_client(websocket, self._connected_message())
         pending: set = set()
         limiter = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -558,6 +575,12 @@ class Bridge:
     async def _handle_request(self, websocket: Any, request: Dict[str, Any]) -> None:
         request_id = request.get("id")
         kind = request.get("type")
+        if kind == "call_tool":
+            try:
+                peer = getattr(websocket, "remote_address", None)
+            except Exception:
+                peer = None
+            log(f"[call] conn={id(websocket) % 100000} peer={peer} keys={sorted(request.keys())}")
         if kind == "ping":
             await self._send_client(websocket, {"type": "pong", "id": request_id})
         elif kind == "studio_status":
@@ -639,6 +662,24 @@ class Bridge:
             timeout_seconds = max(1.0, min(float(timeout) / 1000, 300.0))
         except (TypeError, ValueError):
             timeout_seconds = 120.0
+        # Replay guard (see DUPLICATE_CALL_TTL): answer an immediately repeated
+        # identical call from the result just produced instead of running it again.
+        try:
+            sig = json.dumps({"n": name, "a": arguments}, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            sig = None
+        last = getattr(self, "_last_call", None)
+        if sig and last and last.get("sig") == sig and time.time() - last.get("at", 0) <= DUPLICATE_CALL_TTL:
+            cached = dict(last.get("response") or {})
+            if cached:
+                cached["id"] = request_id
+                cached["duplicate"] = True
+                await self._send_client(websocket, cached)
+                log(f"<- {name} (repeated identical call - answered from the previous result)")
+                return
+        # Any different call breaks the chain, so an ordinary repeat after real work
+        # still runs for real.
+        self._last_call = None
         server, tool_name = self._resolve_tool(name)
         # Isolation: the extension states which server is selected. The bridge refuses to
         # run a tool that belongs to any other server (requests without the field keep
@@ -701,10 +742,14 @@ class Bridge:
                     {"type": "tool_result", "id": request_id, "ok": False, "error": text or "MCP tool failed."},
                 )
             else:
-                await self._send_client(
-                    websocket,
-                    {"type": "tool_result", "id": request_id, "ok": True, "text": text, "images": images},
-                )
+                response = {"type": "tool_result", "id": request_id, "ok": True, "text": text, "images": images}
+                await self._send_client(websocket, response)
+                if sig:
+                    self._last_call = {
+                        "sig": sig,
+                        "at": time.time(),
+                        "response": {"type": "tool_result", "ok": True, "text": text, "images": images},
+                    }
             self.hub.end(call_id, ok=not result.get("isError"), chars=len(text))
             log(f"<- {name} ({text[:120].replace(chr(10), ' ')})")
         except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
