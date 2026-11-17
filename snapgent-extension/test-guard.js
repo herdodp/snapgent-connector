@@ -23,6 +23,41 @@ const G = new Function(
   ok("a timeout is not a retryable disconnect", G.mayRetryAfterDisconnect({ kind: "timeout", sent: false }) === false);
   ok("a success is not a retryable disconnect", G.mayRetryAfterDisconnect({ ok: true }) === false);
 
+  // ── 1b. Per-call execution memory (replay of one identical command) ──────
+  // Live bug: one identical `list_dir` was dispatched every 30 s for 20+
+  // minutes. The turn-level memory keys on reply TEXT, and the site re-renders
+  // that text once a result lands - so startsWith() stopped matching and the
+  // call looked fresh forever. This memory keys on the CALL itself.
+  {
+    const mem = G.createCallMemory({ limit: 4 });
+    const dir = { tool: "list_dir", arguments: { path: "immersed-tube-tunnel" } };
+    mem.remember("kA", dir);
+    ok("a call that already ran is refused", mem.has("kA", dir) === true);
+    // The replayed payload from the live log, re-serialised with another key
+    // order: the same call, therefore still refused.
+    const reordered = { tool: "list_dir", arguments: { path: "immersed-tube-tunnel" } };
+    ok("reordered arguments are the same call", mem.has("kA", reordered) === true);
+    ok("same call in ANOTHER turn is allowed", mem.has("kB", dir) === false);
+    ok("different arguments are allowed", mem.has("kA", { tool: "list_dir", arguments: { path: "other" } }) === false);
+    ok("different tool is allowed", mem.has("kA", { tool: "read_file", arguments: dir.arguments }) === false);
+    // The model's own schema: command/params instead of tool/arguments.
+    const cmd = { command: "read_file", params: { path: "a.html" } };
+    mem.remember("kA", cmd);
+    ok("command/params shape is remembered too", mem.has("kA", { command: "read_file", params: { path: "a.html" } }) === true);
+    // A raw JSON string body and the parsed object are the SAME call - that is
+    // the point: a retry that re-sends text instead of an object must not run
+    // the command a second time.
+    mem.remember("kA", { tool: "x", arguments: "{}" });
+    ok("a JSON-string body equals the parsed object body", mem.has("kA", { tool: "x", arguments: {} }) === true);
+    // Cap: adding a NEW turn past the cap evicts the oldest one instead of
+    // growing without bound.
+    mem.remember("kC", dir); mem.remember("kD", dir); mem.remember("kE", dir);
+    ok("the memory stays at the cap", mem.size() <= 4);
+    mem.remember("kF", dir); // one new turn past the cap
+    ok("the oldest turn is evicted at the cap", mem.has("kA", dir) === false);
+    ok("the newest turn is still remembered", mem.has("kF", dir) === true);
+  }
+
   // The failure text must warn instead of inviting a blind repeat.
   const msg = G.inFlightFailure("write_file");
   ok("in-flight failure names the tool", msg.includes("write_file"));
