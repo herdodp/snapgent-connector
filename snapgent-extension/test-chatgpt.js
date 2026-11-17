@@ -43,6 +43,10 @@ function el(tag, opts, children) {
       if (s.startsWith(".") && !s.startsWith("[") && classes.includes(s.slice(1))) return true;
       const classMatch = /^\[class\*=["']([^"']+)["']\]$/.exec(s);
       if (classMatch && classes.some((c) => c.includes(classMatch[1]))) return true;
+      // [attr="value"] variants matter for the 2026-11-17 markup, whose only
+      // assistant marker is data-markdown-text-style="assistant-message".
+      const attrVal = /^\[([-\w]+)=["']?([^"'\]]+)["']?\]$/.exec(s);
+      if (attrVal) return attrs[attrVal[1]] === attrVal[2];
       const attrMatch = /^\[([-\w]+)\]$/.exec(s);
       // Attribute NAMES may contain hyphens (data-turn-key), so look the raw
       // string up rather than only strlen-safe identifiers.
@@ -98,6 +102,10 @@ function el(tag, opts, children) {
   // stub must provide it. Concatenate the subtree's text nodes, the way a real
   // one renders them (a text node's `nodeValue`).
   Object.defineProperty(node, "innerText", {
+    // configurable so a test can reproduce the 2026-11-17 variant, where a code
+    // block renders with contain-intrinsic-block-size and innerText is empty
+    // while textContent still holds the payload.
+    configurable: true,
     get() {
       const out = [];
       const walk = (n) => {
@@ -500,4 +508,29 @@ ok("mobile textarea text can be read", P.editorText() === "");
     !maskedSib || maskedSib.querySelector(".markdown") === null);
   ok("sibling layout never returns the wrapper or the turn",
     maskedSib !== sided && maskedSib !== sidedTurn);
+
+  // Measured live 2026-11-17: a third desktop variant replaced .markdown with
+  // [data-markdown-text-style="assistant-message"] whose code blocks carry
+  // contain-intrinsic-block-size - innerText reports "" while textContent still
+  // holds the envelope. Reading .markdown alone returned 0 chars, the watcher
+  // stalled, and a perfectly valid {"command":"read_file"} sat on screen with no
+  // chip and no bridge call. Both readers must survive an empty innerText.
+  const jsonEnvelope = '{"command":"read_file","params":{"path":"a/b.html"}}';
+  const code = el("code", { class: "whitespace-pre" }, [jsonEnvelope]);
+  const pre = el("pre", {}, [code]);
+  Object.defineProperty(pre, "innerText", { get: () => "" }); // the variant
+  pre.textContent = jsonEnvelope;
+  const newReply = el("div", { attrs: { "data-markdown-text-style": "assistant-message" } }, [pre]);
+  const newTurn = el("div", { attrs: { "data-turn-key": "t-mdroot" } },
+    [el("div", { class: "group/user-message" }, ["go"]), newReply]);
+  ok("2026-11-17 markdown root is found by the reply selector",
+    P.itemText(newTurn).includes('"command":"read_file"'));
+
+  const plain = el("div", { class: "wrap-x" }, [jsonEnvelope]);
+  Object.defineProperty(plain, "innerText", { get: () => "" });
+  plain.textContent = jsonEnvelope;
+  const plainTurn = el("div", { attrs: { "data-turn-key": "t-plain" } },
+    [el("div", { class: "group/user-message" }, ["go"]), plain]);
+  ok("shape-B fallback reads textContent when innerText is empty",
+    P.itemText(plainTurn).includes('"command":"read_file"'));
 }
