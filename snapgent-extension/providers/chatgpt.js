@@ -74,7 +74,15 @@ const ZSProvider = (() => {
     msg: '[data-message-author-role],[class*="DilResponseRoot"],[data-turn-key]',
     userRole: "user",
     assistantRole: "assistant",
-    reply: ".markdown",
+    // 2026-11-17: a THIRD desktop variant dropped .markdown entirely. The
+    // assistant body is now [data-markdown-text-style="assistant-message"]
+    // (inner .MarkdownRoot-*), and its code blocks render with
+    // contain-intrinsic-block-size, so innerText reports ~0 chars for content the
+    // DOM still holds. Reading only .markdown made the watcher see "reply 0
+    // chars" on every new turn: a valid {"command":…} sat on screen and was never
+    // parsed, the tool never ran and the session stalled. textContent is already
+    // the safe source here (textWithout walks nodeValue).
+    reply: '.markdown,[data-markdown-text-style="assistant-message"]',
     editor: '#prompt-textarea,[data-mobile-composer-prompt],textarea[aria-label="Chat with ChatGPT"],[role="textbox"][aria-label="Ask ChatGPT"]',
     // The ONE submit control; its data-testid says whether it is currently a
     // send or a stop button (see isStopBtn). Id first - it survives testid churn.
@@ -215,8 +223,11 @@ const ZSProvider = (() => {
   const turnAssistantBlocks = (item) => {
     if (!isTurnKeyItem(item)) return [];
     const inUser = (el) => !!el.closest('[class*="group/user-message"]');
+    // innerText is EMPTY for code blocks rendered with contain-intrinsic-block-size
+    // (2026-11-17 variant) while textContent still has the payload, so probe both.
+    const bodyText = (el) => (el.innerText || "") + "\n" + (el.textContent || "");
     const pres = [...item.querySelectorAll("pre")].filter(
-      (p) => !inUser(p) && /[{[]/.test(p.innerText || "")
+      (p) => !inUser(p) && /[{[]/.test(bodyText(p))
     );
     if (pres.length) return pres;
     // Shape B: plain text. Take the DEEPEST wrapper that still carries the
@@ -224,7 +235,7 @@ const ZSProvider = (() => {
     return [...item.querySelectorAll("div")]
       .filter((d) => {
         if (inUser(d)) return false;
-        const t = d.innerText || "";
+        const t = bodyText(d);
         if (!/\{/.test(t) || /you\s+said\s*:/i.test(t)) return false;
         return /"(?:command|params|tool)"\s*:/.test(t);
       })
