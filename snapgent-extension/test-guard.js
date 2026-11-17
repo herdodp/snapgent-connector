@@ -177,6 +177,50 @@ const G = new Function(
 }
 
 // ── The worker uses the shared rule, not a copy ───────────────────────────
+  // ── 1c. Adopting a command written on another device (opt-in) ────────────
+  // Live gap measured 2026-11-18: a reply typed in the ChatGPT mobile app
+  // synced into the web tab with a valid {"command":"list_dir"} block, but the
+  // loop read it as plain text and ended (resume answered "no-command").
+  {
+    const ad = G.createRemoteCommandAdopter({ limit: 4 });
+    const base = { enabled: true, started: true, busy: false, generating: false, hasSignature: true, callCount: 1, allExecuted: false };
+    ok("first sighting becomes the baseline, never adopted", ad.decide({ ...base, key: "k1" }) === "baseline");
+    ok("the reply already on screen is not new", ad.decide({ ...base, key: "k1" }) === "not-new");
+    ok("a reply written elsewhere is adopted", ad.decide({ ...base, key: "k2" }) === "adopt");
+    ok("one turn is adopted only once", ad.decide({ ...base, key: "k2" }) === "seen");
+    ok("a reply without a command is left alone", ad.decide({ ...base, key: "k3", hasSignature: false, callCount: 0 }) === "no-command");
+    ok("a command that already ran is not adopted", ad.decide({ ...base, key: "k3", allExecuted: true }) === "already-call");
+    ok("that settled turn stays settled", ad.decide({ ...base, key: "k3", allExecuted: true }) === "seen");
+    ok("opted out adopts nothing", ad.decide({ ...base, key: "k4", enabled: false }) === "disabled");
+    ok("no started session adopts nothing", ad.decide({ ...base, key: "k4", started: false }) === "not-started");
+    ok("a busy loop owns the turn", ad.decide({ ...base, key: "k4", busy: true }) === "busy");
+    ok("generation in flight is left alone", ad.decide({ ...base, key: "k4", generating: true }) === "generating");
+    ok("no assistant turn yet", ad.decide({ ...base, key: null }) === "no-turn");
+  }
+  {
+    // Bounded memory + re-anchoring when the user flips the toggle on: turning
+    // it on must not fire the command that was already sitting on screen.
+    const ad = G.createRemoteCommandAdopter({ limit: 2 });
+    ad.setBaseline("k0");
+    for (const key of ["a", "b", "c"]) {
+      ad.decide({ enabled: true, started: true, key, hasSignature: true, callCount: 1 });
+    }
+    ok("the seen list stays bounded", ad.size() <= 2);
+    ad.setBaseline("later");
+    ok("re-anchoring makes the visible reply the baseline", ad.decide({ enabled: true, started: true, key: "later", hasSignature: true, callCount: 1 }) === "not-new");
+  }
+  // Wiring: a tested helper the running code never calls is the bug this file
+  // exists to catch, so the listener and its toggle must really be in main.js.
+  {
+    const fs = require("fs");
+    const main = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+    ok("main.js creates the remote-command adopter", /ZSGuard\.createRemoteCommandAdopter\s*\(/.test(main));
+    ok("main.js observes the conversation for new replies", /new MutationObserver\(schedule\)/.test(main));
+    ok("main.js adopts through resumePending", /remoteAdopter\.decide\(/.test(main) && /remote\.resume/.test(main));
+    ok("the panel exposes the Remote commands toggle", /id="zs-remote-commands"/.test(main) && /setRemoteCommands\(remoteBox\.checked\)/.test(main));
+    ok("the setting is persisted", /zsRemoteCommands/.test(main));
+  }
+
 // Guards the exact regression the reviewer found in runTool: a helper that the
 // tests cover but the running code never calls. background.js must load
 // core/guard.js via importScripts and consult ZSGuard.heartbeatDecision.

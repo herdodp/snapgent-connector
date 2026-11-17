@@ -200,9 +200,57 @@ const ZSGuard = (() => {
     };
   }
 
+  // A reply produced by the ChatGPT mobile app lands in the page through the
+  // server-side conversation sync and never passes through the loop's "wait for
+  // the reply I just sent" path. Measured 2026-11-18: such a reply sat in the DOM
+  // with a perfectly good {"command":"list_dir"} block and the loop read it as
+  // plain text, ended, and resume answered no-command.
+  // The decision lives here so it can be tested without a DOM: adopt at most one
+  // command per assistant turn, never the turn that was already on screen when
+  // adoption started (so enabling the toggle cannot fire an old command), and
+  // never a turn whose commands all ran already.
+  function createRemoteCommandAdopter(opts) {
+    const o = opts || {};
+    const limit = o.limit > 0 ? o.limit : 64;
+    const seen = new Set();
+    let baseline = null;
+    const remember = (key) => {
+      if (!key) return;
+      if (seen.size >= limit) seen.delete(seen.values().next().value);
+      seen.add(key);
+    };
+    return {
+      setBaseline(key) { baseline = key || null; },
+      baseline() { return baseline; },
+      seenBefore(key) { return !!key && seen.has(key); },
+      decide(input) {
+        const i = input || {};
+        if (!i.enabled) return "disabled";
+        if (!i.started) return "not-started";
+        if (i.busy) return "busy";
+        if (i.generating) return "generating";
+        if (!i.key) return "no-turn";
+        if (baseline === null) { baseline = i.key; return "baseline"; }
+        if (i.key === baseline) return "not-new";
+        if (seen.has(i.key)) return "seen";
+        if (!i.hasSignature) return "no-command";
+        if (!i.callCount) return "unparseable";
+        if (i.allExecuted) {
+          remember(i.key);
+          return "already-call";
+        }
+        remember(i.key);
+        return "adopt";
+      },
+      size() { return seen.size; },
+      clear() { seen.clear(); baseline = null; },
+    };
+  }
+
   return {
     mayRetryAfterDisconnect,
     createCallMemory,
+    createRemoteCommandAdopter,
     inFlightFailure,
     holdUntilScrollLapses,
     createScrollTracker,

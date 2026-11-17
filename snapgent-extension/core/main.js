@@ -140,6 +140,24 @@
     return backgroundSessions;
   }
 
+  // Opt-in: execute a command block that turns up in an assistant reply while the
+  // loop is idle. Replies written from the ChatGPT mobile app arrive through the
+  // server-side conversation sync, so they never pass through the loop's "wait
+  // for the reply I just sent" path and used to be read as plain text.
+  const REMOTE_COMMANDS_KEY = "zsRemoteCommands";
+  let remoteCommands = false;
+  try {
+    chrome.storage.local.get(REMOTE_COMMANDS_KEY, (result) => {
+      if (result && result[REMOTE_COMMANDS_KEY] === true) remoteCommands = true;
+    });
+  } catch (error) {
+    console.warn("[snapgentV3] Could not load remote-command setting:", error);
+  }
+  function setRemoteCommands(on) {
+    remoteCommands = on === true;
+    try { chrome.storage.local.set({ [REMOTE_COMMANDS_KEY]: remoteCommands }); } catch {}
+    return remoteCommands;
+  }
   let selectedTargetId = "none";
   try {
     chrome.storage.local.get(TARGET_STORAGE_KEY, (result) => {
@@ -3560,6 +3578,7 @@
           `<div class="zs-mcp-pop-list">${rows}</div>` +
           `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>Sessions</span></div>` +
           `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}></label>` +
+          `<label class="zs-mcp-row" title="Run a command that arrives in a reply written somewhere else, e.g. from the ChatGPT mobile app"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Remote commands</span><span class="zs-mcp-row-meta">Run commands from replies written on another device</span></span><input type="checkbox" id="zs-remote-commands" ${remoteCommands ? "checked" : ""}></label>` +
           
         `</div>`;
       document.documentElement.appendChild(pop);
@@ -3583,6 +3602,18 @@
       pop.querySelector(".zs-mcp-pop-close").addEventListener("click", close);
       const bgBox = pop.querySelector("#zs-bg-sessions");
       if (bgBox) bgBox.addEventListener("change", () => setBackgroundSessions(bgBox.checked));
+      const remoteBox = pop.querySelector("#zs-remote-commands");
+      if (remoteBox) remoteBox.addEventListener("change", () => {
+        setRemoteCommands(remoteBox.checked);
+        // Turning it on must not fire a command that was already on screen: make
+        // the reply in front of the user the baseline, so only replies that turn
+        // up from now on are adopted.
+        if (remoteBox.checked && remoteAdopter) {
+          const item = P.lastAssistant();
+          remoteAdopter.clear();
+          remoteAdopter.setBaseline(item ? turnKey(item) : null);
+        }
+      });
       pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
         box.addEventListener("change", () => {
           setMcpEnabled(box.dataset.id, box.checked);
@@ -5433,6 +5464,52 @@
     agentLoop(P.assistantCount() - 1);
     return { ok: true, len: txt.length };
   }
+  // ── Commands that arrive from another device (opt-in) ──────────────────────
+  // A reply written in the ChatGPT mobile app reaches this page through the
+  // server-side conversation sync, so nothing in the loop's own send/wait path
+  // ever sees it: it used to be read as plain text and dropped. Watch the
+  // conversation instead and adopt such a reply the moment it is painted.
+  // MutationObserver for immediacy, plus a slow interval because a hidden tab
+  // throttles timers to roughly one tick a minute.
+  const remoteAdopter = ZSGuard.createRemoteCommandAdopter({ limit: 64 });
+  (function watchRemoteCommands() {
+    if (typeof MutationObserver !== "function") return;
+    let timer = null;
+    const check = async () => {
+      const item = P.lastAssistant();
+      const key = item ? turnKey(item) : null;
+      let txt = "";
+      try { txt = item ? P.itemText(item) : ""; } catch { txt = ""; }
+      const hasSignature = !!txt && ZSParse.hasToolSignature(txt);
+      const calls = hasSignature ? ZSParse.parseToolCalls(txt) : [];
+      let generating = false;
+      try { generating = !!(P.isGenerating && P.isGenerating()); } catch {}
+      const decision = remoteAdopter.decide({
+        enabled: remoteCommands,
+        started: !!A.started,
+        busy: !!(A.running || A.starting || A.injecting),
+        generating,
+        key,
+        hasSignature,
+        callCount: calls.length,
+        allExecuted: !!key && calls.length > 0 && calls.every((c) => executedCalls.has(key, c)),
+      });
+      if (decision !== "adopt") return;
+      diag("remote.command", { calls: calls.map((c) => c.tool || c.command), len: txt.length });
+      const r = await resumePending({ force: true });
+      diag("remote.resume", r);
+    };
+    const schedule = () => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; check().catch(() => {}); }, 800);
+    };
+    try {
+      if (document.body) new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+      else document.addEventListener("DOMContentLoaded", () => schedule(), { once: true });
+    } catch {}
+    setInterval(() => { check().catch(() => {}); }, 5000);
+  })();
+
   // Retry loop for the reload case: cheap, and it only ever acts on a pending
   // command with no result below it. Silent unless it actually resumes.
   setInterval(() => {
