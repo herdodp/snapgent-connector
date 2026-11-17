@@ -50,6 +50,22 @@ document.getElementById("restart").addEventListener("click", (e) => {
     setTimeout(refresh, 600);
   });
 });
+document.getElementById("resume").addEventListener("click", (e) => {
+  // Resume the command the active AI tab is still sitting on. After a page
+  // reload the reply is on screen but no loop is running, and the auto-resume
+  // watchdog refuses it (stale "fresh turn" clock) - this asks explicitly.
+  const label = e.target.textContent;
+  e.target.textContent = "▶ Resuming…";
+  chrome.tabs.query({}, (tabs) => {
+    const active = tabs.find((t) => t.active && t.url && SUPPORTED_HOSTS.some((h) => t.url.includes(h)));
+    const anySupported = active || tabs.find((t) => t.url && SUPPORTED_HOSTS.some((h) => t.url.includes(h)));
+    if (!anySupported) { e.target.textContent = label; return; }
+    chrome.tabs.sendMessage(anySupported.id, { type: "zs-resume", force: true }, (r) => {
+      e.target.textContent = r && r.ok ? "✓ Resumed" : "▶ Resume";
+      setTimeout(() => { e.target.textContent = label; }, 1800);
+    });
+  });
+});
 document.getElementById("settings").addEventListener("click", () => {
   // Tries the in-page panel on an already-open supported AI tab first, so
   // opening it doesn't require a conversation to already be started there.
