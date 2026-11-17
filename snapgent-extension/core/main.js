@@ -4993,6 +4993,12 @@
     if (msg && msg.type === "zs-status") {
       ui.setStatus({ connected: msg.connected, mcpAlive: msg.mcpAlive, studio: msg.studio, studioApp: msg.studioApp, studioProc: msg.studioProc, tools: msg.tools, servers: msg.servers });
     }
+    if (msg && msg.type === "zs-resume") {
+      // Manual "resume the pending command" - from the popup or a bar button.
+      resumePending({ force: !!(msg.force) })
+        .then((r) => diag("resume.request", r))
+        .catch(() => {});
+    }
     if (msg && msg.type === "zs-open-menu") {
       ui.openMenu(false); // from the popup's Settings button — opens at the top (Switch AI)
     }
@@ -5350,6 +5356,57 @@
     A.sendToken = null;
     agentLoop(P.assistantCount() - 1);
   }, 1000);
+
+  // ── Resume a PENDING command (manual, and after a reload) ────────────────
+  // The autoResume watchdog right above refuses a reply that is no longer
+  // "fresh" (A.lastGenAt ages out within RESUME_FRESH_MS) and never runs while
+  // the tab is occluded (document.hidden). Both guards protect against
+  // re-running HISTORY, but they also block the one case the user hits every
+  // day: reload the page / restart Chrome while a command is still pending -
+  // the reply is on screen, never executed, and no loop is running. Nothing
+  // ever picks it up, so the session looks wedged until the user retypes.
+  //
+  // This entry point dispatches it while keeping every guard that protects
+  // history: a turn whose injected result is already below, a turn already
+  // recorded as dispatched, a halted turn and an unparseable payload are all
+  // still refused. `force` only bypasses the freshness/visibility waits.
+  async function resumePending(opts) {
+    const force = !!(opts && opts.force);
+    if (A.running || A.starting || A.injecting) return { ok: false, why: "busy" };
+    if (!A.started) return { ok: false, why: "not-started" };
+    const item = P.lastAssistant();
+    if (!item) return { ok: false, why: "no-turn" };
+    const all = P.allItems();
+    const after = all[all.indexOf(item) + 1];
+    if (after && P.isUserItem(after) &&
+        ZSParse.isInjectedFeedback(P.classifyText(after, ".zs-chip"))) {
+      return { ok: false, why: "settled" };
+    }
+    if (P.turnHalted && P.turnHalted(item)) return { ok: false, why: "halted" };
+    const txt = P.itemText(item);
+    if (!ZSParse.hasToolSignature(txt)) return { ok: false, why: "no-command" };
+    if (!ZSParse.parseToolCalls(txt).length) return { ok: false, why: "unparseable" };
+    if (isRememberedExecuted(item, txt)) return { ok: false, why: "already" };
+    if (!force) {
+      if (document.hidden) return { ok: false, why: "hidden" };
+      if (P.isGenerating()) return { ok: false, why: "generating" };
+    }
+    rememberExecuted(item);
+    diag("resume.manual", { len: txt.length, force });
+    A.sendToken = null; // reply is already on screen: take it as this turn
+    agentLoop(P.assistantCount() - 1);
+    return { ok: true, len: txt.length };
+  }
+  // Retry loop for the reload case: cheap, and it only ever acts on a pending
+  // command with no result below it. Silent unless it actually resumes.
+  setInterval(() => {
+    if (!A.started || A.running || A.starting || A.injecting) return;
+    if (document.hidden) return;
+    resumePending({}).then((r) => {
+      if (!r || !r.ok) return;
+      diag("resume.afterReload", r);
+    }).catch(() => {});
+  }, 5000);
 
   // ── System-prompt re-injection fallback ───────────────────────────────────
   // The piggyback path (withSysResend) is free but needs a tool result to ride

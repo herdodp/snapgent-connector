@@ -534,3 +534,34 @@ ok("mobile textarea text can be read", P.editorText() === "");
   ok("shape-B fallback reads textContent when innerText is empty",
     P.itemText(plainTurn).includes('"command":"read_file"'));
 }
+
+// ── A mixed turn that carries a command IS the assistant surface ──────────
+// Measured live 2026-11-17: the reply to a user message lives INSIDE the same
+// [data-turn-key] as that message. isAssistantItem() required "no user bubble",
+// so assistantItems() came back EMPTY, lastAssistant() stayed pinned on an older
+// 731-char turn, and the fresh {"command":…} reply was invisible: the resume
+// watchdog re-fired that historical command ~60 times instead of running the new
+// one. The turn must count as assistant when it holds a command block, and a
+// mixed turn carrying only narration must still NOT (masking keys off this).
+{
+  const env = '{"command":"read_file","params":{"path":"immersed-tube-tunnel/anim.html"}}';
+  const codeBlock = el("div", { attrs: { "data-markdown-text-style": "assistant-message" } },
+    [el("pre", {}, [el("code", {}, [env])])]);
+  const cmdTurn = el("div", { attrs: { "data-turn-key": "t-cmd" } },
+    [el("div", { class: "group/user-message" }, ["lanjut"]), codeBlock]);
+  ok("a dual-side turn carrying a command is an assistant item",
+    P.isAssistantItem(cmdTurn) === true);
+  ok("that turn still reports as a user turn too (both sides present)",
+    P.isUserItem(cmdTurn) === true);
+  ok("itemText of the mixed turn is the command payload",
+    P.itemText(cmdTurn).includes('"command":"read_file"'));
+
+  const proseTurn = el("div", { attrs: { "data-turn-key": "t-prose" } },
+    [el("div", { class: "group/user-message" }, ["hi"]),
+     el("div", { class: "markdown" }, ["Ini penjelasan biasa, tanpa perintah."])]);
+  ok("a dual-side turn with only narration is NOT the assistant surface",
+    P.isAssistantItem(proseTurn) === false);
+
+  messageNodes = [proseTurn, cmdTurn];
+  ok("lastAssistant picks the newest command turn", P.lastAssistant() === cmdTurn);
+}

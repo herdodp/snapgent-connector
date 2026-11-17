@@ -167,9 +167,21 @@ const ZSProvider = (() => {
   const isDilReply = (item) => !!(item && item.matches && item.matches('[class*="DilResponseRoot"]'));
   const isAssistantItem = (item) => {
     if (role(item) === S.assistantRole || isDilReply(item)) return true;
+    if (!isTurnKeyItem(item)) return false;
     // New layout: one container holds BOTH sides, so a turn is the assistant
     // surface only if it carries no user bubble of its own.
-    return isTurnKeyItem(item) && !turnHasUserBubble(item);
+    if (turnHasUserBubble(item)) {
+      // ...EXCEPT the 2026-11-17 markup, where the reply to a user message lives
+      // INSIDE that same [data-turn-key] (siblings under one stack: user-block
+      // then reply-block). "No user bubble" then matched no turn at all, so
+      // assistantItems() stayed empty, lastAssistant() pointed at an older
+      // 731-char turn, and a fresh {"command":…} reply was invisible: the resume
+      // watchdog re-fired that historical command every ~30 s instead of running
+      // the new one (measured live 2026-11-17: 60 identical list_dir calls).
+      // A mixed turn IS the assistant surface when it carries a command block.
+      return turnAssistantBlocks(item).length > 0;
+    }
+    return true;
   };
 
   // Masking a whole turn in the 2026-11 layout erased the model's own answer,
