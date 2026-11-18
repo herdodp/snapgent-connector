@@ -49,32 +49,48 @@ if [ -z "$PY" ]; then
 fi
 echo "        Found: $("$PY" --version 2>&1)"
 
-echo "  [2/4] Checking websockets library..."
+echo "  [2/4] Checking bridge dependencies..."
+# websockets carries every tool call; aiohttp only powers the optional live view
+# (http://127.0.0.1:17614/) and /status. Both are installed here so the live view
+# never silently disappears after a fresh setup.
+MISSING=""
+for module in websockets aiohttp; do
+    if ! "$PY" -c "import $module" >/dev/null 2>&1; then
+        MISSING="$MISSING $module"
+    fi
+done
+if [ -n "$MISSING" ]; then
+    echo "        Installing missing dependencies:$MISSING ..."
+    # $MISSING is a space-separated module list built above, so word splitting is intended.
+    "$PY" -m pip install --user $MISSING >/dev/null 2>&1 || true
+fi
 if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
-    echo "        Installing the bridge dependency..."
-    if ! "$PY" -m pip install --user websockets >/dev/null 2>&1 ||
-        ! "$PY" -c "import websockets" >/dev/null 2>&1; then
-        VENV_DIR=".venv-snapgent"
-        if [ ! -x "$VENV_DIR/bin/python" ]; then
-            if ! "$PY" -m venv "$VENV_DIR"; then
-                echo "  ERROR: Could not install websockets or create a local Python environment."
-                echo "  Install python3-venv for your Linux distribution, then retry."
-                log "FATAL: websockets installation and venv creation failed."
-                pause_and_exit 1
-            fi
-        fi
-        PY="$VENV_DIR/bin/python"
-        if ! "$PY" -m pip install websockets; then
-            echo "  ERROR: Could not install the websockets dependency."
-            log "FATAL: websockets installation in local venv failed."
+    VENV_DIR=".venv-snapgent"
+    if [ ! -x "$VENV_DIR/bin/python" ]; then
+        if ! "$PY" -m venv "$VENV_DIR"; then
+            echo "  ERROR: Could not install websockets or create a local Python environment."
+            echo "  Install python3-venv for your Linux distribution, then retry."
+            log "FATAL: websockets installation and venv creation failed."
             pause_and_exit 1
         fi
+    fi
+    PY="$VENV_DIR/bin/python"
+    if ! "$PY" -m pip install websockets aiohttp; then
+        echo "  ERROR: Could not install the websockets dependency."
+        log "FATAL: websockets installation in local venv failed."
+        pause_and_exit 1
     fi
 fi
 if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
     echo "  ERROR: websockets is still unavailable for $PY."
     log "FATAL: websockets import failed after installation."
     pause_and_exit 1
+fi
+if ! "$PY" -c "import aiohttp" >/dev/null 2>&1; then
+    echo "  WARNING: aiohttp is not available; the live view and /status will be disabled."
+    echo "           Tool calls still work. Install it later with:"
+    echo "               $PY -m pip install --user aiohttp"
+    log "WARN: aiohttp missing; live view and /status disabled."
 fi
 
 echo "  [3/4] Detecting VS Code, Roblox Studio, EffectCraft, and FigCraft..."

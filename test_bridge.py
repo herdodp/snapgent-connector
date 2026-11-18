@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import importlib.util
 import json
 import sys
 import tempfile
@@ -411,6 +412,56 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("new EventSource('/events')", html)
         self.assertIn("fetch('/status'", html)
         self.assertIn("elapsed_ms", html)
+
+    @unittest.skipIf(importlib.util.find_spec("aiohttp") is None, "aiohttp package is not installed")
+    async def test_stream_channel_is_read_only(self):
+        # `/push` was new in the previous change and accepted any local POST, so a
+        # web page could inject frames into the live view without a CORS preflight.
+        # Nothing in the extension used it. Pin the behaviour on a real server:
+        # the old route answers 404 and nothing gets published.
+        from aiohttp import ClientSession, web
+
+        hub = bridge.EventHub()
+        runner = web.AppRunner(bridge._build_stream_app(hub), access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/push", json={"event": "tool_start", "tool": "echo"}
+                ) as response:
+                    self.assertEqual(response.status, 404)
+                async with session.get(f"http://127.0.0.1:{port}/status") as response:
+                    self.assertEqual(response.status, 200)
+                    snapshot = await response.json()
+            self.assertEqual(snapshot["version"], bridge.BRIDGE_VERSION)
+        finally:
+            await runner.cleanup()
+        # The rejected POST published nothing.
+        self.assertEqual(hub.snapshot()["queue"], 0)
+        self.assertEqual(list(hub._recent), [])
+
+    def test_bridge_version_matches_the_extension_manifest(self):
+        # The popup prints both numbers side by side, so a drifting bridge version
+        # makes the display meaningless. One number, two files.
+        manifest_path = Path(__file__).parent / "snapgent-extension" / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(bridge.BRIDGE_VERSION, manifest["version"])
+
+    def test_launchers_install_the_live_view_dependency(self):
+        # aiohttp is imported lazily: when it is missing the bridge only logs
+        # "progress channel disabled", so the live view and /status vanish silently.
+        # Pin the install *list*, not a bare mention - the warning text contains the
+        # word too, so a mention-only assertion would pass on a broken launcher.
+        for name in ("Linux_Start.sh", "MacOS_Start.command"):
+            text = (Path(__file__).parent / name).read_text(encoding="utf-8")
+            self.assertIn(
+                "for module in websockets aiohttp;",
+                text,
+                f"{name} does not include aiohttp in its dependency install list",
+            )
 
     async def test_hub_subscriber_receives_frames_live(self):
         hub = bridge.EventHub()

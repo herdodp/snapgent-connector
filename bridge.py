@@ -104,7 +104,7 @@ es.onmessage=()=>{};
 poll(); setInterval(poll,1000);
 </script></body></html>"""
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.7"
+BRIDGE_VERSION = "3.9.12"
 MAX_LOG_CHARS = 1000
 MAX_CONCURRENT_REQUESTS = 32
 BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
@@ -987,12 +987,13 @@ def subprocess_run(command: List[str], timeout: int) -> str:
     return result.stdout
 
 
-async def _start_stream_server(hub: "EventHub") -> Any:
-    """Plain HTTP side channel so progress can be watched while a call is still running.
+def _build_stream_app(hub: "EventHub") -> Any:
+    """Build the progress app without binding a port.
 
-    GET /events (SSE, also /stream) replays the recent backlog then streams live frames;
-    GET /status gives a one-shot snapshot; POST /push lets any local process publish a
-    frame. Every write is advisory - a dead reader can never fail a tool call.
+    Kept apart from ``_start_stream_server`` so a test can inspect the route table
+    of the real app. The channel is deliberately read-only: no route accepts a
+    frame, so a web page open in the same browser cannot inject into the live
+    view through a plain POST that skips the CORS preflight.
     """
     from aiohttp import web
 
@@ -1039,28 +1040,28 @@ async def _start_stream_server(hub: "EventHub") -> Any:
         # tab instead of tailing JSON in a terminal.
         return web.Response(text=INDEX_HTML, content_type="text/html")
 
-    async def push(request: Any) -> Any:
-        try:
-            frame = await request.json()
-        except (json.JSONDecodeError, ValueError):
-            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
-        if not isinstance(frame, dict):
-            return web.json_response({"ok": False, "error": "object expected"}, status=400)
-        event = frame.pop("event", "stream")
-        hub.publish(str(event), **frame)
-        return web.json_response({"ok": True, **hub.snapshot()})
-
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/events", events)
     app.router.add_get("/stream", events)
     app.router.add_get("/status", status)
-    app.router.add_post("/push", push)
-    runner = web.AppRunner(app, access_log=None)
+    return app
+
+
+async def _start_stream_server(hub: "EventHub") -> Any:
+    """Plain HTTP side channel so progress can be watched while a call is still running.
+
+    GET /events (SSE, also /stream) replays the recent backlog then streams live frames;
+    GET /status gives a one-shot snapshot; GET / serves the one-page live view. Every
+    write is advisory - a dead reader can never fail a tool call.
+    """
+    from aiohttp import web
+
+    runner = web.AppRunner(_build_stream_app(hub), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, HOST, STREAM_PORT)
     await site.start()
-    log(f"progress channel: http://{HOST}:{STREAM_PORT}/ (live view), /events (SSE), /status, POST /push")
+    log(f"progress channel: http://{HOST}:{STREAM_PORT}/ (live view), /events (SSE), /status")
     return runner
 
 
