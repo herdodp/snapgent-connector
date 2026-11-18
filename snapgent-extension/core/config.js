@@ -175,10 +175,18 @@ const ZS = (() => {
       targetName = "VS Code",
       skills = [],
       antislopRules = "",
+      sessionTitle = "",
     } = opts;
 
     if (targetServer !== "roblox") {
-      const prompt = `CONTEXT: snapgentV3 is a browser extension that sends your plain-text JSON commands to the user's selected MCP server through their local bridge. The selected target is ${targetName} (server id: ${targetServer}).
+      // First line = what the provider turns into the sidebar chat title (it
+      // summarizes the FIRST message, which is this bootstrap, and never
+      // re-titles). Name the locked project up front so the conversation is
+      // titled after the user's project instead of the bootstrap mechanics.
+      const titleLine = sessionTitle
+        ? `Session: work on the project "${sessionTitle}" (${targetName} via snapgentV3). The user's actual task arrives in their next message.\n\n`
+        : "";
+      const prompt = titleLine + `CONTEXT: snapgentV3 is a browser extension that sends your plain-text JSON commands to the user's selected MCP server through their local bridge. The selected target is ${targetName} (server id: ${targetServer}).
 
 The extension reads commands from your normal reply text and runs them on that MCP server. Your own built-in tools, connectors, or code execution do not access the user's machine. For work on the selected target, write exactly one command per reply as a fenced JSON block:
 \`\`\`json

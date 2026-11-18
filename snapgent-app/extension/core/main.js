@@ -1942,6 +1942,10 @@
       targetServer: selectedTargetId,
       targetName: ui.getTargetName(),
       skills: workspaceSkills,
+      // Locked project name: seeds the sidebar chat title (providers title the
+      // conversation after the first message - the bootstrap - and never
+      // re-title, so without it the item reads "List vscode commands").
+      sessionTitle: selectedTargetId === "vscode" ? (A.sessionProjectName || "") : "",
     });
   }
 
@@ -2170,6 +2174,38 @@
           ui.banner("warn", "VS Code workspace required",
             "Open a project folder in VS Code, then try again.");
           return;
+        }
+        // Pin the session to the workspace that is active RIGHT NOW. Without
+        // the pin, focusing any other VS Code window mid-session silently
+        // moved every following tool call to that other project. lock_workspace
+        // with no arguments always re-pins to the currently focused window, so
+        // a stale lock from a previous session never hijacks this one. Older
+        // bridges without the tool simply keep the old (unpinned) behaviour.
+        const lockTool = activeTools().find((tool) => bareToolName(tool.name) === "lock_workspace");
+        if (lockTool) {
+          const selection = typeof ui.getWsSelection === "function" ? ui.getWsSelection() : null;
+          // Remember the project name for the bootstrap prompt: the provider
+          // derives the sidebar chat title from the FIRST message, which is
+          // the bootstrap - without this the conversation is titled after the
+          // bootstrap's instruction ("List vscode commands") forever, because
+          // providers never re-title. See buildSystemPrompt's sessionTitle.
+          if (selection && selection.name) A.sessionProjectName = selection.name;
+          const locked = await bg({
+            type: "call_tool",
+            name: lockTool.name,
+            arguments: selection && selection.path ? { path: selection.path } : {},
+            timeout: 5000,
+          });
+          if (!alive()) return;
+          if (locked && locked.ok && typeof locked.text === "string") {
+            try {
+              const info = JSON.parse(locked.text);
+              if (info && info.name) {
+                ui.toast(`Workspace locked: ${info.name}`);
+                A.sessionProjectName = info.name;
+              }
+            } catch { /* lock landed; name just not shown */ }
+          }
         }
       }
       const modeState = await P.ensureComposerReady("startup");
@@ -2883,6 +2919,19 @@
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
     let bridgeOk = false, workspaceReady = false, workspaceProbePending = false, workspaceProbeAt = 0;
+    // Last get_workspace_info result for the VS Code target: {name, path,
+    // workspace_locked, workspace_source}. Drives the workspace row in the
+    // MCP settings popup (which workspace the session is pinned to).
+    let workspaceInfo = null;
+    // Pre-start workspace picker (VS Code target): every project folder VS
+    // Code currently has open, and the one chosen for THIS tab's session.
+    // Each chat tab runs its own copy of this script, so each tab can bind to
+    // a different project; Start locks the choice (per-tab, keyed by the tab
+    // id the background stamps onto every tool call).
+    let wsWrap, wsBtn, wsMenuEl;
+    let wsSelection = null;  // {name, path} picked in the dropdown, or null
+    let wsWindowList = null; // [{name, path, active}] from list_vscode_windows
+    let wsListAt = 0, wsListPending = false, wsMenuKey = "";
     let studioDown = false, placeDown = false, appDown = false, addonOk = false, studioProcUp = false;
     let wasConnected = false, bridgeBannerEl = null;
 
@@ -2922,6 +2971,10 @@
           <span id="zs-state"></span>
           <button id="zs-action"></button>
           <button id="zs-stop" hidden>■ Stop</button>
+          <div class="zs-target-wrap" id="zs-ws-wrap" hidden title="Project folder this tab's session will work on">
+            <button id="zs-ws-btn" type="button" aria-haspopup="listbox" aria-label="Project folder"><span id="zs-ws-name"></span></button>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
           <div class="zs-target-wrap" title="Choose which MCP server receives commands">
             <select id="zs-target" aria-label="MCP target" hidden tabindex="-1">
               <option value="vscode">VS Code</option>
@@ -2934,6 +2987,7 @@
         </div>
         <div id="zs-menu" hidden></div>
         <div id="zs-target-menu" hidden></div>
+        <div id="zs-ws-menu" hidden></div>
         ${P.unstableWarning ? `<button id="zs-unstable" aria-label="Provider may be unstable" hidden>⚠ unstable</button>` : ""}
       `;
       document.documentElement.appendChild(root);
@@ -2944,6 +2998,9 @@
       targetSelect = root.querySelector("#zs-target");
       targetBtn = root.querySelector("#zs-target-btn");
       targetMenuEl = root.querySelector("#zs-target-menu");
+      wsWrap = root.querySelector("#zs-ws-wrap");
+      wsBtn = root.querySelector("#zs-ws-btn");
+      wsMenuEl = root.querySelector("#zs-ws-menu");
       switchBtn = root.querySelector("#zs-switch");
       const swName = root.querySelector("#zs-switch-name");
       if (swName) swName.textContent = P.displayName || P.id;
@@ -2972,6 +3029,7 @@
       targetBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (menuEl) menuEl.hidden = true;
+        if (wsMenuEl) wsMenuEl.hidden = true;
         targetMenuEl.hidden = !targetMenuEl.hidden;
         if (!targetMenuEl.hidden) {
           renderTargetMenu();
@@ -2982,6 +3040,30 @@
       document.addEventListener("click", (e) => {
         if (targetMenuEl.hidden) return;
         if (!targetMenuEl.contains(e.target) && !targetBtn.contains(e.target)) targetMenuEl.hidden = true;
+      }, true);
+      // Project-folder picker (VS Code target, before Start). Same look and
+      // behaviour as the target dropdown: a pill that opens a menu of every
+      // project folder VS Code has open; the chosen one is what Start locks.
+      const wsTick = () => {
+        if (wsMenuEl.hidden) return;
+        positionWsMenu();
+        requestAnimationFrame(wsTick);
+      };
+      wsBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (menuEl) menuEl.hidden = true;
+        if (targetMenuEl) targetMenuEl.hidden = true;
+        refreshWsList(true); // fresh window list on every open
+        wsMenuEl.hidden = !wsMenuEl.hidden;
+        if (!wsMenuEl.hidden) {
+          renderWsMenu();
+          positionWsMenu();
+          requestAnimationFrame(wsTick);
+        }
+      });
+      document.addEventListener("click", (e) => {
+        if (!wsMenuEl || wsMenuEl.hidden) return;
+        if (!wsMenuEl.contains(e.target) && !wsBtn.contains(e.target)) wsMenuEl.hidden = true;
       }, true);
       bar.classList.add(`zs-prov-${P.id}`); // lets CSS tune per-site (e.g. font)
       // Provider hook on <html> so overlay.css can tune site-specific CHIP layout
@@ -3109,6 +3191,29 @@
     }
     const targetNameHtml = () =>
       getTargetName().replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    // Status line shows WHICH VS Code project the session works on, not just
+    // the generic "VS Code" label: the opened folder's name, with a lock glyph
+    // when the session is pinned to it (see lock_workspace). Hovering reveals
+    // the full path and the lock state. Falls back to the plain target name
+    // while the probe has no workspace info yet (bridge offline, non-VS Code).
+    const workspaceNameHtml = () => {
+      if (selectedTargetId !== "vscode") return targetNameHtml();
+      // Before Start the picker's choice is what will be locked; once started,
+      // the (per-tab, session-aware) probe result is the truth.
+      const info = (!A.started && !A.starting && wsSelection)
+        ? { name: wsSelection.name, path: wsSelection.path, workspace_locked: false }
+        : workspaceInfo;
+      if (!info || !info.name) return targetNameHtml();
+      const escChar = (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]);
+      const escAttr = (v) => String(v).replace(/[&<>"']/g, escChar);
+      const tip = info.workspace_locked
+        ? `${info.path} - locked to this workspace; switching VS Code windows will not change the project`
+        : `${info.path} - following the focused VS Code window`;
+      const lock = info.workspace_locked
+        ? `<span title="Locked to this workspace - switching VS Code windows will not change the project">&#128274;</span> `
+        : "";
+      return `<span title="${escAttr(tip)}">VS Code · ${lock}${escAttr(info.name)}</span>`;
+    };
 
     function setTarget(id = selectedTargetId) {
       if (!targetSelect) return;
@@ -3182,6 +3287,99 @@
         targetMenuEl.style.maxHeight = `${Math.max(100, vh - top - 8)}px`;
       }
     }
+    // ── Pre-start project picker (VS Code target) ───────────────────────────
+    // Lists the project folders of every open VS Code window. The chosen
+    // folder is what Start locks for THIS tab's session, so two chat tabs can
+    // work on two different projects. Without a choice, Start locks the
+    // folder of the window that is focused at that moment.
+    function effectiveWsSelection() {
+      if (wsSelection) return wsSelection;
+      if (wsWindowList && wsWindowList.length) {
+        return wsWindowList.find((w) => w.active) || wsWindowList[0];
+      }
+      return null;
+    }
+    function refreshWsList(force) {
+      if (selectedTargetId !== "vscode" || wsListPending) return;
+      if (!force && wsWindowList && Date.now() - wsListAt < 15000) return;
+      const tool = activeTools().find((t) => bareToolName(t.name) === "list_vscode_windows");
+      if (!tool) return;
+      wsListPending = true;
+      bg({ type: "call_tool", name: tool.name, arguments: {}, timeout: 5000 })
+        .then((r) => {
+          if (r && r.ok && typeof r.text === "string") {
+            try {
+              const parsed = JSON.parse(r.text);
+              if (Array.isArray(parsed)) wsWindowList = parsed;
+            } catch { /* keep the cached list */ }
+          }
+          wsListAt = Date.now();
+        })
+        .catch(() => {})
+        .finally(() => {
+          wsListPending = false;
+          if (wsMenuEl && !wsMenuEl.hidden) renderWsMenu();
+          renderWsPicker();
+        });
+    }
+    function renderWsPicker() {
+      if (!wsWrap) return;
+      const show = selectedTargetId === "vscode" && !A.started && !A.starting &&
+        bridgeOk && workspaceReady && !!(wsWindowList && wsWindowList.length);
+      wsWrap.hidden = !show;
+      if (!show) {
+        if (wsMenuEl) wsMenuEl.hidden = true;
+        return;
+      }
+      const current = effectiveWsSelection();
+      const label = (current && current.name) || "Project";
+      const nameEl = wsWrap.querySelector("#zs-ws-name");
+      if (nameEl && nameEl.textContent !== label) nameEl.textContent = label;
+    }
+    function renderWsMenu() {
+      if (!wsMenuEl || !wsWindowList || !wsWindowList.length) return;
+      const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      // Skip the rewrite when nothing changed, exactly like renderTargetMenu:
+      // a rebuild between mouse-down and mouse-up would eat the click.
+      const menuKey = wsWindowList.map((w) => `${w.path}:${w.active ? 1 : 0}`).join("|") +
+        "|" + (wsSelection ? wsSelection.path : "");
+      if (wsMenuEl.dataset.menuKey === menuKey && wsMenuEl.childElementCount) return;
+      wsMenuEl.dataset.menuKey = menuKey;
+      const rows = wsWindowList.map((w) => {
+        const chosen = wsSelection ? wsSelection.path === w.path : !!w.active;
+        return `<button type="button" class="zs-site-opt zs-target-opt${chosen ? " zs-target-cur" : ""}" data-path="${esc(w.path)}" data-name="${esc(w.name)}"><span class="zs-site-name"><span>${esc(w.name)}</span></span>${w.active ? `<span class="zs-site-badge">focused</span>` : ""}</button>`;
+      }).join("");
+      wsMenuEl.innerHTML =
+        `<section class="zs-menu-sec"><div class="zs-sec-label"><span>Project folder</span></div>${rows}</section>`;
+      wsMenuEl.querySelectorAll(".zs-target-opt").forEach((b) =>
+        b.addEventListener("click", () => {
+          wsMenuEl.hidden = true;
+          wsSelection = { name: b.dataset.name, path: b.dataset.path };
+          renderWsPicker();
+        }));
+    }
+    function positionWsMenu() {
+      if (!wsMenuEl || wsMenuEl.hidden || !wsBtn) return;
+      const a = wsBtn.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth || window.innerWidth;
+      const vh = document.documentElement.clientHeight || window.innerHeight;
+      const w = Math.min(wsMenuEl.offsetWidth || 220, vw - 16);
+      const left = Math.max(8, Math.min(a.left, vw - w - 8));
+      const spaceAbove = a.top - 16;
+      wsMenuEl.style.left = `${Math.round(left)}px`;
+      wsMenuEl.style.right = "auto";
+      if (spaceAbove >= 160 || spaceAbove >= vh - a.bottom - 16) {
+        wsMenuEl.style.top = "auto";
+        wsMenuEl.style.bottom = `${Math.round(vh - a.top + 6)}px`;
+        wsMenuEl.style.maxHeight = `${Math.max(100, Math.min(spaceAbove, vh - 16))}px`;
+      } else {
+        const top = Math.min(vh - 108, a.bottom + 6);
+        wsMenuEl.style.top = `${Math.round(top)}px`;
+        wsMenuEl.style.bottom = "auto";
+        wsMenuEl.style.maxHeight = `${Math.max(100, vh - top - 8)}px`;
+      }
+    }
+
     // ── The "more" menu (⋯) ─────────────────────────────────────────────────
     // One popover holding every secondary control. Opens above the bar.
     // ── MCP settings popup (toggle which servers are enabled) ───────────────
@@ -3214,6 +3412,7 @@
           `<div class="zs-mcp-pop-head"><span>MCP servers</span><button class="zs-mcp-pop-close" aria-label="Close">&#10005;</button></div>` +
           `<div class="zs-mcp-pop-note">Only enabled servers appear in the dropdown and are read by the AI. Disabled servers cost no tokens.</div>` +
           `<div class="zs-mcp-pop-list">${rows}</div>` +
+          `<div id="zs-ws-section"></div>` +
           `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>Sessions</span></div>` +
           `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}></label>` +
           
@@ -3246,6 +3445,78 @@
           // without waiting for the popup to close.
           setTarget(selectedTargetId);
         }));
+
+      // ── VS Code workspace pin (which project the session works on) ──────
+      // The lock is what keeps a running session on its project when the user
+      // switches between several open VS Code windows. Sessions start locked
+      // automatically; this row shows the state and allows a manual override.
+      const wsSection = pop.querySelector("#zs-ws-section");
+      const renderWs = () => {
+        if (!wsSection) return;
+        let body;
+        if (selectedTargetId !== "vscode") {
+          body = `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>VS Code workspace</span></div>` +
+            `<div class="zs-mcp-pop-note">Select the VS Code target to see which project is in use.</div>`;
+        } else if (!workspaceInfo) {
+          body = `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>VS Code workspace</span></div>` +
+            `<div class="zs-mcp-pop-note">No workspace info yet. Is the bridge running with a project folder open in VS Code?</div>`;
+        } else {
+          const state = workspaceInfo.workspace_locked
+            ? `<span style="color:#7bd88f">Locked to this workspace</span> - switching VS Code windows will not change the project.`
+            : `<span style="color:#ffb454">Following the focused VS Code window</span> - switching windows changes the project.`;
+          body = `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>VS Code workspace</span></div>` +
+            `<div class="zs-mcp-pop-note"><b>${esc(workspaceInfo.name)}</b><br>${esc(workspaceInfo.path)}</div>` +
+            `<div class="zs-mcp-pop-note">${state}</div>` +
+            `<div style="display:flex;gap:8px;margin-top:6px">` +
+              `<button id="zs-ws-lock" class="zs-gear" style="flex:1">Lock to this workspace</button>` +
+              `<button id="zs-ws-unlock" class="zs-gear" style="flex:1">Unlock</button>` +
+            `</div>`;
+        }
+        wsSection.innerHTML = body;
+        const lockBtn = wsSection.querySelector("#zs-ws-lock");
+        const unlockBtn = wsSection.querySelector("#zs-ws-unlock");
+        if (lockBtn) lockBtn.addEventListener("click", () => setWsLock(true, lockBtn));
+        if (unlockBtn) unlockBtn.addEventListener("click", () => setWsLock(false, unlockBtn));
+      };
+      const setWsLock = async (lock, btn) => {
+        btn.disabled = true;
+        btn.textContent = "Working…";
+        try {
+          const tool = activeTools().find((t) => bareToolName(t.name) === (lock ? "lock_workspace" : "unlock_workspace"));
+          if (!tool) return;
+          const r = await bg({ type: "call_tool", name: tool.name, arguments: {}, timeout: 5000 });
+          if (r && r.ok && typeof r.text === "string") {
+            try {
+              const parsed = JSON.parse(r.text);
+              if (lock && parsed && parsed.path) {
+                workspaceInfo = { ...workspaceInfo, ...parsed, workspace_locked: true, workspace_source: "lock" };
+              } else if (!lock) {
+                workspaceInfo = { ...workspaceInfo, workspace_locked: false, workspace_source: "vscode-window" };
+              }
+            } catch { /* state refreshes within 30s via the probe */ }
+          }
+        } finally {
+          renderWs();
+        }
+      };
+      renderWs();
+      // The cached probe result can be up to 30s old; refresh when the popup opens.
+      if (selectedTargetId === "vscode") {
+        (async () => {
+          const tool = activeTools().find((t) => bareToolName(t.name) === "get_workspace_info");
+          if (!tool) return;
+          const r = await bg({ type: "call_tool", name: tool.name, arguments: {}, timeout: 4000 });
+          if (r && r.ok && typeof r.text === "string" && pop.isConnected) {
+            try {
+              const parsed = JSON.parse(r.text);
+              if (parsed && parsed.path) {
+                workspaceInfo = parsed;
+                renderWs();
+              }
+            } catch { /* keep the cached view */ }
+          }
+        })();
+      }
     }
 
     // ── Skills settings popup (toggle which workspace skills are listed) ────
@@ -3460,6 +3731,11 @@
     function renderBar() {
       if (!bar) return;
       setTarget(selectedTargetId);
+      // Project picker pill (VS Code target, before Start): visible whenever a
+      // session could start, with the window list refreshed at most every 15s.
+      renderWsPicker();
+      if (selectedTargetId === "vscode" && !A.started && !A.starting &&
+          bridgeOk && workspaceReady) refreshWsList(false);
       // indicator = an optional leading spinner; msg = the wrappable text.
       let toneClass = "standby", indicator = "", msg = "", label = "", kind = "", disabled = false, warn = false;
       // Orphaned page: check FIRST and return. Nothing below can be true any
@@ -3493,7 +3769,7 @@
           msg = `<b>Active</b> · ${targetNameHtml()} offline`;
         } else {
           toneClass = "active";
-          msg = `<b>Active</b>${tools ? ` · ${tools} tools` : ""} · ${targetNameHtml()}`;
+          msg = `<b>Active</b>${tools ? ` · ${tools} tools` : ""} · ${workspaceNameHtml()}`;
         }
       } else if (A.started) {
         // Prefer the ADVERTISED list length (A.toolList - the AGGREGATE catalogue
@@ -3568,7 +3844,11 @@
           label = `▶︎ Start`; kind = "start"; disabled = true;
         } else if (bridgeOk && (selectedTargetId !== "vscode" || workspaceReady)) {
           toneClass = "standby";
-          msg = `Ready.`;
+          // Before start, still name the workspace that WILL be used: the
+          // project the VS Code window focused at Start (or the current lock).
+          msg = selectedTargetId === "vscode" && (wsSelection || workspaceInfo)
+            ? `Ready · ${workspaceNameHtml()}`
+            : `Ready.`;
           label = `▶︎ Start`; kind = "start";
         } else if (addonOk) {
           // Roblox is down but another MCP server is live: allow a DEGRADED start
@@ -3685,7 +3965,12 @@
           workspaceProbeAt = Date.now();
           workspaceProbePending = true;
           ensureTools(false).then(() => {
-            const workspaceTool = activeTools().find((tool) => bareToolName(tool.name) === "list_dir");
+            // get_workspace_info instead of the old list_dir("."): it fails in
+            // exactly the same no-workspace cases, but also answers WHICH
+            // workspace is in use and whether the session lock pins it - the
+            // data the MCP settings popup needs.
+            const workspaceTool = activeTools().find((tool) => bareToolName(tool.name) === "get_workspace_info")
+              || activeTools().find((tool) => bareToolName(tool.name) === "list_dir");
             bridgeOk = serverConnected &&
               ((selected.tools || 0) > 0 || activeTools().length > 0);
             if (!workspaceTool) {
@@ -3695,10 +3980,17 @@
             return bg({
               type: "call_tool",
               name: workspaceTool.name,
-              arguments: { path: "." },
+              arguments: bareToolName(workspaceTool.name) === "get_workspace_info" ? {} : { path: "." },
               timeout: 5000,
             }).then((result) => {
               workspaceReady = !!(result && result.ok);
+              workspaceInfo = null;
+              if (workspaceReady && result && typeof result.text === "string") {
+                try {
+                  const parsed = JSON.parse(result.text);
+                  if (parsed && parsed.path) workspaceInfo = parsed;
+                } catch { /* list_dir fallback: no JSON info available */ }
+              }
             });
           }).catch((error) => {
             workspaceReady = false;
@@ -4338,7 +4630,7 @@
     }
 
     build();
-    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
+    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, getWsSelection: () => effectiveWsSelection(), openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
   })();
 
   // ── Live token + timer, shown ONLY on a tool call's chip detail. The

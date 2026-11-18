@@ -398,8 +398,12 @@ function broadcastStatus() {
 }
 
 // ── messages from content.js / popup.js ─────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    // Per-tab workspace sessions: the VS Code MCP server pins each chat tab's
+    // workspace separately, keyed on this id. Messages from the popup carry
+    // no tab and keep the global workspace resolution.
+    const tabId = sender && sender.tab ? sender.tab.id : undefined;
     switch (msg.type) {
       case "status":
         if (!connected) connect(); // self-heal after a worker wake-up
@@ -434,7 +438,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "call_tool": {
         const timeout = (msg.timeout || 120000) + 10000;
         const r = await send(
-          { type: "call_tool", name: msg.name, arguments: msg.arguments, timeout: msg.timeout, server: msg.server },
+          { type: "call_tool", name: msg.name, arguments: msg.arguments, timeout: msg.timeout, server: msg.server, tab_id: tabId },
           timeout
         );
         sendResponse(r);
