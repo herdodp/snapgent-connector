@@ -247,8 +247,68 @@ const ZSGuard = (() => {
     };
   }
 
+  // ── Run stats on a tool chip / the "Agent is working" cover ──────────────
+  // The chip already showed the tool name and a spinner, but the question a user
+  // actually asks about a run is "what did it do, how many tokens did it get, and
+  // how long did it take". Both numbers are derivable from data we already have
+  // (result length ≈ chars/4, and a start timestamp), so this stays pure text
+  // formatting - no DOM, no extra bridge round-trip.
+
+  // Same compacting as the page's token meter: 0-999 as-is, then 1k/1.1k/99k/1M
+  // (one decimal below 10 of the unit, trailing ".0" dropped) so a live number
+  // cannot grow into a wide, jumpy string.
+  function compactCount(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v <= 0) return "";
+    if (v < 1000) return String(Math.round(v));
+    for (const [div, suf] of [[1e9, "B"], [1e6, "M"], [1e3, "k"]]) {
+      if (v >= div) {
+        const scaled = v / div;
+        const rounded = scaled < 10 ? Math.round(scaled * 10) / 10 : Math.round(scaled);
+        return rounded + suf;
+      }
+    }
+    return String(Math.round(v));
+  }
+
+  // Tokens are an ESTIMATE (no tokenizer in the extension), so they are shown
+  // with a leading "~" and must never be presented as billed usage.
+  function tokensFromChars(chars) {
+    const c = Number(chars);
+    if (!Number.isFinite(c) || c <= 0) return 0;
+    return Math.floor(c / 4);
+  }
+
+  // One detail line: "<what it did> · ~N tok · 1.4s".
+  //   arg   - the call's own arguments (already summarised by the caller)
+  //   inChars / tokIn   - the streamed command text (what the model sent)
+  //   chars   / tokOut  - the tool RESULT (what came back - the useful count)
+  //   ms                - measured wall time of the call
+  // Returns "" when there is nothing truthful to show, so callers can fall back
+  // to the plain summary instead of printing an empty " · · ".
+  function formatRunStats(input) {
+    const i = input || {};
+    const parts = [];
+    if (i.arg) {
+      const arg = String(i.arg).replace(/\s+/g, " ").trim();
+      if (arg) parts.push(arg.length > 60 ? arg.slice(0, 57) + "…" : arg);
+    }
+    const tokIn = Number(i.tokIn) > 0 ? Number(i.tokIn) : tokensFromChars(i.inChars);
+    if (tokIn > 0) parts.push(`in ~${compactCount(tokIn)} tok`);
+    const tokOut = Number(i.tokOut) > 0 ? Number(i.tokOut) : tokensFromChars(i.chars);
+    if (tokOut > 0) parts.push(`out ~${compactCount(tokOut)} tok`);
+    const ms = Number(i.ms);
+    if (Number.isFinite(ms) && ms > 0) {
+      parts.push(ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`);
+    }
+    return parts.join(" · ");
+  }
+
   return {
     mayRetryAfterDisconnect,
+    formatRunStats,
+    compactCount,
+    tokensFromChars,
     createCallMemory,
     createRemoteCommandAdopter,
     inFlightFailure,

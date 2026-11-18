@@ -98,6 +98,10 @@
     { name: "Mistral", url: "https://chat.mistral.ai/code" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
+  // Collapsed-status preference: the floating status card can be hidden, leaving
+  // a small round blue button that brings it back. Persisted so a reload keeps
+  // the user's choice instead of forcing the card back.
+  const HUD_HIDDEN_KEY = "zsHudHidden";
 
   // ── Background (multi-tab) sessions ─────────────────────────────────────
   // By default a session PARKS while its tab is hidden (see waitVisible): a
@@ -248,6 +252,14 @@
     toolName: "",
     toolItem: null,
     toolArg: "",
+    // Per-run stats for the chip ("what did it do · ~N tok · 1.4s"). tokIn is the
+    // streamed command text (what the model sent, sampled live as it streams);
+    // chars/ms are measured around the bridge call itself. Advisory only: a
+    // missing value just shortens the detail line.
+    toolTokIn: 0,
+    toolChars: 0,
+    toolMs: 0,
+    genTok: 0,
     toolList: [],
     toolNames: new Set(),
     // Successful tool calls since the last command-list reminder. DeepSeek (and
@@ -409,7 +421,21 @@
         }
         await jitterBeforeSend();
         diag("submit.typeAndSend", { hasImages: !!(images && images.length) });
-        await P.typeAndSend(text, images);
+        const typed = await P.typeAndSend(text, images);
+        // The provider returns false when it could not get the text into the
+        // composer at all (ChatGPT replaces the ProseMirror node on every
+        // remount, so an editor handle captured a moment earlier is detached
+        // and execCommand silently no-ops). The composer then reads EMPTY,
+        // which the gate below used to count as "sent and cleared" - that is
+        // the false positive that stranded Start on "Starting…" for minutes
+        // with zero turns. Retry the send instead of believing it went out.
+        if (typed === false) {
+          diag("send.emptyComposer", { tries });
+          tries++;
+          await sleep(250 + tries * 250);
+          if (A.stop) break;
+          continue;
+        }
         // Re-arm the pre-hide window NOW that typeAndSend has returned (the send
         // was just clicked, so our result turn is about to render). The initial
         // arm above can EXPIRE during an image upload - typeAndSend blocks ~3-6s
@@ -1284,16 +1310,26 @@
     const loadingTick = setInterval(() => {
       bg({
         type: "stream",
-        frame: { phase: "tool_loading", tool: name, id: callId, ms: Date.now() - loadingAt },
+        // tok = the streamed command's token estimate so the bridge live view can
+        // show "how much the model wrote" while the tool itself is still running.
+        frame: { phase: "tool_loading", tool: name, id: callId, ms: Date.now() - loadingAt, tok: A.genTok || 0 },
       }).catch(() => {});
     }, 1000);
-    bg({ type: "stream", frame: { phase: "tool_start", tool: name, id: callId } }).catch(() => {});
+    bg({ type: "stream", frame: { phase: "tool_start", tool: name, id: callId, tok: A.genTok || 0 } }).catch(() => {});
     let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }), hardCap, stopWatch]);
     clearInterval(loadingTick);
     clearInterval(stopTimer);
     bg({
       type: "stream",
-      frame: { phase: "tool_end", tool: name, id: callId, ms: Date.now() - loadingAt, ok: !!r && r.ok !== false },
+      frame: {
+        phase: "tool_end", tool: name, id: callId, ms: Date.now() - loadingAt,
+        ok: !!r && r.ok !== false,
+        // Result size + token estimate, so the bridge view answers "how many
+        // tokens did this call get" without reading the tool output.
+        chars: (r && r.text ? r.text.length : 0),
+        tok: Math.floor((r && r.text ? r.text.length : 0) / 4),
+        tokIn: A.genTok || 0,
+      },
     }).catch(() => {});
     if (r && r.kind === "stopped") return "(stopped by user)";
     if (!r) return ZS.FEEDBACK.bridgeOffline;
@@ -1729,6 +1765,12 @@
           A.toolName = call.tool;
           A.toolItem = res.item;
           A.toolArg = argSummary(call);
+          // Stats for this run: the command text has already been sampled while it
+          // streamed (A.genTok), and the call's own timing starts now. Reset the
+          // result side so a re-own cannot inherit the PREVIOUS call's numbers.
+          A.toolTokIn = A.genTok || 0;
+          A.toolChars = 0;
+          A.toolMs = 0;
           // Record this turn as dispatched OFF the DOM so the auto-resume
           // watchdog never re-fires it after a scroll re-render wipes the node's
           // zloop/zResume markers (see the `executed` map).
@@ -1737,6 +1779,11 @@
           diag("tool.start", { name: call.tool });
           const feedback = await runTool(call);
           A.toolRunning = false;
+          // Measured once, here, so the chip and the bridge frames agree. The
+          // result size is the honest "how many tokens did it get" proxy (no
+          // tokenizer in the extension; labelled "~" everywhere it is shown).
+          A.toolChars = (feedback || "").length;
+          A.toolMs = A.toolStart ? Date.now() - A.toolStart : 0;
           diag("tool.done", { name: call.tool, ok: !feedback.startsWith("ERROR"), out: feedback.slice(0, 50) });
           if (A.stop) {
             // User halted mid-tool: settle the spinning chip so it doesn't look
@@ -1767,7 +1814,13 @@
           const hasImages = !!(A.pendingImages && A.pendingImages.length);
           if (hasImages) rememberImageTool(call.tool);
           const resultCat = hasImages ? "screen" : category;
-          decorate.toolBox(res.item, call.tool, isErr ? "err" : "done", outSummary(feedback),
+          // Settle detail = what it did (summary) + how much came back + how long
+          // it took. Kept in ONE string so the re-own path (A.toolSettle.detail)
+          // restores the exact same chip after a DOM swap.
+          const runStats = ZSGuard.formatRunStats({ chars: A.toolChars, ms: A.toolMs, tokIn: A.toolTokIn });
+          const doneSummary = outSummary(feedback);
+          const doneDetail = runStats ? (doneSummary ? `${doneSummary} · ${runStats}` : runStats) : doneSummary;
+          decorate.toolBox(res.item, call.tool, isErr ? "err" : "done", doneDetail,
             true, outBody, resultCat);
           // Snapshot the settled outcome. If the site swaps this turn's DOM node
           // while we wait for the model's next turn (wiping the chip AND the
@@ -1775,7 +1828,7 @@
           // outcome instead of letting branch-3 classification re-spin a "run"
           // chip on an already-executed call.
           A.toolSettle = {
-            phase: isErr ? "err" : "done", detail: outSummary(feedback),
+            phase: isErr ? "err" : "done", detail: doneDetail,
             body: outBody, category: resultCat, count: P.assistantCount(),
             // Node IDENTITY of the settled turn (virtualization-proof), when the
             // provider exposes it. The count guard alone misfires on Qwen: the
@@ -2638,9 +2691,36 @@
     delete item.dataset.zsig;
     delete item.dataset.zphase;
     delete item.dataset.zStopped;
+    delete item.dataset.zargs;
+    delete item.dataset.zopen;
+    delete item.dataset.zanim;
+    delete item.dataset.zdurfinal;
     delete item.dataset.zRegenLen;
     delete item.dataset.zRegenAt;
     delete item.__zsChip;
+  }
+
+  // A chip may only be painted on a TURN node. Sites virtualize: they detach
+  // and recycle turn nodes, and a chip whose turn was torn down has been seen
+  // surviving as a DIRECT CHILD OF <main> - measured live 2026-11-18, a "run"
+  // card parked at the very top of the transcript, overlapping ChatGPT's chat
+  // header while its elapsed time kept climbing forever. A container of turns
+  // (or the app shell itself) is never a valid host: refuse to mount there and
+  // strip any chip that already slipped out.
+  function isTurnHost(el) {
+    if (!el || !el.tagName) return false;
+    if (el === document.body || el === document.documentElement) return false;
+    if (el.tagName === "MAIN") return false;
+    const sel = (P && P.msgSel) || "";
+    if (!sel) return true;
+    try {
+      // The host a provider hands us is either the turn itself or a block
+      // INSIDE it; both are fine. Only a node that is neither - and that holds
+      // several turns - is a container the chip must never be pinned to.
+      if (el.matches(sel) || el.closest(sel)) return true;
+      if (el.querySelectorAll(sel).length > 2) return false;
+    } catch {}
+    return true;
   }
 
   // Injections live in a container that, on ChatGPT's 2026-11 layout, ALSO
@@ -2679,35 +2759,139 @@
       const { label, detail = "", body = "", category = "tool", phase, cls, whole } = opts;
       let chip = item.querySelector(".zs-chip");
       const hasBody = !!body;
-      // While a command streams, the site re-renders the raw block on every token
-      // and we get called on nearly every sweep. If what we'd draw is identical,
-      // we must NOT rebuild the chip's innerHTML: doing so re-creates the
-      // <span class="zs-spin"> and restarts its CSS animation each time, so the
-      // spinner looks frozen / stutters ("retry en rafale"). Rebuild the inner
-      // markup ONLY when the rendered content actually changes; otherwise reuse
-      // the existing element (and keep its expand/collapse state) so the spinner
-      // keeps spinning smoothly. Re-anchoring + masking below still run each pass.
-      const sig = `${category}|${phase}|${cls || ""}|${whole ? 1 : 0}|${label}|${detail}|${hasBody ? body.length : 0}`;
+      // The sweep calls us on nearly every DOM mutation, and the detail string
+      // changes character by character while a command streams. Rebuilding
+      // innerHTML on every one of those re-created the spinner and the state
+      // icon ~4x/s: the ring restarted (a visible BLINK), the icon-pop animation
+      // never reached its end so a FINISHED card showed no icon at all
+      // (measured 2026-11-18: done chip's svg stuck at opacity:0 inside
+      // zs-icon-pop), and a card the user had expanded lost its `open` class on
+      // the next pass. Build the shell ONCE, then patch icon/label/detail in
+      // place and carry the open state across every repaint.
+      if (!isTurnHost(item)) {
+        // Detached/recycled turn (or the app shell): never paint a chip here.
+        if (chip && chip.parentElement === item) chip.remove();
+        return null;
+      }
       if (!chip) chip = document.createElement("div");
-      if (chip.dataset.csig !== sig) {
-        chip.dataset.csig = sig;
-        chip.className = `zs-chip cat-${category} ${cls || ""}`;
+      // Open state outlives the NODE: ChatGPT/React replaces the turn's subtree
+      // on unrelated updates, our chip element is re-created (chipGone), and the
+      // fresh node has no `open` class - a card the user had just expanded
+      // snapped shut ~1s later ("pas diklik ga mau kebuka", 2026-11-18). The
+      // turn element (and its dataset) survives that churn, so the user's
+      // decision is mirrored there and re-applied to every rebuilt chip.
+      const wasOpen = chip.classList.contains("open") || item.dataset.zopen === "1";
+      const keepEnter = chip.classList.contains("zs-chip-enter");
+      const wantCls = `zs-chip cat-${category} ${cls || ""}${wasOpen ? " open" : ""}${keepEnter ? " zs-chip-enter" : ""}`;
+      if (chip.className.trim() !== wantCls.trim()) chip.className = wantCls;
+
+      let head = chip.querySelector(".zs-chip-head");
+      if (!head) {
         chip.innerHTML =
           `<div class="zs-chip-head">` +
-            `<span class="zs-chip-ic">${iconFor(category, phase)}</span>` +
+            `<span class="zs-chip-ic"></span>` +
             `<span class="zs-chip-tx"></span>` +
             `<span class="zs-chip-dt"></span>` +
-            (hasBody ? `<span class="zs-chip-cv">${SVG('<polyline points="6 9 12 15 18 9"/>')}</span>` : "") +
-          `</div>` +
-          (hasBody ? `<div class="zs-chip-body"><pre></pre></div>` : "");
-        chip.querySelector(".zs-chip-tx").textContent = label;
-        if (detail) chip.querySelector(".zs-chip-dt").textContent = detail;
-        if (hasBody) {
-          chip.querySelector(".zs-chip-body pre").textContent = body;
-          const head = chip.querySelector(".zs-chip-head");
-          head.style.cursor = "pointer";
-          head.onclick = () => chip.classList.toggle("open");
+          `</div>`;
+        head = chip.querySelector(".zs-chip-head");
+        head.style.cursor = "pointer";
+        // Delegated once: the handler used to be re-bound on every innerHTML
+        // rebuild, and the rebuild also wiped `open`, so a click looked dead.
+        head.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const openNow = chip.classList.toggle("open");
+          if (openNow) item.dataset.zopen = "1";
+          else delete item.dataset.zopen;
+        });
+      }
+      // Chevron exists only when there is a body to reveal.
+      const cvNow = head.querySelector(".zs-chip-cv");
+      if (hasBody && !cvNow) {
+        head.insertAdjacentHTML("beforeend", `<span class="zs-chip-cv">${SVG('<polyline points="6 9 12 15 18 9"/>')}</span>`);
+      } else if (!hasBody && cvNow) {
+        cvNow.remove();
+      }
+      const bodyNow = chip.querySelector(".zs-chip-body");
+      if (hasBody && !bodyNow) {
+        chip.insertAdjacentHTML("beforeend", `<div class="zs-chip-body"><pre></pre></div>`);
+      } else if (!hasBody && bodyNow) {
+        bodyNow.remove();
+      }
+
+      // Icon: rewritten ONLY when the state changes, so the ring keeps turning
+      // through the whole run and the settled tick pops exactly once.
+      const icEl = chip.querySelector(".zs-chip-ic");
+      const iconKey = `${category}|${phase}`;
+      if (icEl && icEl.dataset.zicon !== iconKey) {
+        icEl.dataset.zicon = iconKey;
+        icEl.innerHTML = iconFor(category, phase);
+      }
+      const txEl = chip.querySelector(".zs-chip-tx");
+      if (txEl && txEl.textContent !== label) txEl.textContent = label;
+
+      // Entrance animation: once per turn+label, silent on repaint.
+      const zanim = `${category}|${label}`;
+      if (item.dataset.zanim !== zanim) {
+        item.dataset.zanim = zanim;
+        chip.classList.add("zs-chip-enter");
+        setTimeout(() => chip.classList.remove("zs-chip-enter"), 300);
+      }
+
+      // Detail line: argument summary plus the live (run) or frozen (settled)
+      // duration. Written here immediately - the 200ms ticker would otherwise
+      // leave a fresh card showing the bare tool name.
+      if (chip.querySelector(".zs-chip-dt")) {
+        const dtEl = chip.querySelector(".zs-chip-dt");
+        let dtText = detail;
+        if (phase === "run" && item && item.dataset.zrunstart) {
+          const ms = Date.now() - (+item.dataset.zrunstart || Date.now());
+          const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+          dtText = detail ? `${detail} · ${dur}` : dur;
+        } else if (!whole && (phase === "done" || phase === "err" || phase === "idle")) {
+          const keep = detail || item.dataset.zargs || "";
+          dtText = [keep, item.dataset.zdurfinal || ""].filter(Boolean).join(" · ");
         }
+        if (dtEl.textContent !== dtText) dtEl.textContent = dtText;
+      }
+      if (hasBody) {
+        const pre = chip.querySelector(".zs-chip-body pre");
+        if (pre && pre.textContent !== body) pre.textContent = body;
+      }
+
+      // LIVE DURATION. A running chip that only shows the tool NAME ("list_dir")
+      // for the whole call reads as a stuck loader: the user cannot tell whether
+      // anything is happening (report 2026-11-18, ChatGPT vs Claude's
+      // "run_command command: bash · 39.0s"). The static detail (argument
+      // summary) is painted above; here we stamp the start instant on the chip
+      // so the global ticker can append the elapsed time to that same
+      // .zs-chip-dt span - `path: x · 12.4s` - and keep it climbing.
+      // The start is only set when absent so a re-render mid-run (detail
+      // changed → innerHTML rebuilt) keeps counting from the real start.
+      if (phase === "run" && !whole) {
+        if (!item.dataset.zrunstart) item.dataset.zrunstart = String(Date.now());
+        // Remember the argument summary so the settled card can still show
+        // "path: … · 1.3s" after the loop stops passing it.
+        if (detail) item.dataset.zargs = detail;
+        chip.dataset.zstart = item.dataset.zrunstart;
+        chip.dataset.zdt = detail || "";
+      } else {
+        // Freeze the total run time before dropping the start stamp, so the
+        // done/err card keeps a final duration instead of losing it entirely.
+        if (item && !whole && item.dataset.zrunstart &&
+            (phase === "done" || phase === "err" || phase === "idle")) {
+          const ms = Date.now() - (+item.dataset.zrunstart || Date.now());
+          item.dataset.zdurfinal = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+          const dtEl = chip.querySelector(".zs-chip-dt");
+          if (dtEl && !dtEl.textContent) {
+            const keep = detail || item.dataset.zargs || "";
+            const text = [keep, item.dataset.zdurfinal].filter(Boolean).join(" · ");
+            if (text) dtEl.textContent = text;
+          }
+        }
+        delete item.dataset.zrunstart;
+        delete chip.dataset.zstart;
+        delete chip.dataset.zdt;
       }
 
       if (whole) {
@@ -3105,6 +3289,25 @@
             if (item.dataset.zphase !== "err") diag("chip.errSettle", { name: ZSParse.toolNameFromText(txt) });
           }
         }
+        // ARGUMENT SUMMARY while the call is live. This branch paints detail=""
+        // for run/idle by design (the loop used to own that text), but it ALSO
+        // repaints on rawVisible/chipGone - which silently WIPED the loop's
+        // `path: …` detail and left a bare tool name spinning (2026-11-18
+        // report). Re-derive the summary from the command block itself, so the
+        // chip reads `list_dir  path: immersed-tube-tunnel · 3.1s` no matter who
+        // repainted it. Static part only; the ticker appends the elapsed time.
+        if (!detail && (phase === "run" || phase === "idle" || phase === "done" || phase === "err")) {
+          try {
+            const calls = ZSParse.parseToolCalls(txt);
+            if (calls && calls.length) {
+              detail = argSummary(calls[calls.length - 1]);
+              // Keep the settled summary on the turn: a later repaint (rawVisible
+              // flip, site re-render) passes detail="" and would otherwise blank
+              // the argument line of an already-settled card.
+              if (detail && (phase === "done" || phase === "err")) item.dataset.zargs = detail;
+            }
+          } catch { /* parser is advisory here; never break classification */ }
+        }
         // A command block that is VISIBLE right now (its hide classes live on
         // child nodes that sites like Gemini re-create on every update, and the
         // block may render only AFTER the chip was first placed mid-stream).
@@ -3131,6 +3334,25 @@
         const cat = A.imageTools.has(bareToolName(nm)) ? "screen" : undefined;
         const chipNow = item.querySelector(".zs-chip");
         const catStale = cat === "screen" && chipNow && !chipNow.classList.contains("cat-screen");
+        // CHEVRON BODY for a re-derived card. The loop passes the call payload
+        // as `body` while IT owns the turn, but a reload/revisit re-derives the
+        // chip from the conversation here with body=undefined - so `.zs-chip-cv`
+        // (the collapse/expand chevron) was never created and the settled card
+        // read as "not expandable" ("belum ada icon v" - report 2026-11-18).
+        // Rebuild that payload from the parsed call so the chevron exists and
+        // opens the same JSON the card showed while it ran. An already painted
+        // body wins: on a live turn it carries the real tool output.
+        let chipBody = "";
+        if (phase === "run" || phase === "done" || phase === "err") {
+          const preNow = chipNow && chipNow.querySelector(".zs-chip-body pre");
+          if (preNow && preNow.textContent) chipBody = preNow.textContent;
+          if (!chipBody) {
+            try {
+              const calls = ZSParse.parseToolCalls(txt);
+              if (calls && calls.length) chipBody = callBody(calls[calls.length - 1]);
+            } catch { /* parser is advisory here; never break classification */ }
+          }
+        }
         // Chip drift for chipAppend providers (Kimi): the RUN chip is painted by
         // the SWEEP (owned=false, no zloop) until the loop takes over at
         // tool.start ~2s later, so ensureOwnedChip's drift fix (zloop-only) does
@@ -3168,7 +3390,7 @@
               ...(P.genDebug ? { g: P.genDebug() } : {}),
             });
           }
-          this.toolBox(item, nm, phase, detail, false, undefined, cat);
+          this.toolBox(item, nm, phase, detail, false, chipBody, cat);
         }
         return;
       }
@@ -3209,6 +3431,12 @@
     },
 
     sweep() {
+      // Strip chips that escaped their turn (detached/recycled nodes). They are
+      // what parked a spinning card on top of the site's own header.
+      for (const stray of document.querySelectorAll(".zs-chip")) {
+        const host = stray.parentElement;
+        if (host && !isTurnHost(host)) stray.remove();
+      }
       // Pass each turn's FOLLOWING turn too: a command chip needs it to know
       // whether its injected result was an ERROR (error-aware settle above).
       const items = P.allItems();
@@ -3235,7 +3463,8 @@
   //  UI  (control panel, onboarding, stop button, banners, toast, input cover)
   // ════════════════════════════════════════════════════════════════════════
   const ui = (() => {
-    let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl;
+    let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl, hideBtn, dotBtn;
+    let hudHidden = false; // collapsed status card → round blue button (persisted)
     let targetBtn, targetMenuEl;
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
@@ -3290,7 +3519,9 @@
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </div>
           <button id="zs-switch" aria-label="Switch AI and options" title="Switch AI and options"><span id="zs-switch-name"></span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <button id="zs-bar-hide" type="button" aria-label="Hide status card" title="Hide status card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg></button>
         </div>
+        <button id="zs-dot" type="button" hidden aria-label="Show Snapgent status" title="Show Snapgent status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></button>
         <div id="zs-menu" hidden></div>
         <div id="zs-target-menu" hidden></div>
         ${P.unstableWarning ? `<button id="zs-unstable" aria-label="Provider may be unstable" hidden>⚠ unstable</button>` : ""}
@@ -3304,6 +3535,44 @@
       targetBtn = root.querySelector("#zs-target-btn");
       targetMenuEl = root.querySelector("#zs-target-menu");
       switchBtn = root.querySelector("#zs-switch");
+      hideBtn = root.querySelector("#zs-bar-hide");
+      dotBtn = root.querySelector("#zs-dot");
+      const applyHud = () => {
+        if (bar) {
+          bar.hidden = hudHidden;
+          bar.style.display = hudHidden ? "none" : "flex";
+        }
+        if (dotBtn) dotBtn.hidden = !hudHidden;
+        if (hudHidden && menuEl) menuEl.hidden = true;
+        if (hudHidden && targetMenuEl) targetMenuEl.hidden = true;
+      };
+      const persistHud = () => {
+        try { chrome.storage.local.set({ [HUD_HIDDEN_KEY]: hudHidden }); } catch {}
+      };
+      if (hideBtn) {
+        hideBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          hudHidden = true;
+          applyHud();
+          persistHud();
+        });
+      }
+      if (dotBtn) {
+        dotBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          hudHidden = false;
+          applyHud();
+          persistHud();
+        });
+      }
+      try {
+        chrome.storage.local.get(HUD_HIDDEN_KEY, (r) => {
+          hudHidden = !!(r && r[HUD_HIDDEN_KEY]);
+          applyHud();
+        });
+      } catch {}
       const swName = root.querySelector("#zs-switch-name");
       if (swName) swName.textContent = P.displayName || P.id;
       setTarget(selectedTargetId);
@@ -4389,6 +4658,20 @@
       u.style.top = Math.round(Math.max(4, br.top - uh - 5)) + "px";
     }
 
+    // Position of the collapsed-status button: OUTSIDE the text input, pinned
+    // above the composer's right edge (same band the bar occupies when open), so
+    // it never covers the editor, the send/stop control or the voice button.
+    function placeDot() {
+      if (!dotBtn || dotBtn.hidden) return;
+      const e = (P.getEditor && P.getEditor()) || (P.composerFrame && P.composerFrame());
+      if (!e) { dotBtn.style.display = "none"; return; }
+      const r = e.getBoundingClientRect();
+      if (!r.width) { dotBtn.style.display = "none"; return; }
+      dotBtn.style.display = "inline-flex";
+      dotBtn.style.left = Math.round(r.right - 38) + "px";
+      dotBtn.style.top = Math.max(4, Math.round(r.top - 44)) + "px";
+    }
+
     function placeBar() {
       barRaf = requestAnimationFrame(placeBar);
       if (!bar) return;
@@ -4402,6 +4685,19 @@
       if (root && !root.isConnected) {
         try { document.documentElement.appendChild(root); } catch {}
       }
+
+      // Collapsed on purpose: keep the card down and park the round blue button
+      // instead (it sits outside the input). The frame loop stays alive, so the
+      // button follows the composer if the layout moves.
+      if (hudHidden) {
+        bar.style.display = "none";
+        clearAnchorPad();
+        if (menuEl) menuEl.hidden = true;
+        if (targetMenuEl) targetMenuEl.hidden = true;
+        placeDot();
+        return;
+      }
+      if (dotBtn && !dotBtn.hidden) dotBtn.hidden = true;
 
       // The instability warning floats just ABOVE the bar (not inside it), so it
       // never crowds the row on narrow composers like Gemini. Positioned from the
@@ -4571,21 +4867,31 @@
       if (on && scrollSuppressed()) {
         if (cover) cover.style.display = "none";
         if (ed) ed.classList.remove("zs-typing");
+        // Cover is hidden while the user browses history, so let the site's own
+        // placeholder show again; the intent flag stays on and place() hides it
+        // once the cover returns.
+        document.documentElement.classList.remove("zs-cover-on");
         cancelAnimationFrame(coverRaf);
         return;
       }
       if (!on) {
         if (cover) { cover.style.display = "none"; cover.dataset.on = ""; }
         if (ed) ed.classList.remove("zs-typing");
+        // Agent finished: the composer's own placeholder ("Ask ChatGPT") must
+        // come back the moment the cover is lifted (user request 2026-11-18).
+        document.documentElement.classList.remove("zs-cover-on");
         cancelAnimationFrame(coverRaf);
         return;
       }
       if (!ed) return;
+      // Hide the site's placeholder for as long as the cover is intended on, so
+      // "Agent is working…" is the only readable line in the composer band.
+      document.documentElement.classList.add("zs-cover-on");
       ed.classList.add("zs-typing"); // make the typed text itself invisible
       if (!cover) {
         cover = document.createElement("div");
         cover.id = "zs-input-cover";
-        cover.innerHTML = `<span>Agent is working…</span>`;
+        cover.innerHTML = `<span class="zs-cover-spin" aria-hidden="true"></span><span class="zs-cover-main">Agent is working…</span>`;
         document.documentElement.appendChild(cover);
       }
       cover.dataset.on = "1"; // intent flag: keep the place() loop alive while set
@@ -4712,9 +5018,12 @@
         cover.style.top = (centerY - h / 2) + "px";
         cover.style.width = (r.width + PAD * 2) + "px";
         cover.style.height = h + "px";
-        // Composite the surface BEHIND the cover target so the fill matches what
-        // the user sees (a translucent composer card blends over the page).
-        cover.style.background = opaqueBg(covNode);
+        // TRANSPARENT surface (user request 2026-11-18: "background item di bikin
+        // transparant aja"). The typed text is already invisible via .zs-typing,
+        // so the cover does not need a painted slab - it just has to sit on top
+        // and eat the clicks. Kept deliberately not opaque: matching the composer
+        // colour read as a solid block dropped over the input.
+        cover.style.background = "transparent";
         // When the cover blankets a whole composer card (coverTarget), match its
         // corner radius so the cover's square corners don't poke past the card's
         // rounded ones. Editor-sized covers keep the CSS default.
@@ -4731,6 +5040,22 @@
       root.appendChild(t);
       setTimeout(() => t.classList.add("show"), 10);
       setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    // Live "what it is doing right now" line under the cover label, fed by the
+    // 200ms meter: the streaming token estimate while the model writes the call,
+    // then the command + measured time while the bridge runs it. Without it the
+    // cover was a static "Agent is working…" for whole minutes.
+    function setCoverDetail(text) {
+      if (!cover || cover.dataset.on !== "1") return;
+      let sub = cover.querySelector(".zs-cover-sub");
+      if (!sub) {
+        sub = document.createElement("span");
+        sub.className = "zs-cover-sub";
+        cover.appendChild(sub);
+      }
+      const next = text || "";
+      if (sub.textContent !== next) sub.textContent = next;
     }
 
     function banner(kind, title, msg) {
@@ -4779,7 +5104,7 @@
     }
 
     build();
-    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
+    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, setCoverDetail, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
   })();
 
   // ── Live token + timer, shown ONLY on a tool call's chip detail. The
@@ -4804,8 +5129,15 @@
   }
 
   function setChipDetail(item, text) {
-    const dt = item && item.querySelector(".zs-chip .zs-chip-dt");
-    if (dt) dt.textContent = text;
+    const chip = item && item.querySelector(".zs-chip");
+    const dt = chip && chip.querySelector(".zs-chip-dt");
+    if (!dt) return;
+    dt.textContent = text;
+    // Tell the elapsed-time ticker this line is FRESH (it carries the richer
+    // argv + in/out token stats). Without the stamp the ticker would overwrite
+    // it within 200ms with its poorer "arg · 3.4s" form, and the two writers
+    // would alternate.
+    if (chip) chip.dataset.zmeter = String(Date.now());
   }
 
   // Update ONLY the chip's label text (no innerHTML rebuild), so live-correcting
@@ -5007,10 +5339,17 @@
     ui.showStop((A.held || !scrollSuppressed()) &&
       (A.running || A.toolRunning || A.stopping || (A.started && P.isHardGenerating())));
 
-    // Tool is executing on the MCP → timer on its chip.
+    // Tool is executing on the MCP → timer + stats on its chip.
     if (A.toolRunning && A.toolItem) {
-      const s = elapsedOn(A.toolItem, "zsToolT0", A.toolStart).toFixed(1);
-      setChipDetail(A.toolItem, (A.toolArg ? A.toolArg + " · " : "") + `${s}s`);
+      const ms = A.toolStart ? Date.now() - A.toolStart : 0;
+      const live = ZSGuard.formatRunStats({ arg: A.toolArg, ms, tokIn: A.toolTokIn });
+      setChipDetail(A.toolItem, live || `${(ms / 1000).toFixed(1)}s`);
+      // NOT on the cover any more: the same "path: … · 12.4s" line belongs to
+      // the tool's own chip (user report 2026-11-18: the composer cover read
+      // "Agent is working… | path: /tmp · …", which is where the status ended
+      // up instead of the run_command/list_dir chip). The loop is alive - that
+      // is all the cover has to say.
+      ui.setCoverDetail("");
       return;
     }
     // The site is streaming a tool call → token count + timer on its chip.
@@ -5025,7 +5364,11 @@
         if (name && name !== "command") setChipLabel(item, name);
         const tokens = Math.floor(reply.length / TOKEN_CHARS);
         const s = Math.round(elapsedOn(item, "zsGenT0"));
+        A.genTok = tokens; // reused by the dispatched call's chip as "in ~N tok"
         setChipDetail(item, `~${formatCount(tokens)} tokens · ${s}s`);
+        // Same rule as the tool branch: the meter feeds the CHIP, the cover
+        // stays a plain "Agent is working…".
+        ui.setCoverDetail("");
         return;
       }
     }
@@ -5267,6 +5610,26 @@
   // Belt-and-braces: a low-frequency sweep regardless of tab visibility or
   // mutation timing, so camouflage always converges.
   setInterval(scheduleSweep, 1500);
+  // Chip elapsed-time ticker (see decorate.chip's data-zstart stamp). Deliberately
+  // a plain text update, NOT a chip() repaint: repainting would restart the
+  // spinner animation (the "frozen spinner" bug) and reset expand/collapse. It
+  // only touches chips that are mid-run, so the cost is a handful of nodes.
+  setInterval(() => {
+    const now = Date.now();
+    for (const el of document.querySelectorAll(".zs-chip[data-zstart]")) {
+      // The 200ms meter (setChipDetail) owns this line while it is live: it has
+      // the argument summary AND token stats AND a fresh duration. Stand down
+      // for a moment after it writes, so the two never flip-flop.
+      if (now - (+el.dataset.zmeter || 0) < 400) continue;
+      const dt = el.querySelector(".zs-chip-dt");
+      if (!dt) continue;
+      const ms = now - (+el.dataset.zstart || now);
+      const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+      const base = el.dataset.zdt || "";
+      const next = base ? `${base} · ${dur}` : dur;
+      if (dt.textContent !== next) dt.textContent = next;
+    }
+  }, 200);
   // When the user returns to the tab, immediately refresh camouflage/state.
   document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleSweep(); });
 
