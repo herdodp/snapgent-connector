@@ -36,6 +36,72 @@ PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 STREAM_PORT = int(os.environ.get("ZS_BRIDGE_STREAM_PORT", str(PORT + 1)))
 STREAM_BACKLOG = 200
 
+# WebSocket origin policy. A browser always sends an Origin header on the handshake, so
+# without a check any page the user has open could connect to ws://127.0.0.1:PORT and
+# run MCP tools, including run_command and write_file through the VS Code server. Only
+# extension origins are accepted. Requests without an Origin (CLI clients, tests,
+# native apps) are allowed because they are not cross-site browser requests.
+EXTENSION_ORIGIN_SCHEMES = ("chrome-extension", "moz-extension", "safari-web-extension")
+EXTRA_ORIGINS = tuple(
+    origin.strip().lower()
+    for origin in os.environ.get("ZS_BRIDGE_EXTRA_ORIGINS", "").split(",")
+    if origin.strip()
+)
+
+
+def _origin_allowed(origin: Optional[str]) -> bool:
+    if origin is None:
+        return True
+    candidate = origin.strip().lower()
+    if not candidate:
+        return True
+    if candidate in EXTRA_ORIGINS:
+        return True
+    scheme, separator, rest = candidate.partition("://")
+    return bool(separator) and bool(rest) and scheme in EXTENSION_ORIGIN_SCHEMES
+
+
+def _websocket_origin(websocket: Any) -> Optional[str]:
+    request = getattr(websocket, "request", None)
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    try:
+        return headers.get("Origin")
+    except Exception:
+        return None
+
+
+def _build_origin_gate() -> Optional[Any]:
+    """Reject foreign origins during the handshake, across websockets API versions.
+
+    websockets >= 14 serves with ``process_request(connection, request)`` and expects a
+    Response from ``connection.respond()``; older releases call ``process_request(path,
+    request_headers)`` and expect a ``(status, headers, body)`` tuple.
+    """
+    if websockets is None:
+        return None
+    serve = getattr(websockets, "serve", None)
+    modern = str(getattr(serve, "__module__", "")).startswith("websockets.asyncio")
+
+    if modern:
+        async def process_request(connection: Any, request: Any) -> Any:
+            origin = request.headers.get("Origin")
+            if _origin_allowed(origin):
+                return None
+            log(f"rejected websocket origin={origin!r}")
+            return connection.respond(403, "Origin not allowed.\n")
+        return process_request
+
+    async def process_request_legacy(path: Any, request_headers: Any) -> Any:
+        origin = request_headers.get("Origin")
+        if _origin_allowed(origin):
+            return None
+        log(f"rejected websocket origin={origin!r}")
+        return (403, [], b"Origin not allowed.\n")
+    return process_request_legacy
+
+
 # Self-contained live view served at "/" on the stream port. Kept as one small
 # string so the bridge still has no template/build dependency: it renders the
 # SAME frames /events already streams (event, tool, ms, chars/tok) plus a
@@ -597,6 +663,16 @@ class Bridge:
             log(f"send to client failed: {type(error).__name__}: {str(error)[:200]}")
 
     async def handle_client(self, websocket: Any, _path: Optional[str] = None) -> None:
+        origin = _websocket_origin(websocket)
+        if not _origin_allowed(origin):
+            # Defence in depth: even if a server was started without the handshake gate,
+            # a page origin never reaches the request loop that can run tools.
+            log(f"rejected websocket origin={origin!r} peer={getattr(websocket, 'remote_address', None)}")
+            try:
+                await websocket.close(code=1008, reason="Origin not allowed")
+            except Exception:
+                pass
+            return
         async with self._client_lock:
             self.clients.add(websocket)
         try:
@@ -1065,6 +1141,22 @@ async def _start_stream_server(hub: "EventHub") -> Any:
     return runner
 
 
+async def _serve_bridge(bridge_instance: "Bridge", port: int = PORT) -> Any:
+    """Start the extension WebSocket server with the origin gate already attached."""
+    gate = _build_origin_gate()
+    options = dict(
+        process_request=gate,
+        max_size=128 * 1024 * 1024,
+        max_queue=256,
+        ping_interval=20,
+        ping_timeout=90,
+    )
+    try:
+        return await websockets.serve(bridge_instance.handle_client, HOSTS, port, **options)
+    except Exception:
+        return await websockets.serve(bridge_instance.handle_client, "127.0.0.1", port, **options)
+
+
 async def run() -> None:
     if websockets is None:
         raise RuntimeError(
@@ -1072,28 +1164,14 @@ async def run() -> None:
             f"'{sys.executable} -m pip install websockets'."
         )
     bridge = Bridge()
+    server = await _serve_bridge(bridge)
+    listening_msg = f"listening on ws://127.0.0.1:{PORT}"
     try:
-        server = await websockets.serve(
-            bridge.handle_client,
-            HOSTS,
-            PORT,
-            max_size=128 * 1024 * 1024,
-            max_queue=256,
-            ping_interval=20,
-            ping_timeout=90,
-        )
-        listening_msg = f"listening on ws://127.0.0.1:{PORT} and ws://[::1]:{PORT}"
+        opened = {sock.getsockname()[0] for sock in (server.sockets or [])}
+        if "::1" in opened or "::" in opened:
+            listening_msg = f"listening on ws://127.0.0.1:{PORT} and ws://[::1]:{PORT}"
     except Exception:
-        server = await websockets.serve(
-            bridge.handle_client,
-            "127.0.0.1",
-            PORT,
-            max_size=128 * 1024 * 1024,
-            max_queue=256,
-            ping_interval=20,
-            ping_timeout=90,
-        )
-        listening_msg = f"listening on ws://127.0.0.1:{PORT}"
+        pass
     log(f"snapgent bridge v{BRIDGE_VERSION}")
     log(f"{listening_msg} - load the extension and open a supported AI chat")
     stream_runner = None
