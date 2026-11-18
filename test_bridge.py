@@ -339,6 +339,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await server.stop()
 
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
     async def test_stream_frame_is_relayed_without_a_reply(self):
         # A progress frame is advisory: the bridge must publish it and stay silent.
         # Replying would make the extension mistake a progress frame for a result.
