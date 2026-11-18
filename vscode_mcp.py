@@ -26,9 +26,15 @@ SAFE_PROJECT_SCRIPTS = {"build", "check", "format", "lint", "test", "typecheck"}
 
 
 def _vscode_active_folder() -> Optional[Path]:
+    env_dir = os.environ.get("ZS_WORKSPACE") or os.environ.get("VSCODE_WORKSPACE")
+    if env_dir:
+        cand = Path(env_dir).resolve()
+        if cand.is_dir():
+            return cand
+
     if sys.platform == "win32":
         result = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq Code.exe", "/NH"],
+            ["tasklist", "/NH"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -36,18 +42,26 @@ def _vscode_active_folder() -> Optional[Path]:
             timeout=5,
             check=False,
         )
-        if result.returncode != 0:
-            raise RuntimeError("Could not check whether VS Code is running.")
-        if "Code.exe" not in result.stdout:
-            return None
+        if result.returncode == 0:
+            if not any(proc in result.stdout for proc in ("Code.exe", "VSCodium.exe")):
+                return None
 
-    for storage_path in _vscode_storage_paths():
+    all_paths = list(_vscode_storage_paths())
+    if sys.platform == "linux":
+        config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        all_paths.append(config / "codium" / "User" / "globalStorage" / "storage.json")
+        all_paths.append(config / "Code - OSS" / "User" / "globalStorage" / "storage.json")
+        home = Path.home()
+        all_paths.append(home / ".var/app/com.vscodium.codium/config/VSCodium/User/globalStorage/storage.json")
+        all_paths.append(home / "snap/codium/current/.config/VSCodium/User/globalStorage/storage.json")
+
+    for storage_path in all_paths:
         if not storage_path.is_file():
             continue
         try:
             data = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"Could not read VS Code workspace state: {error}") from error
+        except (OSError, json.JSONDecodeError):
+            continue
 
         windows_state = data.get("windowsState") or {}
         uris = []
@@ -97,9 +111,15 @@ def _vscode_storage_paths() -> List[Path]:
 
 def get_root() -> Path:
     active = _vscode_active_folder()
-    if active is None:
-        raise RuntimeError("Open a project folder in VS Code before using the VS Code MCP server.")
-    return active.resolve()
+    if active is not None:
+        return active.resolve()
+
+    # Fallback to current working directory so the server is always functional
+    cwd = Path.cwd().resolve()
+    if cwd.is_dir():
+        return cwd
+
+    raise RuntimeError("Open a project folder in VS Code before using the VS Code MCP server.")
 
 
 def normalize_target(rel_or_abs: str, root: Path) -> Path:

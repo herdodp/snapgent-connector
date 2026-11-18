@@ -27,7 +27,7 @@ else:
     ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "logs" / "bridge_debug.log"
-HOST = "127.0.0.1"
+HOSTS = ["127.0.0.1", "::1"]
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 MCP_PROTOCOL_VERSION = "2024-11-05"
 BRIDGE_VERSION = "3.9.7"
@@ -752,17 +752,28 @@ async def run() -> None:
             f"'{sys.executable} -m pip install websockets'."
         )
     bridge = Bridge()
-    server = await websockets.serve(
-        bridge.handle_client,
-        HOST,
-        PORT,
-        max_size=128 * 1024 * 1024,
-        max_queue=256,
-        ping_interval=20,
-        ping_timeout=90,
-    )
+    try:
+        server = await websockets.serve(
+            bridge.handle_client,
+            HOSTS,
+            PORT,
+            max_size=128 * 1024 * 1024,
+            max_queue=256,
+            ping_interval=20,
+            ping_timeout=90,
+        )
+    except Exception:
+        server = await websockets.serve(
+            bridge.handle_client,
+            "127.0.0.1",
+            PORT,
+            max_size=128 * 1024 * 1024,
+            max_queue=256,
+            ping_interval=20,
+            ping_timeout=90,
+        )
     log(f"snapgent bridge v{BRIDGE_VERSION}")
-    log(f"listening on ws://{HOST}:{PORT} - load the extension and open a supported AI chat")
+    log(f"listening on ws://127.0.0.1:{PORT} - load the extension and open a supported AI chat")
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     async def _startup_then_monitor() -> None:

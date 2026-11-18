@@ -907,7 +907,7 @@
   // Every user meets this eventually - Chrome auto-updates extensions under
   // open tabs - so it is worth its own message.
   const isContextInvalidated = (m) =>
-    /Extension context invalidated|Receiving end does not exist|message port closed/i.test(m || "");
+    /Extension context invalidated/i.test(m || "");
 
   function bg(msg) {
     return new Promise((resolve) => {
@@ -4106,8 +4106,6 @@
     // button and offers the reload directly rather than telling the user to go
     // restart a bridge that was never down.
     function staleExtensionAlert() {
-      // Latch it BEFORE painting, so the bar drops its frozen "Agent active ·
-      // N tools" in the same pass and never contradicts the banner.
       A.staleExtension = true;
       renderBar();
       if (bridgeBannerEl) { bridgeBannerEl.remove(); bridgeBannerEl = null; }
@@ -4116,8 +4114,14 @@
       b.className = "zs-banner limit zs-stale";
       b.innerHTML = `<div class="zs-banner-t">⚠ Reload page</div>
         <div class="zs-banner-m">snapgentV3 was updated. Reload this page to continue.</div>
-        <div class="zs-banner-acts"><button class="zs-banner-reload">Reload page</button></div>`;
+        <div class="zs-banner-acts"><button class="zs-banner-reload">Reload page</button><button class="zs-banner-x">Close</button></div>`;
       b.querySelector(".zs-banner-reload").addEventListener("click", () => location.reload());
+      b.querySelector(".zs-banner-x").addEventListener("click", () => {
+        b.remove();
+        if (bridgeBannerEl === b) bridgeBannerEl = null;
+        A.staleExtension = false;
+        renderBar();
+      });
       root.appendChild(b);
       bridgeBannerEl = b;
     }
@@ -4939,10 +4943,14 @@
   function onStatus(s) {
     if (!s) return;
     if (s.kind === "stale-extension") {
-      clearInterval(statusTimer);
       ui.staleExtensionAlert();
       diag("bridge.staleExtension", { via: "status", error: s.error });
       return;
+    }
+    if (s.connected && A.staleExtension) {
+      A.staleExtension = false;
+      const staleBanner = root.querySelector(".zs-banner.zs-stale");
+      if (staleBanner) staleBanner.remove();
     }
     ui.setStatus(s);
   }
