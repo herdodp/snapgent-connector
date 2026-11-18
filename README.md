@@ -139,6 +139,7 @@ npm run dist     # build the Windows installer into dist/
 - **VS Code**, **VSCodium**, or **Code - OSS** for the default target. Keep the workspace you want to use open in your editor.
 - **Windows**, **macOS**, or **Linux** for the bridge.
 - **Python 3.9+** on macOS and Linux. Windows includes the bridge executable.
+  The start scripts install `websockets` (required) and `aiohttp` (optional live view).
 - The bridge running while you use the agent.
 
 ---
@@ -290,6 +291,51 @@ The AI sends commands, snapgentV3 runs them in the selected target, and the resu
 - Keep your intended project open in VS Code when VS Code is selected as the MCP target.
 - On **Arena**, use **Direct** mode.
 - If **Gemini** or **Kimi** stops using tools in a long session, remind it to use the snapgentV3 commands or start a new chat.
+
+### Live view and status
+
+The bridge also opens a small **read-only** HTTP channel on the port next to the
+bridge (`17614` by default, override with `ZS_BRIDGE_STREAM_PORT`):
+
+| URL | What it shows |
+|---|---|
+| `http://127.0.0.1:17614/` | One-page live view of the turn that is running |
+| `/events` | The same frames as Server-Sent Events (`/stream` is an alias) |
+| `/status` | One-shot JSON snapshot: bridge version, queue, recent frames |
+
+It is advisory only: a dead reader can never fail a tool call, and no route accepts a
+pushed frame, so a page open in the same browser cannot inject into the view. The
+channel needs the `aiohttp` package; the start scripts install it. Without it the
+bridge logs `progress channel disabled` and every tool call keeps working.
+
+### Remote commands (opt-in, off by default)
+
+**MCP servers → Remote commands** lets the extension continue a session whose
+assistant reply was written *somewhere else* — for example a reply typed in the
+ChatGPT mobile app, or one that arrived through conversation sync.
+
+- **What it does:** while a Snapgent session is running, the extension watches the
+  newest assistant reply in the chat. If that reply carries snapgentV3 tool calls this
+  session has not executed yet, it adopts and runs them.
+- **Why it is off by default:** it runs commands that arrive through the chat content,
+  not from the click you just made. Anyone who can write into that conversation —
+  another device signed in to your account, a shared or synced chat, or someone with
+  access to the page — can run commands with the bridge's privileges: file reads and
+  writes and, with the VS Code server, terminals.
+- **When to turn it on:** only while you are deliberately moving between devices.
+  Turn it off again afterwards; the setting is remembered per browser profile.
+
+### Windows and `bridge.exe`
+
+Windows runs the prebuilt `bridge.exe`. The bridge-side fixes (per-websocket replay
+cache with `force`, the live view and `/status`, and the removed `/push` endpoint)
+live in `bridge.py`, which is what macOS, Linux, and Windows-from-source run; the
+bundled `bridge.exe` is only rebuilt when a release says so. When running `bridge.py`
+on Windows, install the dependencies once:
+
+```
+python -m pip install --user websockets aiohttp
+```
 
 ---
 
