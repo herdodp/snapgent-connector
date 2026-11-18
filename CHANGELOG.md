@@ -38,6 +38,24 @@ All notable changes to snapgentV3 Free are documented here.
 - README documents the live view, the stream port, and the **Remote commands** opt-in
   together with its risk.
 
+### Security
+- **Foreign WebSocket origins are rejected during the handshake.** The server now passes
+  a `process_request` gate to `websockets.serve` that answers **403** for any `Origin`
+  that is not `chrome-extension://`, `moz-extension://` or
+  `safari-web-extension://`, so a page on any website can no longer open
+  `ws://127.0.0.1:17613` and run tools such as `run_command` or `write_file`.
+  `handle_client` repeats the check and closes the socket with code 1008 as a second
+  layer. Clients without an `Origin` header (CLI tools, tests, native apps) still work;
+  custom front ends can be listed in `ZS_BRIDGE_EXTRA_ORIGINS`.
+
+### Bridge vs. `bridge.exe`
+The bridge-side changes above (read-only progress channel, `aiohttp` live view, the
+`/status` route and `BRIDGE_VERSION` 3.9.12) live in `bridge.py`. The bundled
+`bridge.exe` was **not rebuilt** in this release, so Windows users who start it through
+`start.bat` keep the previous bridge code, including `POST /push`. Rebuilding it needs
+PyInstaller with `--hidden-import aiohttp`; until then those changes apply only when the
+bridge runs from source.
+
 ## [V3.9.11] - 2026-11-17
 
 ### Added

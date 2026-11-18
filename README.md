@@ -300,6 +300,20 @@ pushed frame, so a page open in the same browser cannot inject into the view. Th
 channel needs the `aiohttp` package; the start scripts install it. Without it the
 bridge logs `progress channel disabled` and every tool call keeps working.
 
+### WebSocket origin (local security)
+
+The bridge only accepts the extension. The WebSocket handshake rejects any `Origin`
+that is not a browser-extension URL (`chrome-extension://`, `moz-extension://`,
+`safari-web-extension://`) with HTTP 403 and a `rejected websocket origin=...` log line,
+so a page on any website cannot open `ws://127.0.0.1:17613` and run tools such as
+`run_command` or `write_file`. `handle_client` repeats the check as a second layer and
+closes the socket (code 1008) if a server was started without the handshake gate.
+
+Clients that send no `Origin` at all — command-line tools, tests, native apps — are
+still accepted, because a browser page cannot omit that header. If you drive the
+bridge from your own front end, list its exact origin in `ZS_BRIDGE_EXTRA_ORIGINS`
+(comma separated) before starting the bridge.
+
 ### Remote commands (opt-in, off by default)
 
 **MCP servers → Remote commands** lets the extension continue a session whose
@@ -320,7 +334,8 @@ ChatGPT mobile app, or one that arrived through conversation sync.
 ### Windows and `bridge.exe`
 
 Windows runs the prebuilt `bridge.exe`. The bridge-side fixes (per-websocket replay
-cache with `force`, the live view and `/status`, and the removed `/push` endpoint)
+cache with `force`, the live view and `/status`, the removed `/push` endpoint and the
+WebSocket origin check)
 live in `bridge.py`, which is what macOS, Linux, and Windows-from-source run; the
 bundled `bridge.exe` is only rebuilt when a release says so. When running `bridge.py`
 on Windows, install the dependencies once:

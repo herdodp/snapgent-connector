@@ -492,5 +492,101 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(manager._resolve_tool("get_state")[0])
 
 
+@unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+class OriginGuardTests(unittest.IsolatedAsyncioTestCase):
+    @contextlib.asynccontextmanager
+    async def _server(self, with_gate: bool = True):
+        manager = bridge.Bridge()
+        if with_gate:
+            server = await bridge._serve_bridge(manager, 0)
+            try:
+                yield server.sockets[0].getsockname()[1]
+            finally:
+                server.close()
+                await server.wait_closed()
+            return
+        async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+            yield server.sockets[0].getsockname()[1]
+
+    def test_origin_allowlist(self):
+        allowed = [
+            None,
+            "",
+            "chrome-extension://abcdefghijklmnop",
+            "CHROME-EXTENSION://ABCDEFGHIJKLMNOP",
+            "moz-extension://0f0f0f0f-1111-2222-3333-444444444444",
+            "safari-web-extension://A1B2C3D4",
+        ]
+        rejected = [
+            "https://evil.example",
+            "http://127.0.0.1:17614",
+            "http://localhost:3000",
+            "null",
+            "file://",
+            "app://obsidian.md",
+            "chrome-extension://",
+            "chrome-extension:/missing-slashes",
+        ]
+        for origin in allowed:
+            self.assertTrue(bridge._origin_allowed(origin), origin)
+        for origin in rejected:
+            self.assertFalse(bridge._origin_allowed(origin), origin)
+
+    async def test_serve_bridge_rejects_a_page_origin_at_the_handshake(self):
+        async with self._server() as port:
+            with self.assertRaises(Exception) as caught:
+                async with bridge.websockets.connect(
+                    f"ws://127.0.0.1:{port}", origin="https://evil.example"
+                ):
+                    pass
+        status = getattr(getattr(caught.exception, "response", None), "status_code", None)
+        self.assertEqual(status, 403, f"{type(caught.exception).__name__}: {caught.exception}")
+
+    async def test_serve_bridge_accepts_an_extension_origin(self):
+        async with self._server() as port:
+            async with bridge.websockets.connect(
+                f"ws://127.0.0.1:{port}", origin="chrome-extension://abcdefghijklmnop"
+            ) as client:
+                connected = json.loads(await client.recv())
+        self.assertEqual(connected["type"], "connected")
+
+    async def test_serve_bridge_accepts_a_client_without_an_origin(self):
+        async with self._server() as port:
+            async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                connected = json.loads(await client.recv())
+        self.assertEqual(connected["type"], "connected")
+
+    async def test_legacy_gate_returns_a_tuple_rejection(self):
+        # websockets <= 13 calls process_request(path, headers) and expects a response
+        # tuple; keep that path working for users who pin an older websockets.
+        class LegacyServe:
+            __module__ = "websockets.legacy.server"
+
+        with patch.object(bridge.websockets, "serve", LegacyServe), patch.object(bridge, "log"):
+            gate = bridge._build_origin_gate()
+            self.assertIsNone(await gate("/", {"Origin": "chrome-extension://abc"}))
+            self.assertIsNone(await gate("/", {}))
+            response = await gate("/", {"Origin": "https://evil.example"})
+        self.assertEqual(response, (403, [], b"Origin not allowed.\n"))
+
+    async def test_handler_still_closes_a_page_origin_without_the_gate(self):
+        # Defence in depth: a server started without process_request (an older bridge or
+        # a third-party wrapper) must not process a single frame from a page origin.
+        async with self._server(with_gate=False) as port:
+            async with bridge.websockets.connect(
+                f"ws://127.0.0.1:{port}", origin="https://evil.example"
+            ) as client:
+                with self.assertRaises(Exception) as caught:
+                    await asyncio.wait_for(client.recv(), 5)
+        close_code = getattr(getattr(caught.exception, "rcvd", None), "code", None)
+        if close_code is None:
+            close_code = getattr(caught.exception, "code", None)
+        self.assertEqual(
+            close_code,
+            1008,
+            f"{type(caught.exception).__name__}: {caught.exception}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
