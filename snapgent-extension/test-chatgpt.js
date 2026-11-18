@@ -667,6 +667,27 @@ ok("mobile textarea text can be read", P.editorText() === "");
     /const have = String\(got\)/.test(prov) &&
     /if \(!composerHolds\(ed, text\)\) \{/.test(prov) &&
     /send\.typedPartial/.test(prov));
+  // Multi-line regression (found live 2026-11-18): the isolated world reads
+  // textContent, which drops the newlines between ProseMirror block nodes, so a
+  // correct 2211-char write read as 2194 and every multi-line send retried until
+  // it failed. Whitespace-only differences must not count as a failed write.
+  ok("a multi-line write whose block newlines vanished still counts as typed",
+    /const squeeze = \(s\) => s\.replace\(\/\\s\+\/g, ""\);/.test(prov) &&
+    /return squeeze\(have\) === squeeze\(want\);/.test(prov) &&
+    !/have\.replace\(\/\\s\+\/g, " "\)/.test(prov));
+  // Behaviour, not just shape: run the real function against the two reads the
+  // browser actually produces. textContent in the isolated world has no block
+  // newlines; a truncated write loses characters.
+  const holdsSrc = (prov.match(/function composerHolds\(ed, text\) \{[\s\S]*?\n  \}/) || [""])[0];
+  let holds = null;
+  try { holds = holdsSrc ? eval("(" + holdsSrc + ")") : null; } catch { holds = null; }
+  const fakeEd = (txt) => ({ textContent: txt });
+  ok("composerHolds accepts the newline-less read of a correct multi-line write",
+    !!holds && holds(fakeEd("line1line2"), "line1\nline2") === true &&
+    holds(fakeEd("aaabbb"), "aaa\n\nbbb") === true);
+  ok("composerHolds still rejects a truncated write",
+    !!holds && holds(fakeEd("line1"), "line1\nline2") === false &&
+    holds(fakeEd("Tugas pertama"), "Tugas pertama: pakai tool list_dir") === false);
   ok("the MAIN-world bridge exists and is reachable from this provider",
     /document\.addEventListener\("zs-type",/.test(cm) &&
     /new CustomEvent\("zs-type-done"/.test(cm) &&
