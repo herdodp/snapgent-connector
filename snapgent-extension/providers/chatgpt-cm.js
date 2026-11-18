@@ -131,10 +131,19 @@
       return ed.innerText || "";
     };
 
+    // Success means the editor holds the text we asked for - not merely that it
+    // holds something. A partial parse (one paragraph of ten) used to be reported
+    // as ok and the caller sent a truncated message.
+    const norm = (s) => String(s == null ? "" : s).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    const wantText = norm(text);
+    const matches = () => norm(read()) === wantText;
+
     const finish = (path) => {
       const got = read();
-      const ok = got.length > 0 || text.length === 0;
-      if (ok) { done({ id, ok: true, len: got.length, want: text.length, err: null, path }); return; }
+      if (norm(got) === wantText) {
+        done({ id, ok: true, len: got.length, want: text.length, err: null, path });
+        return;
+      }
       // Last resort once the DOM route is proven empty: the old execCommand path.
       let okc = true, errc = null;
       try {
@@ -150,7 +159,15 @@
         }
       } catch (e) { okc = false; errc = String(e && e.message ? e.message : e).slice(0, 120); }
       const got2 = read();
-      done({ id, ok: okc && (got2.length > 0 || text.length === 0), len: got2.length, want: text.length, err: errc, path: path + "+exec" });
+      const landed = norm(got2) === wantText;
+      done({
+        id,
+        ok: okc && landed,
+        len: got2.length,
+        want: text.length,
+        err: errc || (landed ? null : "mismatch"),
+        path: path + "+exec",
+      });
     };
 
     // Route 1: DOM parse by ProseMirror.
@@ -168,7 +185,16 @@
       done({ id, ok: false, len: read().length, want: text.length, err: "domWriteFailed: " + String(e && e.message ? e.message : e).slice(0, 80), path: "main" });
       return;
     }
-    // The observer parses on its own turn; 150ms is well past one frame.
-    setTimeout(() => finish("dom"), 150);
+    // The observer parses on its own turn, which is not a fixed delay: on a busy
+    // tab it can land after a frame or two. Poll until the read-back matches, and
+    // only fall back to execCommand once the deadline passes - that fallback clears
+    // the editor first, so running it early can strand an empty composer.
+    const deadline = Date.now() + 500;
+    const bump = () => {
+      if (matches()) return finish("dom");
+      if (Date.now() >= deadline) return finish("dom");
+      setTimeout(bump, 50);
+    };
+    bump();
   }, true);
 })();
