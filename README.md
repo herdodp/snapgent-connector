@@ -45,8 +45,8 @@ snapgentV3 is a browser extension plus a local bridge that connects a normal AI 
 <tr>
 <td width="100%" valign="top">
 
-### 💻 VS Code
-The default target. Automatically connects to the workspace currently open in VS Code.
+### 💻 VS Code / VSCodium
+The default target. Automatically connects to the workspace currently open in VS Code, VSCodium, or Code - OSS.
 
 </td>
 </tr>
@@ -133,8 +133,8 @@ npm run dist     # build the Windows installer into dist/
 
 ## `03` &nbsp; Requirements
 
-- **Microsoft Edge** or **Google Chrome** (Manifest V3).
-- **VS Code** for the default target. Keep the workspace you want to use open in VS Code.
+- **Chromium Browsers** (Google Chrome, Microsoft Edge, Brave, Opera, etc.) or **Mozilla Firefox** (v109+ with Manifest V3).
+- **VS Code**, **VSCodium**, or **Code - OSS** for the default target. Keep the workspace you want to use open in your editor.
 - **Windows**, **macOS**, or **Linux** for the bridge.
 - **Python 3.9+** on macOS and Linux. Windows includes the bridge executable.
 - The bridge running while you use the agent.
@@ -145,11 +145,19 @@ npm run dist     # build the Windows installer into dist/
 
 **① Load the extension**
 
-1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.11).
-2. Open `edge://extensions` (Edge) or `chrome://extensions` (Chrome).
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and select the `snapgent-extension` folder.
-5. The snapgentV3 icon appears in your browser toolbar.
+1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.11) (or clone this repository).
+
+* **For Chrome / Edge / Brave / Chromium:**
+  1. Open `chrome://extensions` (Chrome/Brave) or `edge://extensions` (Edge).
+  2. Enable **Developer mode** (toggle in top right).
+  3. Click **Load unpacked** and select the `snapgent-extension` folder.
+  4. The snapgentV3 icon appears in your browser toolbar.
+
+* **For Mozilla Firefox:**
+  1. Open a new tab and go to `about:debugging#/runtime/this-firefox`.
+  2. Under **Temporary Extensions**, click **Load Temporary Add-on...**
+  3. Select the `snapgent-extension/manifest.json` file.
+  4. The snapgentV3 icon appears in your toolbar and connects to the bridge automatically.
 
 **② Set up the MCP target**
 
@@ -316,9 +324,10 @@ snapgent-full/
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | snapgentV3 bar is missing | Extension is disabled or site access is blocked | Check the extension is enabled and allowed on the current AI chat site, then reload the tab |
+| Firefox: Stale extension / reload loop | Extension was reloaded or background refreshed | Click **Close** on banner or refresh tab (F5) once bridge connects |
 | Bridge is offline | Bridge is not running | Start `start.bat` (Windows), `MacOS_Start.command` (macOS), or run `bash Linux_Start.sh` (Linux) |
 | AI replies without using tools | Provider/model stopped following commands | Remind it to use snapgentV3 commands or start a new chat |
-| VS Code target is unavailable | The bridge is offline or the release is incomplete | Run `start.bat` from the extracted release folder and keep the project open in VS Code |
+| VS Code / VSCodium target is unavailable | The bridge is offline or no workspace folder open | Run launcher from release folder and open a project folder in VS Code / VSCodium |
 | A configured MCP server is missing from the target dropdown | The server was switched off in the **MCP servers** panel, or the extension is outdated | Open **MCP servers** from the ⋯ menu on the snapgent bar and tick the server, then reload the extension in `chrome://extensions` and refresh the chat tab |
 | Target dropdown closes or the click does nothing | Older extension versions redrew the menu during status updates | Update to the latest release and reload the extension |
 
