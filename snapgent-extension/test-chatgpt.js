@@ -565,3 +565,119 @@ ok("mobile textarea text can be read", P.editorText() === "");
   messageNodes = [proseTurn, cmdTurn];
   ok("lastAssistant picks the newest command turn", P.lastAssistant() === cmdTurn);
 }
+
+// ── 2026-11-18 desktop markup: bare send control + NESTED turn wrappers ────
+// Measured live (Chrome 157, 18 Nov 2026): the submit control is a bare
+// `button[aria-label="Send"]` (no id, no data-testid), and the turn wrappers are
+// NESTED - an outer [data-turn-key] holds an inner [data-talvt-turn-state] around
+// the same message pair. Without the aria-label selector the click guard found no
+// button and every injection sat in the composer ("ga ngepaste output"); without
+// the dedupe one real exchange counted as 2 users + 3 assistant turns.
+{
+  ok("submit selector accepts the bare aria-label Send control",
+    /button\[aria-label='Send'\]/.test(P.submitSel));
+  ok("submit selector still accepts the legacy testid/stop controls",
+    /composer-submit-button/.test(P.submitSel) && /stop-button/.test(P.submitSel));
+  // data-talvt-turn-state is NOT in S.msg directly? It must be, or allItems() is
+  // empty on this layout and every reply reads as "never read".
+  ok("turn wrapper selector covers data-talvt-turn-state",
+    P.msgSel.includes("[data-talvt-turn-state]"));
+
+  const inner = el("div", { class: "group flex flex-col", attrs: { "data-talvt-turn-state": "complete" } }, [
+    el("div", { class: "group/user-message" }, ["halo"]),
+    el("h4", { attrs: { "data-conversation-role": "assistant" } }, ["ChatGPT said:"]),
+    el("div", { attrs: { "data-markdown-text-style": "assistant-message" } }, ["pong"]),
+  ]);
+  const outer = el("div", { attrs: { "data-turn-key": "turn-uuid" } }, [inner]);
+  messageNodes = [outer, inner];
+  ok("nested turn wrappers collapse to ONE item", P.allItems().length === 1);
+  ok("the surviving item is the outer turn", P.allItems()[0] === outer);
+  ok("one exchange counts as ONE user turn", P.userCount() === 1);
+  ok("one exchange counts as ONE assistant turn", P.assistantCount() === 1);
+
+  // Legacy role-bearing items must never be dropped by the dedupe.
+  const roleUser = el("div", { attrs: { "data-message-author-role": "user" } }, ["halo"]);
+  const roleAsst = el("div", { attrs: { "data-message-author-role": "assistant" } }, ["pong"]);
+  messageNodes = [roleUser, roleAsst];
+  ok("legacy role items survive the dedupe", P.allItems().length === 2);
+}
+
+// ── React REMOUNTS the composer; a stale editor handle made every post-reply
+// send a silent no-op. Live proof 2026-11-18 11:27: the CONTEXT send typed
+// 2211/2211, then the 82-line tool output logged send.insertDone and
+// send.typed {len:0, want:2826} - no turn appeared, and because an empty
+// composer was the core's "sent" signal, Start sat on "Starting…" forever.
+{
+  const prov = fs.readFileSync(__dirname + "/providers/chatgpt.js", "utf8");
+  const cm = fs.readFileSync(__dirname + "/providers/chatgpt-cm.js", "utf8");
+  const core = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+  ok("typeAndSend re-acquires and re-types on a fresh editor",
+    /let got = 0;[\s\S]{0,600}for \(let attempt = 0; attempt < 6 && !got; attempt\+\+\)[\s\S]{0,700}ed = ready;/.test(prov));
+  ok("typeAndSend verifies the text really landed in the composer",
+    /const accepted = await setEditorText\(ed, text\);[\s\S]{0,120}got = editorText\(\)\.length;/.test(prov));
+  ok("a refused typing attempt is logged before the read-back",
+    /if \(!accepted\) diag\("send\.refused"/.test(prov));
+  ok("typeAndSend returns false instead of clicking an empty composer",
+    /if \(!got\) \{\s*\n\s*diag\("send\.typedFailed"[\s\S]{0,140}return false;/.test(prov));
+  ok("successful send paths report true",
+    /if \(btn\) \{ btn\.click\(\); return true; \}/.test(prov));
+  ok("core retries the send when the provider could not type",
+    /const typed = await P\.typeAndSend\(text, images\);[\s\S]{0,900}if \(typed === false\) \{[\s\S]{0,400}continue;/.test(core));
+}
+
+// ── ChatGPT DISABLES the composer: contenteditable flips to "false" while a
+// reply streams and during plain re-renders (measured 2026-11-18 on an idle tab:
+// ce read "false" 6.3s and 8.4s after reload, nothing generating). In that
+// window execCommand("insertText") returns FALSE and types nothing, silently -
+// so a "typed" report with len 0 was indistinguishable from a real send.
+{
+  const prov = fs.readFileSync(__dirname + "/providers/chatgpt.js", "utf8");
+  const cm = fs.readFileSync(__dirname + "/providers/chatgpt-cm.js", "utf8");
+  ok("there is a composer readiness gate",
+    /function editorReady\(ed\)/.test(prov) && /function waitEditorReady\(timeout\)/.test(prov));
+  ok("readiness requires contenteditable true",
+    /return ed\.getAttribute\("contenteditable"\) === "true";/.test(prov));
+  const readyFn = (prov.match(/function editorReady\(ed\) \{[\s\S]*?\n  \}/) || [""])[0]
+    .replace(/\/\/[^\n]*/g, "");
+  ok("readiness never blocks on queryCommandEnabled (false in an unfocused window)",
+    readyFn.length > 0 && !/queryCommandEnabled/.test(readyFn));
+  ok("a refused execCommand aborts the typing instead of reporting success",
+    /ok = document\.execCommand\("insertText", false, lines\[i\]\)[\s\S]{0,500}if \(!ok\) \{[\s\S]{0,200}return false;/.test(prov));
+  ok("a refusal takes one recovery step before giving up",
+    /diag\("send\.recover"/.test(prov) && /const kick = \(\) =>/.test(prov));
+  ok("input lock never writes contenteditable on the ProseMirror composer",
+    /if \(on\) ed\.setAttribute\("data-zs-locked", "1"\);/.test(prov) &&
+    !/ed\.setAttribute\("contenteditable", on \? "false" : "true"\)/.test(prov));
+  ok("typeAndSend only clears readonly on a textarea composer",
+    /if \(relock && ed instanceof HTMLTextAreaElement\) setEditable\(true\);/.test(prov));
+  ok("a ProseMirror composer is never locked by writing contenteditable",
+    !/setEditable\(false\)[\s\S]{0,40}setAttribute\("contenteditable"/.test(prov) &&
+    !/ed\.setAttribute\("contenteditable", editable \? "true" : "false"\)/.test(prov));
+  ok("the user is blocked while the agent runs by a keydown lock",
+    /function installLockKeydown\(\)/.test(prov) && /e\.stopImmediatePropagation\(\);/.test(prov));
+  ok("waitEditorReady never writes contenteditable on a ProseMirror composer",
+    !/setAttribute\("contenteditable", "true"\); healed = true;/.test(prov) &&
+    /if \(editorReady\(ed\)\) \{/.test(prov));
+  ok("typing goes through the MAIN-world bridge before the local ladder",
+    /const viaMain = await typeViaMain\(ed, text\);/.test(prov) &&
+    /if \(viaMain\.ok && viaMain\.len > 0\) return true;/.test(prov));
+  ok("the MAIN-world bridge exists and is reachable from this provider",
+    /document\.addEventListener\("zs-type",/.test(cm) &&
+    /new CustomEvent\("zs-type-done"/.test(cm) &&
+    /pmViewDesc/.test(cm));
+  ok("the bridge writes the doc as DOM so ProseMirror parses it (no execCommand)",
+    /for \(const line of text\.split\("\\n"\)\)/.test(cm) &&
+    /while \(ed\.firstChild\) ed\.removeChild\(ed\.firstChild\);/.test(cm) &&
+    /setTimeout\(\(\) => finish\("dom"\), 150\);/.test(cm));
+  ok("the bridge still falls back to execCommand when the DOM parse lands empty",
+    /path \+ "\+exec"/.test(cm) &&
+    /insertRejected@/ .test(cm));
+  ok("typing reports success only after the whole text was accepted",
+    /if \(lines\.length > INSERT_CHUNK_LINES\) diag\("send\.insertDone"[\s\S]{0,120}return true;/.test(prov));
+  ok("setEditorText propagates the acceptance result",
+    /return await typeEditorText\(ed, text\);/.test(prov));
+  ok("typeAndSend waits for readiness before each typing attempt",
+    /const ready = await waitEditorReady\(attempt \? 1200 : 4000\);/.test(prov));
+  ok("typeAndSend logs when the composer never became ready",
+    /diag\("send\.notReady"/.test(prov));
+}

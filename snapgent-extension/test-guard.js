@@ -209,6 +209,33 @@ const G = new Function(
     ad.setBaseline("later");
     ok("re-anchoring makes the visible reply the baseline", ad.decide({ enabled: true, started: true, key: "later", hasSignature: true, callCount: 1 }) === "not-new");
   }
+  // ── Run stats on the chip / "Agent is working" cover ─────────────────────
+  // The user asked for "command, tokens, detik" on every run. The formatter is
+  // pure text so it is tested here, but a formatter that main.js never calls is
+  // exactly the dead-code bug this file exists to catch (see the wiring block).
+  {
+    const s = G.formatRunStats({ arg: "list_dir immersed", chars: 4812, ms: 1340 });
+    ok("run stats name the command and its argument", s.startsWith("list_dir immersed"));
+    ok("run stats show the result token estimate", s.includes("out ~1.2k tok"));
+    ok("run stats show the elapsed time in seconds", s.endsWith("1.3s"));
+    ok("a sub-second call is reported in ms", G.formatRunStats({ ms: 42 }).endsWith("42ms"));
+    ok("the streamed command is reported as input tokens", G.formatRunStats({ tokIn: 140, chars: 800, ms: 900 }).includes("in ~140 tok"));
+    // Anti-false-positive: nothing truthful to say must not print "~ tok · 0ms".
+    ok("empty input formats to an empty string", G.formatRunStats({}) === "");
+    ok("missing chars never becomes a token estimate", G.tokensFromChars(undefined) === 0 && G.tokensFromChars(-5) === 0);
+    ok("zero ms is omitted instead of printed as 0ms", G.formatRunStats({ chars: 400, ms: 0 }) === "out ~100 tok");
+    // A runaway argument must not push the tokens/time off the chip.
+    const long = G.formatRunStats({ arg: "x".repeat(200), chars: 400, ms: 2000 });
+    ok("a long argument is truncated, not dropped", long.includes("…") && long.includes("out ~100 tok"));
+    ok("compactCount keeps counts narrow", G.compactCount(999) === "999" && G.compactCount(1000) === "1k" && G.compactCount(1200) === "1.2k");
+  }
+  {
+    // Wiring: the chip and the working cover must really consume the formatter.
+    const main = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+    ok("the tool chip detail uses the run stats", /ZSGuard\.formatRunStats\(/.test(main));
+    ok("the settled chip keeps its stats for a re-own", /toolSettle\s*=\s*\{[^}]*detail:\s*doneDetail/s.test(main));
+  }
+
   // Wiring: a tested helper the running code never calls is the bug this file
   // exists to catch, so the listener and its toggle must really be in main.js.
   {

@@ -35,6 +35,74 @@ PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 # bridge is doing while a tool call is still running instead of waiting for the result.
 STREAM_PORT = int(os.environ.get("ZS_BRIDGE_STREAM_PORT", str(PORT + 1)))
 STREAM_BACKLOG = 200
+
+# Self-contained live view served at "/" on the stream port. Kept as one small
+# string so the bridge still has no template/build dependency: it renders the
+# SAME frames /events already streams (event, tool, ms, chars/tok) plus a
+# /status poll for the "running now" elapsed time.
+INDEX_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>snapgentV3 bridge · live</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ :root{color-scheme:dark}
+ body{margin:0;background:#0d0f12;color:#e6e6ea;font:13px/1.45 ui-sans-serif,"Segoe UI",sans-serif}
+ header{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #23262d;position:sticky;top:0;background:#0d0f12}
+ h1{font-size:14px;margin:0;font-weight:700;letter-spacing:.2px}
+ .dot{width:8px;height:8px;border-radius:50%;background:#5cbf9a;box-shadow:0 0 8px #5cbf9a}
+ .dot.busy{background:#eab308;box-shadow:0 0 8px #eab308}
+ .muted{color:#8a8f9a}
+ .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ #now{padding:12px 18px;border-bottom:1px solid #23262d}
+ #now .row{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
+ table{width:100%;border-collapse:collapse}
+ th,td{text-align:left;padding:6px 18px;border-bottom:1px solid #171a1f;white-space:nowrap}
+ th{color:#8a8f9a;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+ tr.start td:nth-child(2){color:#fde68a}
+ tr.end td:nth-child(2){color:#5cbf9a}
+ tr.end.bad td:nth-child(2){color:#ef6b6b}
+ td.cmd{max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+</style></head><body>
+<header><span class="dot" id="dot"></span><h1>snapgentV3 bridge</h1>
+ <span class="muted mono" id="meta">connecting…</span></header>
+<div id="now"><div class="row muted"><span>running now</span><span class="mono" id="queue">0</span></div><div id="busy"></div></div>
+<table><thead><tr><th>time</th><th>event</th><th>tool</th><th>ms</th><th>tok</th><th>detail</th></tr></thead>
+<tbody id="rows"></tbody></table>
+<script>
+const rows=document.getElementById('rows'), dot=document.getElementById('dot'),
+      meta=document.getElementById('meta'), busy=document.getElementById('busy'),
+      queue=document.getElementById('queue');
+const esc=(s)=>String(s==null?'':s).replace(/[&<>"]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function add(f){
+  const tr=document.createElement('tr');
+  const bad=f.ok===false||f.error;
+  tr.className=(f.event==='tool_start'?'start':f.event==='tool_end'?'end':'')+(bad?' bad':'');
+  const t=new Date((f.at||Date.now()/1000)*1000).toLocaleTimeString();
+  const detail=f.error||f.detail||f.phase||f.server||(f.chars!=null?f.chars+' chars':'');
+  tr.innerHTML='<td class="mono muted">'+t+'</td><td>'+esc(f.event)+'</td><td class="cmd">'+esc(f.tool||'')+
+    '</td><td class="mono">'+(f.ms!=null?esc(f.ms):'')+'</td><td class="mono">'+(f.tok!=null?esc(f.tok):'')+
+    '</td><td class="cmd muted">'+esc(detail)+'</td>';
+  rows.prepend(tr);
+  while(rows.children.length>200) rows.lastChild.remove();
+}
+async function poll(){
+  try{
+    const s=await (await fetch('/status',{cache:'no-store'})).json();
+    meta.textContent='v'+(s.version||'?')+' · seq '+s.seq+' · '+s.subscribers+' subscriber(s)';
+    queue.textContent=s.queue;
+    dot.className='dot'+(s.queue?' busy':'');
+    busy.innerHTML=(s.busy||[]).map(b=>'<div class="row"><span>'+esc(b.tool||'?')+
+      '</span><span class="mono">'+(((b.elapsed_ms||0)/1000).toFixed(1))+'s</span></div>').join('')
+      ||'<div class="row muted"><span>idle</span><span></span></div>';
+  }catch(e){ meta.textContent='bridge unreachable'; dot.className='dot busy'; }
+}
+const es=new EventSource('/events');
+es.onmessage=()=>{};
+['tool_start','tool_end','tool_loading','stream','stall'].forEach(n=>es.addEventListener(n,e=>{
+  try{ add(Object.assign({event:n},JSON.parse(e.data))); }catch(_){}
+}));
+poll(); setInterval(poll,1000);
+</script></body></html>"""
 MCP_PROTOCOL_VERSION = "2024-11-05"
 BRIDGE_VERSION = "3.9.7"
 MAX_LOG_CHARS = 1000
@@ -331,10 +399,21 @@ class EventHub:
         self._busy: Dict[str, Dict[str, Any]] = {}
 
     def snapshot(self) -> Dict[str, Any]:
+        # elapsed_ms is computed HERE, not stored: a consumer polling /status gets
+        # a live "how long has this been running" number without doing clock math
+        # against a `started` epoch it may render in another timezone.
+        now = time.time()
+        busy = []
+        for entry in self._busy.values():
+            row = dict(entry)
+            started = row.get("started")
+            if isinstance(started, (int, float)):
+                row["elapsed_ms"] = int((now - started) * 1000)
+            busy.append(row)
         return {
             "seq": self._seq,
             "queue": len(self._busy),
-            "busy": [dict(entry) for entry in self._busy.values()],
+            "busy": busy,
             "subscribers": len(self._subs),
         }
 
@@ -360,6 +439,11 @@ class EventHub:
     def end(self, call_id: Any, ok: bool = True, **extra: Any) -> Dict[str, Any]:
         entry = self._busy.pop(str(call_id), {})
         started = entry.get("started", time.time())
+        # Tokens are an ESTIMATE of the result text (chars/4): the bridge has no
+        # tokenizer and the number is informational, not billed usage.
+        chars = extra.get("chars")
+        if isinstance(chars, int) and chars >= 0 and "tok" not in extra:
+            extra["tok"] = chars // 4
         frame = {
             "id": call_id,
             "tool": entry.get("tool"),
@@ -928,7 +1012,17 @@ async def _start_stream_server(hub: "EventHub") -> Any:
         return response
 
     async def status(request: Any) -> Any:
-        return web.json_response({"version": BRIDGE_VERSION, **hub.snapshot()})
+        # CORS so the extension popup (chrome-extension:// origin) can poll it.
+        return web.json_response(
+            {"version": BRIDGE_VERSION, **hub.snapshot()},
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    async def index(request: Any) -> Any:
+        # One-page live view: no build step, no dependency, just what /status and
+        # /events already expose, so "agent working" can be watched in a browser
+        # tab instead of tailing JSON in a terminal.
+        return web.Response(text=INDEX_HTML, content_type="text/html")
 
     async def push(request: Any) -> Any:
         try:
@@ -942,6 +1036,7 @@ async def _start_stream_server(hub: "EventHub") -> Any:
         return web.json_response({"ok": True, **hub.snapshot()})
 
     app = web.Application()
+    app.router.add_get("/", index)
     app.router.add_get("/events", events)
     app.router.add_get("/stream", events)
     app.router.add_get("/status", status)
@@ -950,7 +1045,7 @@ async def _start_stream_server(hub: "EventHub") -> Any:
     await runner.setup()
     site = web.TCPSite(runner, HOST, STREAM_PORT)
     await site.start()
-    log(f"progress channel: http://{HOST}:{STREAM_PORT}/events (SSE), /status, POST /push")
+    log(f"progress channel: http://{HOST}:{STREAM_PORT}/ (live view), /events (SSE), /status, POST /push")
     return runner
 
 

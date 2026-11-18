@@ -361,6 +361,9 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         busy = hub.snapshot()
         self.assertEqual(busy["queue"], 1)
         self.assertEqual(busy["busy"][0]["tool"], "echo")
+        # The live view needs an age it can print without clock math of its own.
+        self.assertIn("elapsed_ms", busy["busy"][0])
+        self.assertGreaterEqual(busy["busy"][0]["elapsed_ms"], 0)
         hub.end("call-2", ok=True, chars=4)
         self.assertEqual(hub.snapshot()["queue"], 0)
         events = [frame["event"] for frame in hub._recent]
@@ -369,6 +372,21 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         end_frame = [f for f in hub._recent if f["event"] == "tool_end"][0]
         self.assertGreaterEqual(end_frame["ms"], 0)
         self.assertTrue(end_frame["ok"])
+        # chars/4 estimate so "how many tokens did this call get" is answerable
+        # from the event alone.
+        self.assertEqual(end_frame["tok"], 1)
+        # An explicit tok (from the page, which knows the streamed length) wins.
+        hub.begin("call-3", "echo")
+        hub.end("call-3", ok=True, chars=400, tok=140)
+        self.assertEqual([f for f in hub._recent if f.get("id") == "call-3"][-1]["tok"], 140)
+
+    def test_live_view_is_self_contained(self):
+        # The dashboard is served from the stream port, so it must not depend on
+        # any external asset or build step - only the endpoints this file exposes.
+        html = bridge.INDEX_HTML
+        self.assertIn("new EventSource('/events')", html)
+        self.assertIn("fetch('/status'", html)
+        self.assertIn("elapsed_ms", html)
 
     async def test_hub_subscriber_receives_frames_live(self):
         hub = bridge.EventHub()

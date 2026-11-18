@@ -71,7 +71,12 @@ const ZSProvider = (() => {
     // is exactly why Start reported
     // "reply was never read (0 chars) - message DOM not matched".
     // The structural probes are APPENDED, so older layouts keep working.
-    msg: '[data-message-author-role],[class*="DilResponseRoot"],[data-turn-key]',
+    // 2026-11-18: the newest desktop markup replaced [data-turn-key] with
+    // [data-talvt-turn-state] (measured live: turnKey=0, talvt=1 per turn), so the
+    // turn wrapper has to be in this list or allItems() is empty and every reply
+    // looks like "never read". The role now lives on sr-only headings inside the
+    // turn: h4[data-conversation-role="user|assistant"].
+    msg: '[data-message-author-role],[class*="DilResponseRoot"],[data-turn-key],[data-talvt-turn-state]',
     userRole: "user",
     assistantRole: "assistant",
     // 2026-11-17: a THIRD desktop variant dropped .markdown entirely. The
@@ -86,7 +91,14 @@ const ZSProvider = (() => {
     editor: '#prompt-textarea,[data-mobile-composer-prompt],textarea[aria-label="Chat with ChatGPT"],[role="textbox"][aria-label="Ask ChatGPT"]',
     // The ONE submit control; its data-testid says whether it is currently a
     // send or a stop button (see isStopBtn). Id first - it survives testid churn.
-    submitBtn: "#composer-submit-button, button[data-testid='send-button'], button[data-testid='stop-button'], button[aria-label='Send message'], button[aria-label*='Stop'], button[aria-label*='stop'], button[aria-label*='Interrompre'], button[aria-label*='Arrêter']",
+    // 2026-11-18: ChatGPT's composer send control is now a bare
+    // `button[aria-label="Send"]` - no id, no data-testid (measured live: the
+    // old `#composer-submit-button` / `data-testid=send-button` are gone). With
+    // only "Send message" in this list the click guard found NO button, so the
+    // injected message was never submitted and the loop sat on "Starting…"
+    // forever with no reply (user report: "ga ngepaste output"). Keep the old
+    // selectors too - A/B variants and other locales still use them.
+    submitBtn: "#composer-submit-button, button[data-testid='send-button'], button[data-testid='stop-button'], button[aria-label='Send'], button[aria-label='Send message'], button[aria-label='Envoyer'], button[aria-label*='Stop'], button[aria-label*='stop'], button[aria-label*='Interrompre'], button[aria-label*='Arrêter']",
     // Kept for installSendHooks, which needs to recognise a click on the native
     // stop control wherever it lives.
     stopBtn: "button[data-testid='stop-button']",
@@ -137,7 +149,8 @@ const ZSProvider = (() => {
   //     <div …><div class="group/user-message">…user text…</div></div>
   //     <div …><h4 class="sr-only"><span>ChatGPT said:</span></h4>…reply…</div>
   //   </div>
-  const isTurnKeyItem = (item) => !!(item && item.matches && item.matches('[data-turn-key]'));
+  const TURN_SEL = '[data-turn-key],[data-talvt-turn-state]';
+  const isTurnKeyItem = (item) => !!(item && item.matches && item.matches(TURN_SEL));
   const role = (item) => {
     const attr = item && item.getAttribute ? item.getAttribute("data-message-author-role") : null;
     if (attr) return attr;
@@ -179,6 +192,11 @@ const ZSProvider = (() => {
       // watchdog re-fired that historical command every ~30 s instead of running
       // the new one (measured live 2026-11-17: 60 identical list_dir calls).
       // A mixed turn IS the assistant surface when it carries a command block.
+      // 2026-11-18 layout: the reply side is marked by an sr-only heading
+      // h4[data-conversation-role="assistant"] inside the same turn. Without this a
+      // narration-only reply (no command block) was not counted as an assistant
+      // turn at all, so the watcher never saw the text.
+      if (item.querySelector('[data-conversation-role="assistant"]')) return true;
       return turnAssistantBlocks(item).length > 0;
     }
     return true;
@@ -455,7 +473,22 @@ const ZSProvider = (() => {
   }
 
   // ── DOM primitives ────────────────────────────────────────────────────────
-  const allItems = () => [...document.querySelectorAll(S.msg)];
+  // 2026-11-18: the desktop markup NESTS the two turn wrappers - the outer
+  // [data-turn-key] contains an inner [data-talvt-turn-state] around the same
+  // message pair. Querying S.msg returned BOTH, so one real turn counted twice:
+  // measured live, users=2 / assistant=3 for a single exchange. That inflates
+  // every count-based decision (landed(), sys.tally's user budget - which then
+  // "spends" 2 user slots per turn and re-states the prompt early). Collapse
+  // nested TURN wrappers onto the outermost one; role-bearing legacy items
+  // (data-message-author-role / DilResponseRoot) are never dropped.
+  const allItems = () => {
+    const list = [...document.querySelectorAll(S.msg)];
+    return list.filter((el) => {
+      if (!isTurnKeyItem(el)) return true;
+      const up = el.parentElement && el.parentElement.closest(TURN_SEL);
+      return !up;
+    });
+  };
   const assistantItems = () => allItems().filter(isAssistantItem);
   const assistantCount = () => assistantItems().length;
   const userCount = () => allItems().filter(isUserItem).length;
@@ -489,9 +522,20 @@ const ZSProvider = (() => {
   // misses and the resume watchdog re-fires a historical tool.
   const itemKey = (item) => {
     if (!item || !item.getAttribute) return null;
-    return item.getAttribute("data-turn-key")
-      || item.getAttribute("data-message-id")
-      || null;
+    const direct = item.getAttribute("data-turn-key")
+      || item.getAttribute("data-message-id");
+    if (direct) return direct;
+    // 2026-11-18 layout: the wrapper carries no id, but each bubble does
+    // (data-chatgpt-search-message-ids, one per side). Joining them gives a
+    // stable per-turn identity, so dedupe keeps working instead of falling back
+    // to a positional index that collides when scrolling re-renders turns.
+    try {
+      const ids = [...item.querySelectorAll("[data-chatgpt-search-message-ids]")]
+        .map((n) => n.getAttribute("data-chatgpt-search-message-ids"))
+        .filter(Boolean);
+      if (ids.length) return ids.join("|");
+    } catch {}
+    return null;
   };
   const lastAssistantId = () => itemKey(lastAssistant());
 
@@ -581,16 +625,40 @@ const ZSProvider = (() => {
   // ProseMirror is a contenteditable: flipping contenteditable=false blocks the
   // user, but typeAndSend temporarily re-enables it so our own injection works.
   let _locked = false;
+  // Keyboard lock for a PM composer: stop the USER typing without touching
+  // contenteditable (which would also disable execCommand for our injection).
+  let _lockKeysBound = false;
+  function installLockKeydown() {
+    if (_lockKeysBound) return;
+    _lockKeysBound = true;
+    document.addEventListener("keydown", (e) => {
+      if (!_locked) return;
+      const ed = getEditor();
+      if (ed && ed.contains(e.target)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    }, true);
+  }
+
   function setInputLock(on) {
     _locked = on;
+    installLockKeydown();
     const ed = getEditor();
     if (!ed) return;
     if (ed instanceof HTMLTextAreaElement) {
       if (on) ed.setAttribute("readonly", "");
       else ed.removeAttribute("readonly");
-    } else {
-      ed.setAttribute("contenteditable", on ? "false" : "true");
     }
+    // NEVER write contenteditable on a ProseMirror composer. PM owns that
+    // attribute and re-applies it from its own state, so our write races the
+    // editor: the attribute can read "true" while Chrome has already disabled
+    // the editing host, and then execCommand("insertText") returns FALSE and
+    // types nothing - the exact silent no-op that stranded every send.
+    // Live 2026-11-18 13:50-13:53: probe ret:false / enabled:false through six
+    // attempts while ce read "true", and the same probe succeeded on a fresh tab
+    // (2293 chars typed). ui.inputCover() already blocks the user with an
+    // overlay, so the DOM lock is marked, not enforced by the attribute.
     if (on) ed.setAttribute("data-zs-locked", "1");
     else ed.removeAttribute("data-zs-locked");
   }
@@ -870,8 +938,89 @@ const ZSProvider = (() => {
     return await waitFor(() => (ed.textContent || "").trim().length > 0, 3000);
   }
 
+  // The composer is NOT always open for input. ChatGPT flips its
+  // contenteditable attribute to "false" while a reply streams AND during
+  // ordinary React re-renders: measured live 2026-11-18 on an idle tab, ce read
+  // "false" again 6.3s and 8.4s after a reload with nothing generating. In that
+  // window execCommand("insertText") returns FALSE and inserts NOTHING, without
+  // throwing - so the old code reported the send as typed while the composer
+  // stayed empty (send.insertDone + send.typed len:0/want:2826, then a fake
+  // send.cleared and the bar stuck on "Starting…").
+  function editorReady(ed) {
+    if (!ed || !ed.isConnected) return false;
+    if (ed instanceof HTMLTextAreaElement) return !ed.readOnly && !ed.disabled;
+    // Only the attribute matters here. queryCommandEnabled("insertText") is
+    // NOT usable as the gate: it reports false whenever the tab is not the
+    // focused window (measured live 2026-11-18 13:43 - ce was "true" and the
+    // first send typed 2211/2211, yet queryCommandEnabled stayed false and
+    // blocked every attempt). The real proof stays the execCommand return value
+    // plus the length read-back, never this query.
+    return ed.getAttribute("contenteditable") === "true";
+  }
+
+  async function waitEditorReady(timeout) {
+    const t0 = Date.now();
+    for (;;) {
+      const ed = getEditor();
+      // NEVER write contenteditable on a ProseMirror composer, not even as a
+      // "heal". PM owns that attribute and re-applies it from its own state, so
+      // our write races the editor: the attribute ends up reading "true" while
+      // Chrome has already disabled the editing host, and from then on every
+      // execCommand("insertText") returns false and types nothing. Live
+      // 2026-11-18 (Chrome 157): the heal wrote "true", the first send typed
+      // 2211/2211, and every later send was a silent no-op. Typing now goes
+      // through the MAIN-world tap (typeViaMain) and the DOM lock is an overlay,
+      // so a wedged attribute is left exactly as ChatGPT set it.
+      if (editorReady(ed)) {
+        try { ed.focus(); } catch {}
+        return ed;
+      }
+      if (Date.now() - t0 >= timeout) return null;
+      await sleep(60);
+    }
+  }
+
   // Fallback: type it. Yielding does not make this faster - it keeps the page
   // alive while it happens, so the user can still click (and Stop still works).
+  // Returns false when the composer REFUSED the input, so the caller retries
+  // instead of clicking send on an empty box.
+  // Ask the MAIN-world tap (providers/chatgpt-cm.js) to do the typing. See the
+  // bridge's header: after the first send, THIS world's execCommand("insertText")
+  // returns false for the rest of the page's life while the attribute still reads
+  // contenteditable="true", and the identical call from the page's own world
+  // succeeds on that same page at that same instant. Returns {ok, len, err} or
+  // null when the tap is not installed (the caller then types locally).
+  async function typeViaMain(ed, text) {
+    if (!ed || !ed.isConnected) return null;
+    const id = "zs" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    return await new Promise((resolve) => {
+      let settled = false;
+      const onDone = (ev) => {
+        let d = null;
+        try { d = JSON.parse(ev.detail || "{}"); } catch { return; }
+        if (!d || d.id !== id) return;
+        settled = true;
+        document.removeEventListener("zs-type-done", onDone, true);
+        resolve(d);
+      };
+      document.addEventListener("zs-type-done", onDone, true);
+      try {
+        document.dispatchEvent(new CustomEvent("zs-type", {
+          detail: JSON.stringify({ id, text: String(text), sel: S.editor }),
+        }));
+      } catch (e) {
+        return resolve({ ok: false, len: 0, err: "dispatchFailed", path: "main" });
+      }
+      // The bridge answers after ProseMirror's observer turn; never hang the send.
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener("zs-type-done", onDone, true);
+        resolve(null);
+      }, 4000);
+    });
+  }
+
   async function typeEditorText(ed, text) {
     if (ed instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
@@ -882,28 +1031,96 @@ const ZSProvider = (() => {
         inputType: "insertText",
         data: text,
       }));
-      return;
+      return true;
+    }
+    // MAIN-world first: this world's execCommand dies after the first send on a
+    // long-lived ChatGPT tab (see typeViaMain). Only fall through to the local
+    // ladder when the tap is missing or it provably typed nothing.
+    const viaMain = await typeViaMain(ed, text);
+    if (viaMain) {
+      diag("send.typedMain", {
+        ok: !!viaMain.ok,
+        len: viaMain.len,
+        want: String(text).length,
+        err: viaMain.err || null,
+        path: viaMain.path || null,
+      });
+      if (viaMain.ok && viaMain.len > 0) return true;
     }
     selectAll(ed);
+    // Recovery ladder. A composer that reports contenteditable="true" can still
+    // refuse execCommand ("insertText" returns false, nothing lands). Live
+    // 2026-11-18 13:50: the extension got ret:false/enabled:false on a page where
+    // the very same probe succeeded in BOTH the main and an isolated world via
+    // CDP, so the refusal is about this element's editing-host state, not the
+    // world. Re-establish it the way a user click would, then place the caret
+    // INSIDE the editable instead of selecting at the element boundary.
+    let kicked = false;
+    const kick = () => {
+      kicked = true;
+      try {
+        ed.scrollIntoView({ block: "nearest" });
+      } catch {}
+      try {
+        const r0 = ed.getBoundingClientRect();
+        const o = {
+          bubbles: true, cancelable: true, composed: true, view: window, button: 0,
+          clientX: r0.left + Math.min(Math.max(r0.width / 2, 8), 60),
+          clientY: r0.top + Math.max(r0.height / 2, 8),
+        };
+        ed.dispatchEvent(new PointerEvent("pointerdown", o));
+        ed.dispatchEvent(new MouseEvent("mousedown", o));
+        ed.dispatchEvent(new PointerEvent("pointerup", o));
+        ed.dispatchEvent(new MouseEvent("mouseup", o));
+        ed.dispatchEvent(new MouseEvent("click", o));
+      } catch {}
+      try { ed.focus(); } catch {}
+      try {
+        const s = window.getSelection();
+        const r = document.createRange();
+        r.selectNodeContents(ed);
+        r.collapse(false);
+        if (s) { s.removeAllRanges(); s.addRange(r); }
+      } catch {}
+    };
     const lines = String(text).split("\n");
     const t0 = Date.now();
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i]) document.execCommand("insertText", false, lines[i]);
+      // execCommand has no failure mode except a false return: a disabled
+      // composer, a detached node, or a lost selection all come back as false
+      // and are silent no-ops. On the first refusal take one recovery step and
+      // retry the line once; if it is refused again, bail out so the caller can
+      // wait for readiness and retype on a fresh node.
+      let ok = true;
+      if (lines[i]) {
+        ok = document.execCommand("insertText", false, lines[i]);
+        if (!ok && !kicked) {
+          kick();
+          selectAll(ed);
+          ok = document.execCommand("insertText", false, lines[i]);
+          diag("send.recover", { ok, line: i, ce: ed.getAttribute("contenteditable") });
+        }
+        if (!ok) {
+          diag("send.insertRejected", { line: i, lines: lines.length, ms: Date.now() - t0 });
+          return false;
+        }
+      }
       // insertLineBreak, never a synthetic Enter: Enter is what SENDS on ChatGPT.
       if (i < lines.length - 1) document.execCommand("insertLineBreak");
       if (i && i % INSERT_CHUNK_LINES === 0) await sleep(0);
     }
     if (lines.length > INSERT_CHUNK_LINES) diag("send.insertDone", { lines: lines.length, ms: Date.now() - t0 });
+    return true;
   }
 
   // Typing is the ONLY path for injected sends: it is slower, but it produces a
   // real inline message instead of a file attachment (see pasteEditorText).
   async function setEditorText(ed, text) {
-    await typeEditorText(ed, text);
+    return await typeEditorText(ed, text);
   }
 
   async function typeAndSend(text, images) {
-    const ed = getEditor();
+    let ed = getEditor();
     if (!ed) throw new Error("ChatGPT input box not found");
     text = truncateForSend(text);
     const relock = _locked;
@@ -911,13 +1128,87 @@ const ZSProvider = (() => {
       if (ed instanceof HTMLTextAreaElement) {
         if (editable) ed.removeAttribute("readonly");
         else ed.setAttribute("readonly", "");
-      } else {
-        ed.setAttribute("contenteditable", editable ? "true" : "false");
       }
+      // A ProseMirror composer is NEVER locked by writing contenteditable:
+      // doing that after a send left the editor in a state where Chrome had
+      // disabled every edit command while the attribute still read "true", so
+      // the NEXT send (the tool output) was a silent no-op. Live 2026-11-18
+      // 11:27: CONTEXT typed 2211/2211, then the tool output was rejected with
+      // send.typed len:0/want:2826 - because typeAndSend had re-locked the
+      // composer right after the first send. The user is blocked by the input
+      // cover plus installLockKeydown() instead.
     };
-    if (relock) setEditable(true); // injection needs the composer to be editable
+    // Only a <textarea> composer needs its readonly attribute cleared; PM
+    // composers must keep their own contenteditable (see setInputLock).
+    if (relock && ed instanceof HTMLTextAreaElement) setEditable(true);
+    // A WEDGED stop square (submit control stuck in its stop role with nothing
+    // generating) used to be discovered only AFTER the whole text was typed:
+    // typeAndSend waited 1500ms for a send role that never came, then unwedged,
+    // and the core burned a full retry - measured live at Start, that single
+    // wasted cycle added ~45s before the system prompt landed (send.cleared
+    // arrived at tries:2, 11:11:51, after the click at 11:10:05). Clear the wedge
+    // first so the click is ready the moment the text is in.
     try {
-      await setEditorText(ed, text);
+      if (stopButton() && !genActive()) await unwedgeStopPersistently();
+    } catch {}
+    try {
+      // React REPLACES the composer node twice per turn: when the reply starts
+      // streaming AND again the moment generation ends - which is exactly when
+      // the unwedgeStopPersistently() above returns. A handle captured before
+      // that remount points at a DETACHED node: ed.focus() moves no selection,
+      // execCommand("insertText") is a silent no-op, while editorText() (it
+      // re-queries getEditor()) reads the NEW empty composer. Measured live
+      // 2026-11-18 11:27: the CONTEXT send typed 2211/2211, then the 82-line
+      // tool output reported send.insertDone and len 0/2826 - and the core's
+      // "composer is empty" gate called that a successful send (send.cleared),
+      // so the reply never came and the bar sat on "Starting…" forever.
+      // So: (re)acquire the editor right before typing and retype on a FRESH
+      // node until the text is provably in the composer.
+      try {
+        const eds = [...document.querySelectorAll(S.editor)];
+        const ae = document.activeElement;
+        const sel = window.getSelection();
+        diag("send.edstate", {
+          n: eds.length,
+          connected: !!(ed && ed.isConnected),
+          rects: ed ? ed.getClientRects().length : -1,
+          ce: ed ? ed.getAttribute("contenteditable") : null,
+          activeIsEd: ae === ed,
+          activeTag: ae ? ae.tagName : null,
+          selInEd: !!(sel && sel.anchorNode && ed && ed.contains(sel.anchorNode)),
+          locked: _locked,
+        });
+      } catch (e) { diag("send.edstate", { err: String(e).slice(0, 80) }); }
+      let got = 0;
+      // Typing only counts when the composer actually took it: wait for it to
+      // accept input (contenteditable "true" + insertText enabled), retype on a
+      // FRESH node, and prove the text landed by reading it back.
+      for (let attempt = 0; attempt < 6 && !got; attempt++) {
+        if (attempt) await sleep(150 * attempt);
+        const ready = await waitEditorReady(attempt ? 1200 : 4000);
+        if (!ready) {
+          diag("send.notReady", {
+            attempt,
+            n: document.querySelectorAll(S.editor).length,
+            ce: (getEditor() || {}).getAttribute
+              ? getEditor().getAttribute("contenteditable")
+              : null,
+          });
+          continue;
+        }
+        ed = ready;
+        const accepted = await setEditorText(ed, text);
+        if (!accepted) diag("send.refused", { attempt });
+        got = editorText().length;
+      }
+      diag("send.typed", { len: got, want: text.length });
+      // Nothing in the composer means the send would carry an empty message.
+      // Report it instead of clicking: the core then retries the whole send
+      // (and must NOT read the empty composer as proof of a successful send).
+      if (!got) {
+        diag("send.typedFailed", { want: text.length });
+        return false;
+      }
       // Attach images LAST, right before the send click - see gemini.js/deepseek.js
       // typeAndSend for why (attaching first and then retyping the text can sever
       // the site's binding between the pending upload and the message sent).
@@ -929,9 +1220,9 @@ const ZSProvider = (() => {
         while (Date.now() - t0 < 25000) {
           const b = sendButton();
           if (b && !b.disabled) { try { b.click(); } catch {} }
-          if (await waitFor(() => editorText().trim() === "" || !!stopButton(), 1200)) return;
+          if (await waitFor(() => editorText().trim() === "" || !!stopButton(), 1200)) return true;
         }
-        return;
+        return true;
       }
       // Wait for the control to be in its SEND role (proof ProseMirror registered
       // the text, and that no generation is in flight).
@@ -944,12 +1235,13 @@ const ZSProvider = (() => {
       // Disabled send = a quota wall, not a wedge. Clicking it does nothing and
       // Enter is refused too, so return now and let scanError surface the reason
       // instead of burning the caller's retries in silence.
-      if (btn && btn.disabled) { diag("send.disabled", {}); return; }
-      if (btn) { btn.click(); return; }
+      if (btn && btn.disabled) { diag("send.disabled", {}); return false; }
+      if (btn) { btn.click(); return true; }
       // Fallback: Enter sends in ChatGPT's composer.
       const o = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
       ed.dispatchEvent(new KeyboardEvent("keydown", o));
       ed.dispatchEvent(new KeyboardEvent("keyup", o));
+      return true;
     } finally {
       if (relock) setEditable(false);
     }
@@ -1178,7 +1470,20 @@ const ZSProvider = (() => {
       // 1. Fenced code blocks carrying a command.
       mc.querySelectorAll(S.codeWrap).forEach((pre) => {
         if (pre.closest(".zs-chip")) return;
-        if (CMD_SHAPE.test(pre.textContent || "")) hide(pre, mc);
+        if (!CMD_SHAPE.test(pre.textContent || "")) return;
+        // 2026-11-18: hide the WHOLE fenced-code CARD, not just its <pre>.
+        // ChatGPT now renders every fenced block as a card whose own header row
+        // carries the language label ("</> JSON") plus copy/expand buttons. The
+        // <pre> is a descendant, so masking only it left an EMPTY grey "JSON"
+        // card sitting directly above our chip: the raw payload was gone but a
+        // large blank box made the turn look broken/frozen (reported live:
+        // "tampilannya masih kayak gini, loadingnya kayak macet"). Marking the
+        // card keeps the header hidden too; the .zs-cmd-mask rule in overlay.css
+        // re-hides a RE-CREATED card on the next React render (per-element
+        // classes are wiped there, the container class is not).
+        const card = pre.closest('[class*="CodeBlock-"]') || pre.closest('[class*="InlineCodePane-"]');
+        hide(pre, mc);
+        if (card && card !== pre && mc.contains(card)) hide(card, mc);
       });
       // 2. Bare top-level blocks with an inline command (no <pre> inside).
       const kids = [...mc.children];
@@ -1290,6 +1595,9 @@ const ZSProvider = (() => {
     // Selector for a transcript turn, so core can tell a scroll of the
     // conversation from a scroll of unrelated chrome (sidebar, composer).
     msgSel: S.msg,
+    // Submit-control selector, so a test can guard the 2026-11-18 markup (the
+    // send control lost its id/data-testid and became a bare aria-label).
+    submitSel: S.submitBtn,
     installSendHooks, findToolBlockSpot,
     promptExtra: PROMPT_EXTRA,
     // ChatGPT summarises its own context aggressively and loses the "an

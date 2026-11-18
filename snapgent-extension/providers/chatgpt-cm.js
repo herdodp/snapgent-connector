@@ -91,4 +91,84 @@
   const tick = () => { try { syncAll(); } catch {} };
   setInterval(tick, 1000);
   tick();
+
+  // ── Typing bridge (MAIN world) ────────────────────────────────────────────
+  // WHY: the isolated world prints the FIRST message and then loses the ability
+  // to type into the ProseMirror composer - execCommand("insertText") returns
+  // FALSE forever after while the attribute still reads contenteditable="true"
+  // (measured live 2026-11-18: CONTEXT landed 2211/2211, every later send
+  // reported len:0/want:2826). The SAME call from the page's own world succeeds
+  // on a quiet page, but during a run ChatGPT keeps the edit commands disabled
+  // in BOTH worlds, so execCommand is not a dependable transport at all.
+  //
+  // What IS dependable: ProseMirror's DOMObserver. Replacing the contentDOM with
+  // paragraphs makes PM parse the change into a real transaction - measured live
+  // 2026-11-18 19:0x: clearing the editor set state to "" and writing two <p>
+  // nodes produced state "LINE-ONE\nLINE-TWO". No execCommand, no editing host
+  // state, and nothing that ChatGPT can later rewrite as a pasted attachment.
+  //
+  // Protocol: "zs-type" (detail = JSON string) in, "zs-type-done" (detail = JSON
+  // string) out, dispatched asynchronously because the DOM parse lands on the
+  // next observer turn.
+  document.addEventListener("zs-type", (ev) => {
+    let req = null;
+    try { req = JSON.parse(ev.detail || "{}"); } catch { return; }
+    const id = req.id;
+    const text = String(req.text == null ? "" : req.text);
+    const done = (out) => {
+      try {
+        document.dispatchEvent(new CustomEvent("zs-type-done", { detail: JSON.stringify(out) }));
+      } catch {}
+    };
+    const ed = req.sel ? document.querySelector(req.sel) : null;
+    if (!ed) { done({ id, ok: false, len: 0, want: text.length, err: "no editor", path: "main" }); return; }
+    // PM keeps the authoritative doc on the view desc; innerText is the fallback.
+    const read = () => {
+      try {
+        const d = ed.pmViewDesc;
+        if (d && d.node) return d.node.textBetween(0, d.node.content.size, "\n");
+      } catch {}
+      return ed.innerText || "";
+    };
+
+    const finish = (path) => {
+      const got = read();
+      const ok = got.length > 0 || text.length === 0;
+      if (ok) { done({ id, ok: true, len: got.length, want: text.length, err: null, path }); return; }
+      // Last resort once the DOM route is proven empty: the old execCommand path.
+      let okc = true, errc = null;
+      try {
+        try { ed.focus(); } catch {}
+        const rng = document.createRange();
+        rng.selectNodeContents(ed);
+        const sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); sel.addRange(rng); try { document.execCommand("delete"); } catch {} rng.collapse(false); sel.removeAllRanges(); sel.addRange(rng); }
+        const lines = text.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i] && !document.execCommand("insertText", false, lines[i])) { okc = false; errc = "insertRejected@" + i; break; }
+          if (i < lines.length - 1 && !document.execCommand("insertLineBreak")) { okc = false; errc = "lineBreakRejected@" + i; break; }
+        }
+      } catch (e) { okc = false; errc = String(e && e.message ? e.message : e).slice(0, 120); }
+      const got2 = read();
+      done({ id, ok: okc && (got2.length > 0 || text.length === 0), len: got2.length, want: text.length, err: errc, path: path + "+exec" });
+    };
+
+    // Route 1: DOM parse by ProseMirror.
+    try {
+      const frag = document.createDocumentFragment();
+      for (const line of text.split("\n")) {
+        const p = document.createElement("p");
+        if (line) p.textContent = line;
+        else p.appendChild(document.createElement("br"));
+        frag.appendChild(p);
+      }
+      while (ed.firstChild) ed.removeChild(ed.firstChild);
+      ed.appendChild(frag);
+    } catch (e) {
+      done({ id, ok: false, len: read().length, want: text.length, err: "domWriteFailed: " + String(e && e.message ? e.message : e).slice(0, 80), path: "main" });
+      return;
+    }
+    // The observer parses on its own turn; 150ms is well past one frame.
+    setTimeout(() => finish("dom"), 150);
+  }, true);
 })();

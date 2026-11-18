@@ -174,6 +174,40 @@ html.zs-light #zs-unstable {
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.16);
 }
 
+/* Hide the status card: it collapses to a small floating round button (below),
+   so it never fights the composer for space. User request 2026-11-18: "tambahin
+   tombol hide jadi pindah bullet … nanti kalo di klik lagi floatingnya muncul". */
+#zs-bar-hide {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; flex: none;
+  border: none; border-radius: 7px;
+  background: transparent; color: inherit;
+  opacity: 0.6; cursor: pointer;
+  transition: opacity 0.14s ease, background 0.14s ease;
+}
+#zs-bar-hide:hover { opacity: 1; background: rgba(255, 255, 255, 0.10); }
+html.zs-light #zs-bar-hide:hover { background: rgba(0, 0, 0, 0.07); }
+#zs-bar-hide svg { width: 14px; height: 14px; }
+
+/* Collapsed state: the floating round blue button that re-opens the card.
+   Sits OUTSIDE the text input (positioned each frame above the composer's
+   right edge), so it never covers the editor or the send/voice controls. */
+#zs-dot {
+  position: fixed; z-index: 2147483601;
+  display: none; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: radial-gradient(circle at 32% 26%, #4f8dfd, #1d4ed8 72%);
+  color: #fff; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(29, 78, 216, 0.45);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+#zs-dot:hover { transform: translateY(-1px) scale(1.05); box-shadow: 0 8px 22px rgba(29, 78, 216, 0.55); }
+#zs-dot svg { width: 18px; height: 18px; }
+#zs-dot[hidden] { display: none !important; }
+#zs-bar[hidden] { display: none !important; }
+
 /* state line: takes the slack, single line, ellipsis if it can't fit */
 #zs-state {
   flex: 1; min-width: 0;
@@ -611,14 +645,17 @@ html.zs-light .zs-mcp-check:checked + .zs-mcp-toggle { background: #ca8a04; }
 .zs-hide-el { display: none !important; }
 
 /* ── input cover: fully hides the text the extension types + sends ──
-   background colour is set inline at runtime to match the input box,
-   so the masked input simply looks empty. */
+   The surface is TRANSPARENT on purpose (user report 2026-11-18: "background
+   item di bikin transparant aja"): the typed text is already invisible via
+   .zs-typing, so the cover only needs to sit on top and eat the clicks. A
+   painted slab (previously matched to the composer colour) read as a solid
+   block dropped over the input. */
 #zs-input-cover {
   position: fixed; z-index: 2147483500;
   display: flex; align-items: center; gap: 8px;
   box-sizing: border-box; padding-left: 16px;
   border-radius: 14px;
-  background: #ffffff;
+  background: transparent;
   color: rgba(140, 140, 150, 0.9);
   font-size: 12px; font-family: ui-sans-serif, "Segoe UI", sans-serif;
   white-space: nowrap; overflow: hidden;
@@ -629,6 +666,48 @@ html.zs-light .zs-mcp-check:checked + .zs-mcp-toggle { background: #ca8a04; }
      or captcha is up, so this never traps clicks the user actually needs. */
   pointer-events: auto;
   cursor: default;
+}
+
+/* Cover content: the static label plus a live "what is happening" line fed by
+   the 200ms meter (<command> · in ~140 tok · 2.1s). The metric line is dimmer
+   and tabular so the number does not jitter in width as it counts. */
+#zs-input-cover .zs-cover-main {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+#zs-input-cover .zs-cover-sub {
+  font-variant-numeric: tabular-nums;
+  color: rgba(150, 150, 162, 0.9);
+  border-left: 1px solid rgba(150, 150, 162, 0.45);
+  padding-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#zs-input-cover .zs-cover-sub:empty { display: none; }
+
+/* Live spinner beside the label: the cover used to read as a frozen label for
+   minutes ("Agent is working…" with nothing moving), so the agent looked
+   stalled while it was actually working. */
+#zs-input-cover .zs-cover-spin {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid rgba(150, 150, 162, 0.25);
+  border-top-color: #8b8b93;
+  animation: zs-cover-spin 0.7s linear infinite;
+}
+@keyframes zs-cover-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  #zs-input-cover .zs-cover-spin { animation-duration: 2.4s; }
+}
+
+/* While the agent works the composer keeps showing its own placeholder
+   ("Ask ChatGPT") through the transparent cover, so two lines competed for the
+   same band. Hide the site's placeholder for as long as the cover is intended
+   to be on; it comes back the moment inputCover(false) runs when the loop ends.
+   Keyed on <html> (not the placeholder node) so an editor rebuild cannot bring
+   it back mid-run. */
+html.zs-cover-on [data-placeholder],
+html.zs-cover-on p.placeholder {
+  visibility: hidden !important;
 }
 
 /* belt-and-suspenders: the typed text itself is rendered invisible
@@ -693,6 +772,18 @@ message-content.zs-cmd-mask code-block { display: none !important; }
    container keeps its identity, so the provider marks IT with .zs-cmd-mask and
    this rule keeps every recreated <pre> hidden with no flash. Inert elsewhere. */
 .markdown.zs-cmd-mask pre { display: none !important; }
+/* ChatGPT 2026-11: a fenced block is a CARD (CodeBlock-*) whose header row shows
+   the language label ("</> JSON") and copy/expand buttons; the <pre> is inside
+   it. Hiding only the <pre> left an empty grey "JSON" card sitting above our
+   chip - the turn looked blank/frozen even though the payload was masked. Mask
+   the card too, on BOTH assistant containers (the .markdown one and the newer
+   [data-markdown-text-style="assistant-message"]), so a re-created card stays
+   hidden with no flash. Inert on other providers. */
+.markdown.zs-cmd-mask div[class*="CodeBlock-"],
+.markdown.zs-cmd-mask div[class*="InlineCodePane-"],
+[data-markdown-text-style="assistant-message"].zs-cmd-mask div[class*="CodeBlock-"],
+[data-markdown-text-style="assistant-message"].zs-cmd-mask div[class*="InlineCodePane-"],
+[data-markdown-text-style="assistant-message"].zs-cmd-mask pre { display: none !important; }
 /* ChatGPT, UNFENCED command block: when the model writes ###LUA###…###END_LUA###
    as plain prose instead of a fenced block, the renderer splits it into dozens of
    sibling <p>/<pre> nodes (seen live 2026-08: 68 of them for a 208-line payload).
@@ -928,11 +1019,15 @@ html.zs-light.zs-site-chatgpt [class*="group/user-message"] [class*="bg-token"]:
 
 /* expandable body: real args / output */
 .zs-chip-body {
-  max-height: 0; overflow: hidden;
-  transition: max-height 0.22s ease;
+  display: none;
   border-top: 1px solid transparent;
 }
 .zs-chip.open .zs-chip-body {
+  /* display, not a max-height transition: Chrome throttles transitions in a
+     background/occluded tab, so the old animated reveal left the body at
+     max-height:0 forever - the card looked like it ignored the click
+     (report 2026-11-18: "pas di klik uncollapse ga ke buka"). */
+  display: block;
   max-height: 460px; overflow: auto;
   border-top-color: color-mix(in srgb, var(--cat) 20%, transparent);
 }
@@ -969,6 +1064,113 @@ html.zs-light.zs-site-chatgpt [class*="group/user-message"] [class*="bg-token"]:
 }
 /* scroll by exactly one tile → last frame == first frame → seamless loop */
 @keyframes zs-shimmer { from { background-position: 0 0; } to { background-position: 210px 0; } }
+
+/* Claude-style tool card (ChatGPT): a full-width row, not a small pill. The
+   reference is Claude's `run_command   command: bash · 39.0s` card - ring
+   spinner on the left, bold tool name, monospace argument summary, chevron on
+   the far right. Width is pinned to the reading column (768px) instead of
+   hugging the label so long argument summaries are actually readable. */
+html.zs-site-chatgpt .zs-chip {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 12px;
+}
+html.zs-site-chatgpt .zs-chip-head { gap: 10px; padding: 9px 14px; }
+html.zs-site-chatgpt .zs-chip-tx { font-size: 13.5px; font-weight: 650; }
+html.zs-site-chatgpt .zs-chip-dt { font-size: 12px; opacity: 0.55; margin-left: 4px; }
+/* ring spinner in the accent, same shape as Claude's: a thin circle with one
+   lit quarter turning. Bigger than the generic 12px pill spinner so it reads
+   at a glance on the full-width card. */
+html.zs-site-chatgpt .zs-chip.run .zs-spin {
+  width: 13px; height: 13px;
+  border-color: rgba(234, 179, 8, 0.22);
+  border-top-color: #eab308;
+}
+html.zs-light.zs-site-chatgpt .zs-chip.run .zs-spin {
+  border-color: rgba(161, 98, 7, 0.22);
+  border-top-color: #a16207;
+}
+
+/* Injected RESULT → sit in the user's blue bubble.
+   ChatGPT delivers the tool feedback AS a user message, so hiding it and
+   painting a standalone dark card made the result read as the assistant's own
+   text floating in the middle of the column. The user asked for it to follow
+   the blue user bubble ("resultnya kalo bisa ikut di bubble biru user",
+   2026-11-18): right-align it, cap it to the user bubble width and paint it
+   with the bubble surface, so a request and its result read as one exchange. */
+html.zs-site-chatgpt .zs-chip.result {
+  width: fit-content;
+  max-width: min(100%, var(--user-chat-width, 72%));
+  margin-left: auto;
+  margin-right: 0;
+  border-radius: 18px;
+  background: #e8f3fe;
+  border-color: rgba(15, 60, 110, 0.10);
+  color: #10233a;
+  box-shadow: none;
+}
+html.zs-site-chatgpt .zs-chip.result:hover { background: #dfeefc; border-color: rgba(15, 60, 110, 0.16); }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-tx { color: #0b3b6f; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-dt { color: #33506e; opacity: 0.75; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-ic { color: #1c5fa8; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-cv { color: #33506e; }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-body { background: rgba(255, 255, 255, 0.55); }
+html.zs-site-chatgpt .zs-chip.result .zs-chip-body pre { color: #10233a; }
+
+/* Dark mode. ChatGPT flags it on <html data-theme="dark"> (NOT a .dark class -
+   measured live 2026-11-18: htmlCls was just "chatgpt-theme zs-site-chatgpt"
+   while the page was black), and its own user bubble is #173e76 on #000. The
+   result rides THAT surface: a #2f2f2f card on black washed out completely
+   ("kalo darkmode kadang ga keliatan"). */
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result,
+html.zs-site-chatgpt.dark .zs-chip.result {
+  background: #173e76;
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #f6fafe;
+  box-shadow: none;
+}
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result:hover,
+html.zs-site-chatgpt.dark .zs-chip.result:hover { background: #1d4d90; border-color: rgba(255, 255, 255, 0.26); }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result .zs-chip-tx,
+html.zs-site-chatgpt.dark .zs-chip.result .zs-chip-tx { color: #eaf2ff; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result .zs-chip-dt,
+html.zs-site-chatgpt.dark .zs-chip.result .zs-chip-dt { color: #cfe0ff; opacity: 0.85; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result .zs-chip-ic,
+html.zs-site-chatgpt.dark .zs-chip.result .zs-chip-ic { color: #cfe0ff; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result .zs-chip-cv,
+html.zs-site-chatgpt.dark .zs-chip.result .zs-chip-cv { color: #cfe0ff; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result .zs-chip-body,
+html.zs-site-chatgpt.dark .zs-chip.result .zs-chip-body { background: rgba(0, 0, 0, 0.22); }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip.result .zs-chip-body pre,
+html.zs-site-chatgpt.dark .zs-chip.result .zs-chip-body pre { color: #f6fafe; }
+
+/* motion: the card slides in once when it is first created, and the state icon
+   pops when the run settles (done/err). The chip is rebuilt on nearly every
+   sweep, so the entrance class is applied only on the FIRST build - a rebuild
+   would otherwise restart the slide every 250ms and the card would look like it
+   is vibrating. */
+@keyframes zs-chip-in {
+  from { opacity: 0; transform: translateY(5px) scale(0.995); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.zs-chip.zs-chip-enter { animation: zs-chip-in 0.24s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.zs-chip.done .zs-chip-ic svg,
+.zs-chip.err .zs-chip-ic svg { animation: zs-icon-pop 0.32s cubic-bezier(0.2, 0.7, 0.3, 1); }
+@keyframes zs-icon-pop {
+  /* Scale only - NEVER opacity: a throttled or restarted animation freezes on
+     its 0% frame, and starting at opacity:0 left finished cards with an
+     invisible tick (measured 2026-11-18). */
+  0%   { transform: scale(0.72); }
+  60%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+/* honour reduced motion: keep the state changes, drop the movement */
+@media (prefers-reduced-motion: reduce) {
+  .zs-chip.zs-chip-enter,
+  .zs-chip.done .zs-chip-ic svg,
+  .zs-chip.err .zs-chip-ic svg { animation: none; }
+  .zs-chip.run { animation: none; }
+}
 
 /* ── toast ─────────────────────────────────────────────────── */
 .zs-toast {
@@ -1226,3 +1428,63 @@ html.zs-light #zs-set-save:hover,
 html.zs-light #zs-mcp-add:hover { background: rgba(0, 0, 0, 0.09); }
 html.zs-light #zs-set-status,
 html.zs-light #zs-mcp-status { color: #6b7280; }
+
+/* ── ChatGPT tool card: readable in BOTH themes (2026-11-18) ───────────────
+   The generic chip theme is amber-on-black, tuned for the dark bars other
+   sites have. On ChatGPT it was measured as #fde68a on rgba(14,12,6,.92) with
+   the argument summary inheriting #ece6cf at 55% opacity - a smudge on the
+   black canvas - while the light column got the same amber ink on white.
+   Give the card a neutral surface and let STATE colour the icon instead:
+   done = green tick, err = red, run = the accent ring spinner. Appended last
+   on purpose (plus :not(.result)) so it outranks the per-site light/dark
+   blocks above without touching them. */
+html.zs-site-chatgpt .zs-chip:not(.result) {
+  background-color: #f7f7f8;
+  border-color: rgba(0, 0, 0, 0.09);
+  color: #26272b;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+html.zs-site-chatgpt .zs-chip:not(.result):hover {
+  background-color: #f1f1f3;
+  border-color: rgba(0, 0, 0, 0.16);
+}
+html.zs-site-chatgpt .zs-chip:not(.result) .zs-chip-tx { color: #1f2023; }
+html.zs-site-chatgpt .zs-chip:not(.result) .zs-chip-dt { color: #5f6368; opacity: 1; }
+html.zs-site-chatgpt .zs-chip:not(.result) .zs-chip-ic { color: #6b7280; }
+html.zs-site-chatgpt .zs-chip:not(.result) .zs-chip-cv { color: #6b7280; }
+html.zs-site-chatgpt .zs-chip:not(.result) .zs-chip-body { background-color: rgba(0, 0, 0, 0.035); }
+html.zs-site-chatgpt .zs-chip:not(.result) .zs-chip-body pre { color: #26272b; }
+html.zs-site-chatgpt .zs-chip:not(.result).done .zs-chip-ic { color: #16a34a; }
+html.zs-site-chatgpt .zs-chip:not(.result).err .zs-chip-ic { color: #dc2626; }
+html.zs-site-chatgpt .zs-chip:not(.result).err { border-color: rgba(220, 38, 38, 0.35); }
+
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result),
+html.zs-site-chatgpt.dark .zs-chip:not(.result) {
+  background-color: #212121;
+  border-color: rgba(255, 255, 255, 0.10);
+  color: #ececec;
+  box-shadow: none;
+}
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result):hover,
+html.zs-site-chatgpt.dark .zs-chip:not(.result):hover {
+  background-color: #2a2a2a;
+  border-color: rgba(255, 255, 255, 0.20);
+}
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result) .zs-chip-tx,
+html.zs-site-chatgpt.dark .zs-chip:not(.result) .zs-chip-tx { color: #ececec; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result) .zs-chip-dt,
+html.zs-site-chatgpt.dark .zs-chip:not(.result) .zs-chip-dt { color: #b4b4b4; opacity: 1; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result) .zs-chip-ic,
+html.zs-site-chatgpt.dark .zs-chip:not(.result) .zs-chip-ic { color: #9aa0a6; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result) .zs-chip-cv,
+html.zs-site-chatgpt.dark .zs-chip:not(.result) .zs-chip-cv { color: #9aa0a6; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result) .zs-chip-body,
+html.zs-site-chatgpt.dark .zs-chip:not(.result) .zs-chip-body { background-color: rgba(0, 0, 0, 0.25); }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result) .zs-chip-body pre,
+html.zs-site-chatgpt.dark .zs-chip:not(.result) .zs-chip-body pre { color: #ececec; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result).done .zs-chip-ic,
+html.zs-site-chatgpt.dark .zs-chip:not(.result).done .zs-chip-ic { color: #5cbf9a; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result).err .zs-chip-ic,
+html.zs-site-chatgpt.dark .zs-chip:not(.result).err .zs-chip-ic { color: #ef6b6b; }
+html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result).err,
+html.zs-site-chatgpt.dark .zs-chip:not(.result).err { border-color: rgba(239, 68, 68, 0.45); }
