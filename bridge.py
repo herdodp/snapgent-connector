@@ -748,12 +748,27 @@ class Bridge:
             timeout_seconds = 120.0
         # Replay guard (see DUPLICATE_CALL_TTL): answer an immediately repeated
         # identical call from the result just produced instead of running it again.
+        # Scoped PER CLIENT: two extension instances must not be answered from each
+        # other's results, and a caller that really wants the work done again sends
+        # "force": true to skip the cache.
         try:
             sig = json.dumps({"n": name, "a": arguments}, sort_keys=True, ensure_ascii=False)
         except (TypeError, ValueError):
             sig = None
-        last = getattr(self, "_last_call", None)
-        if sig and last and last.get("sig") == sig and time.time() - last.get("at", 0) <= DUPLICATE_CALL_TTL:
+        if not hasattr(self, "_last_calls"):
+            self._last_calls: dict[int, dict] = {}
+        client_key = id(websocket)
+        now = time.time()
+        for stale_key in [k for k, v in self._last_calls.items() if now - v.get("at", 0) > DUPLICATE_CALL_TTL]:
+            self._last_calls.pop(stale_key, None)
+        last = self._last_calls.get(client_key)
+        if (
+            request.get("force") is not True
+            and sig
+            and last
+            and last.get("sig") == sig
+            and now - last.get("at", 0) <= DUPLICATE_CALL_TTL
+        ):
             cached = dict(last.get("response") or {})
             if cached:
                 cached["id"] = request_id
@@ -763,7 +778,7 @@ class Bridge:
                 return
         # Any different call breaks the chain, so an ordinary repeat after real work
         # still runs for real.
-        self._last_call = None
+        self._last_calls.pop(client_key, None)
         server, tool_name = self._resolve_tool(name)
         # Isolation: the extension states which server is selected. The bridge refuses to
         # run a tool that belongs to any other server (requests without the field keep
@@ -829,7 +844,7 @@ class Bridge:
                 response = {"type": "tool_result", "id": request_id, "ok": True, "text": text, "images": images}
                 await self._send_client(websocket, response)
                 if sig:
-                    self._last_call = {
+                    self._last_calls[client_key] = {
                         "sig": sig,
                         "at": time.time(),
                         "response": {"type": "tool_result", "ok": True, "text": text, "images": images},

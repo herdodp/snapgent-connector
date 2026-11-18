@@ -264,6 +264,29 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(fourth["text"], "same call")
                             self.assertFalse(fourth.get("duplicate"))
                             self.assertEqual(len(calls), 3)
+
+                            # This one repeats the call just run, so it is answered
+                            # from the cache, and the next one asks for real work.
+                            await client.send(json.dumps({"id": 5, **payload}))
+                            fifth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertTrue(fifth.get("duplicate"))
+                            self.assertEqual(len(calls), 3)
+
+                            await client.send(json.dumps({"id": 6, **payload, "force": True}))
+                            sixth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertEqual(sixth["text"], "same call")
+                            self.assertFalse(sixth.get("duplicate"))
+                            self.assertEqual(len(calls), 4)
+
+                        # A second client must not be answered from the first one's
+                        # cached result: the replay guard is per connection.
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as other:
+                            await other.recv()  # initial "connected" message
+                            await other.send(json.dumps({"id": 7, **payload}))
+                            seventh = json.loads(await asyncio.wait_for(other.recv(), 5))
+                            self.assertEqual(seventh["text"], "same call")
+                            self.assertFalse(seventh.get("duplicate"))
+                            self.assertEqual(len(calls), 5)
                 finally:
                     await manager.stop_servers()
 

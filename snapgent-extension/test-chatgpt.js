@@ -633,6 +633,7 @@ ok("mobile textarea text can be read", P.editorText() === "");
 {
   const prov = fs.readFileSync(__dirname + "/providers/chatgpt.js", "utf8");
   const cm = fs.readFileSync(__dirname + "/providers/chatgpt-cm.js", "utf8");
+  const main = fs.readFileSync(__dirname + "/core/main.js", "utf8");
   ok("there is a composer readiness gate",
     /function editorReady\(ed\)/.test(prov) && /function waitEditorReady\(timeout\)/.test(prov));
   ok("readiness requires contenteditable true",
@@ -660,7 +661,12 @@ ok("mobile textarea text can be read", P.editorText() === "");
     /if \(editorReady\(ed\)\) \{/.test(prov));
   ok("typing goes through the MAIN-world bridge before the local ladder",
     /const viaMain = await typeViaMain\(ed, text\);/.test(prov) &&
-    /if \(viaMain\.ok && viaMain\.len > 0\) return true;/.test(prov));
+    /if \(viaMain\.ok\) return true;/.test(prov));
+  ok("a partial MAIN-world write is not accepted as typed",
+    /function composerHolds\(ed, text\)/.test(prov) &&
+    /const have = String\(got\)/.test(prov) &&
+    /if \(!composerHolds\(ed, text\)\) \{/.test(prov) &&
+    /send\.typedPartial/.test(prov));
   ok("the MAIN-world bridge exists and is reachable from this provider",
     /document\.addEventListener\("zs-type",/.test(cm) &&
     /new CustomEvent\("zs-type-done"/.test(cm) &&
@@ -668,7 +674,20 @@ ok("mobile textarea text can be read", P.editorText() === "");
   ok("the bridge writes the doc as DOM so ProseMirror parses it (no execCommand)",
     /for \(const line of text\.split\("\\n"\)\)/.test(cm) &&
     /while \(ed\.firstChild\) ed\.removeChild\(ed\.firstChild\);/.test(cm) &&
-    /setTimeout\(\(\) => finish\("dom"\), 150\);/.test(cm));
+    /const bump = \(\) => \{/.test(cm));
+  ok("the bridge verifies the read-back against the requested text",
+    /const norm = \(s\) =>/.test(cm) &&
+    /const wantText = norm\(text\);/.test(cm) &&
+    /const matches = \(\) => norm\(read\(\)\) === wantText;/.test(cm) &&
+    /err: errc \|\| \(landed \? null : "mismatch"\)/.test(cm));
+  ok("the bridge polls the parse instead of reading once at a fixed delay",
+    /const deadline = Date\.now\(\) \+ 500;/.test(cm) &&
+    /if \(Date\.now\(\) >= deadline\) return finish\("dom"\);/.test(cm));
+  ok("the remote-command watcher is gated on its opt-in",
+    /const check = async \(\) => \{\n      \/\/ Nothing to do while the opt-in is off/.test(main) &&
+    /if \(!remoteCommands\) return;/.test(main) &&
+    /remoteCommandListeners\.push\(setPolling\);/.test(main) &&
+    /setPolling\(remoteCommands\);/.test(main));
   ok("the bridge still falls back to execCommand when the DOM parse lands empty",
     /path \+ "\+exec"/.test(cm) &&
     /insertRejected@/ .test(cm));

@@ -150,17 +150,28 @@
   // for the reply I just sent" path and used to be read as plain text.
   const REMOTE_COMMANDS_KEY = "zsRemoteCommands";
   let remoteCommands = false;
+  // Watchers that only need to work while the opt-in is on register here, so
+  // turning the toggle off also stops their timers instead of leaving a poll
+  // running for the life of the page.
+  const remoteCommandListeners = [];
+  function applyRemoteCommands(on) {
+    remoteCommands = on === true;
+    for (const fn of remoteCommandListeners) {
+      try { fn(remoteCommands); } catch (error) { console.warn("[snapgentV3] remote-command listener failed:", error); }
+    }
+    return remoteCommands;
+  }
   try {
     chrome.storage.local.get(REMOTE_COMMANDS_KEY, (result) => {
-      if (result && result[REMOTE_COMMANDS_KEY] === true) remoteCommands = true;
+      if (result && result[REMOTE_COMMANDS_KEY] === true) applyRemoteCommands(true);
     });
   } catch (error) {
     console.warn("[snapgentV3] Could not load remote-command setting:", error);
   }
   function setRemoteCommands(on) {
-    remoteCommands = on === true;
-    try { chrome.storage.local.set({ [REMOTE_COMMANDS_KEY]: remoteCommands }); } catch {}
-    return remoteCommands;
+    const value = applyRemoteCommands(on);
+    try { chrome.storage.local.set({ [REMOTE_COMMANDS_KEY]: value }); } catch {}
+    return value;
   }
   let selectedTargetId = "none";
   try {
@@ -5839,6 +5850,9 @@
     if (typeof MutationObserver !== "function") return;
     let timer = null;
     const check = async () => {
+      // Nothing to do while the opt-in is off: reading the last assistant turn and
+      // parsing its commands is the heaviest work in this watcher.
+      if (!remoteCommands) return;
       const item = P.lastAssistant();
       const key = item ? turnKey(item) : null;
       let txt = "";
@@ -5863,6 +5877,7 @@
       diag("remote.resume", r);
     };
     const schedule = () => {
+      if (!remoteCommands) return;
       if (timer) return;
       timer = setTimeout(() => { timer = null; check().catch(() => {}); }, 800);
     };
@@ -5870,7 +5885,20 @@
       if (document.body) new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
       else document.addEventListener("DOMContentLoaded", () => schedule(), { once: true });
     } catch {}
-    setInterval(() => { check().catch(() => {}); }, 5000);
+    // A hidden tab throttles timers to about one tick a minute, so the observer
+    // alone is not enough there - poll while the feature is on, and stop polling
+    // when the user switches it off.
+    let poll = null;
+    const setPolling = (on) => {
+      if (on && !poll) {
+        poll = setInterval(() => { check().catch(() => {}); }, 5000);
+      } else if (!on && poll) {
+        clearInterval(poll);
+        poll = null;
+      }
+    };
+    remoteCommandListeners.push(setPolling);
+    setPolling(remoteCommands);
   })();
 
   // Retry loop for the reload case: cheap, and it only ever acts on a pending

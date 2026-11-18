@@ -946,6 +946,25 @@ const ZSProvider = (() => {
   // throwing - so the old code reported the send as typed while the composer
   // stayed empty (send.insertDone + send.typed len:0/want:2826, then a fake
   // send.cleared and the bar stuck on "Starting…").
+  // Does the composer hold the message we asked it to hold? A truncated write
+  // used to pass because the caller only checked "not empty", and the send then
+  // carried half a message. Whitespace-only differences are accepted (ProseMirror
+  // normalises newlines); a different body is a failure the caller must retry.
+  function composerHolds(ed, text) {
+    const want = String(text == null ? "" : text).replace(/\r\n?/g, "\n").trim();
+    if (!want) return true;
+    let got = "";
+    try {
+      const d = ed && ed.pmViewDesc;
+      got = d && d.node
+        ? d.node.textBetween(0, d.node.content.size, "\n")
+        : (ed.textContent || ed.innerText || "");
+    } catch { got = ""; }
+    const have = String(got).replace(/\r\n?/g, "\n").trim();
+    if (have === want) return true;
+    return have.replace(/\s+/g, " ").trim() === want.replace(/\s+/g, " ").trim();
+  }
+
   function editorReady(ed) {
     if (!ed || !ed.isConnected) return false;
     if (ed instanceof HTMLTextAreaElement) return !ed.readOnly && !ed.disabled;
@@ -1045,7 +1064,10 @@ const ZSProvider = (() => {
         err: viaMain.err || null,
         path: viaMain.path || null,
       });
-      if (viaMain.ok && viaMain.len > 0) return true;
+      // The bridge verifies the read-back against the requested text, so a
+      // partial parse (len < want) is a failure here and the ladder below
+      // re-types the whole message instead of sending a truncated one.
+      if (viaMain.ok) return true;
     }
     selectAll(ed);
     // Recovery ladder. A composer that reports contenteditable="true" can still
@@ -1207,6 +1229,10 @@ const ZSProvider = (() => {
       // (and must NOT read the empty composer as proof of a successful send).
       if (!got) {
         diag("send.typedFailed", { want: text.length });
+        return false;
+      }
+      if (!composerHolds(ed, text)) {
+        diag("send.typedPartial", { len: got, want: text.length });
         return false;
       }
       // Attach images LAST, right before the send click - see gemini.js/deepseek.js
