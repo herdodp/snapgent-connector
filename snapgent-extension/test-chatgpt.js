@@ -709,6 +709,10 @@ ok("mobile textarea text can be read", P.editorText() === "");
     /if \(!remoteCommands\) return;/.test(main) &&
     /remoteCommandListeners\.push\(setPolling\);/.test(main) &&
     /setPolling\(remoteCommands\);/.test(main));
+  ok("every tool call states which turn it belongs to, so the bridge can dedupe it",
+    (main.match(/turn: turnKeyForCache/g) || []).length === 2 &&
+    /const turnKeyForCache = typeof turn === "string" && turn \? turn : undefined;/.test(main) &&
+    /runTool\(call, `\$\{P\.conversationKey\(\)\}\|\$\{turnKey\(res\.item\)\}`\)/.test(main));
   ok("the bridge still falls back to execCommand when the DOM parse lands empty",
     /path \+ "\+exec"/.test(cm) &&
     /insertRejected@/ .test(cm));

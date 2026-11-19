@@ -1080,9 +1080,13 @@
     return A.toolList;
   }
 
-  async function runTool(call) {
+  async function runTool(call, turn) {
     const name = call.tool;
     const args = call.arguments || {};
+    // The bridge dedupes a re-rendered turn against the result it already produced,
+    // so it needs to know WHICH turn this call belongs to: the same call in a later
+    // turn is a legitimate repeat and must run for real.
+    const turnKeyForCache = typeof turn === "string" && turn ? turn : undefined;
     if (!name) return ZS.FEEDBACK.parseError("malformed");
     if (selectedTargetId === "none") {
       return `ERROR: no MCP target is selected, so '${name}' was not run. Do NOT retry. Ask the user to select an MCP target in the snapgentV3 bar first.`;
@@ -1327,7 +1331,7 @@
       }).catch(() => {});
     }, 1000);
     bg({ type: "stream", frame: { phase: "tool_start", tool: name, id: callId, tok: A.genTok || 0 } }).catch(() => {});
-    let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }), hardCap, stopWatch]);
+    let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId, turn: turnKeyForCache }), hardCap, stopWatch]);
     clearInterval(loadingTick);
     clearInterval(stopTimer);
     bg({
@@ -1431,7 +1435,7 @@
       diag("bridge.disconnectedRetry", { name });
       await new Promise((res) => setTimeout(res, 1200));
       const retry = await Promise.race([
-        bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }),
+        bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId, turn: turnKeyForCache }),
         hardCap,
       ]);
       // The retry itself has to be judged by the same rule. A second attempt
@@ -1788,7 +1792,7 @@
           rememberExecuted(res.item);
           executedCalls.remember(turnKey(res.item), call);
           diag("tool.start", { name: call.tool });
-          const feedback = await runTool(call);
+          const feedback = await runTool(call, `${P.conversationKey()}|${turnKey(res.item)}`);
           A.toolRunning = false;
           // Measured once, here, so the chip and the bridge frames agree. The
           // result size is the honest "how many tokens did it get" proxy (no
@@ -2586,7 +2590,10 @@
       if (startRes.kind === "tool" && startRes.calls && startRes.calls.length === 1 &&
           (firstName === "list_commands" || firstName === "list_tools")) {
         decorate.toolBox(startRes.item, "Loading commands", "run", "", true);
-        const toolFeedback = await runTool(startRes.calls[0]);
+        const toolFeedback = await runTool(
+          startRes.calls[0],
+          startRes.item ? `${P.conversationKey()}|${turnKey(startRes.item)}` : undefined
+        );
         // Roblox down short-circuits list_commands into a plain "offline" note
         // (main.js, list_commands handler) instead of the real catalogue - detect
         // that and show it as such, rather than the STALE cached tool count below
