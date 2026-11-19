@@ -625,13 +625,7 @@ const ZSProvider = (() => {
       submitted = await waitFor(isSubmitted, 1500);
     }
 
-    // Fallback path 1: if button click did not trigger submit, try form requestSubmit
-    if (!submitted && b && b.form && typeof b.form.requestSubmit === "function") {
-      try { b.form.requestSubmit(b); } catch {}
-      submitted = await waitFor(isSubmitted, 1500);
-    }
-
-    // Fallback path 2: if still not submitted, dispatch Enter on the editor
+    // Fallback path: if button click did not trigger submit, dispatch Enter on the editor
     if (!submitted) {
       const edTarget = visEd || targetEditor;
       if (edTarget) {
@@ -706,8 +700,27 @@ const ZSProvider = (() => {
   }
 
   // ── Composer readiness ──────────────────────────────────────────────────────
-  function enforceComposer() { if (_locked) applyLock(); return { ready: true }; }
+  function dismissDiscardPrompt() {
+    for (const d of document.querySelectorAll('[role="dialog"]')) {
+      if (/discard prompt/i.test(d.textContent || "")) {
+        const discardBtn = [...d.querySelectorAll("button")].find((b) => /discard/i.test(b.textContent || ""));
+        if (discardBtn) {
+          try { discardBtn.click(); } catch {}
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function enforceComposer() {
+    dismissDiscardPrompt();
+    if (_locked) applyLock();
+    return { ready: true };
+  }
+
   async function ensureComposerReady(reason) {
+    dismissDiscardPrompt();
     // Force Réflexion before the session runs (Instantané is much weaker). Fire and
     // forget - readiness never blocks on it (the mode flip is best-effort).
     ensureThinkMode();
@@ -717,8 +730,10 @@ const ZSProvider = (() => {
   const modeWarning = () => "";
   const captchaPresent = () => false;
   function overlayBlocking() {
+    dismissDiscardPrompt();
     for (const d of document.querySelectorAll('[role="dialog"]')) {
       if (d.closest("#zs-root")) continue;
+      if (/discard prompt/i.test(d.textContent || "")) continue;
       const r = d.getBoundingClientRect();
       if (r.width > 40 && r.height > 40 && r.top < innerHeight && r.bottom > 0) return true;
     }
