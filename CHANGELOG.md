@@ -2,6 +2,18 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.12] - 2026-11-20
+
+### Changed
+- **FigCraft and EffectCraft launch are now manual.** Starting the Snapgent bridge no longer
+  opens either app. Dedicated helper scripts start each app with its MCP control channel;
+  FigCraft reuses a detected control port or selects an available loopback port.
+- **Existing app sessions are left untouched.** If an app is already open without its control
+  channel, Snapgent does not close or restart it. Start the app with its helper, then restart
+  the bridge to connect.
+- Extension and Snapgent App versions bumped to **3.9.12**. The bridge is unchanged
+  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+
 ## [V3.9.11] - 2026-11-17
 
 ### Added

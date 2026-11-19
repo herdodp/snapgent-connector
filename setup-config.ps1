@@ -152,9 +152,70 @@ if ($effectcraftCli) {
 elseif ($configuredEffectCraft) {
     Write-Host "Configured EffectCraft MCP executable was not found: $($configuredEffectCraft.command)"
     Write-Host "Update mcpServers.effectcraft.command in config.json to match your installation."
+    if ([System.IO.Path]::GetFileName([string]$configuredEffectCraft.command) -ieq "effectcraft-cli.exe") {
+        $configuration.mcpServers.PSObject.Properties.Remove("effectcraft")
+        Write-Host "Removed the stale auto-detected EffectCraft MCP entry."
+    }
 }
 else {
     Write-Host "EffectCraft not found; VS Code and Roblox MCP remain available."
+}
+
+$configuredFigCraft = $configuration.mcpServers.figcraft
+$figcraftCandidates = @()
+if ($configuredFigCraft -and -not [string]::IsNullOrWhiteSpace($configuredFigCraft.command)) {
+    $figcraftCandidates += $configuredFigCraft.command
+}
+
+$figcraftOnPath = Get-Command figcraft-cli.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($figcraftOnPath) {
+    $figcraftCandidates += $figcraftOnPath.Source
+}
+
+$figcraftCandidates += @(
+    (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\FigCraft\figcraft-cli.exe"),
+    (Join-Path $env:ProgramFiles "ArtCraft\FigCraft\figcraft-cli.exe"),
+    (Join-Path $programFilesX86 "ArtCraft\FigCraft\figcraft-cli.exe"),
+    (Join-Path $env:ProgramFiles "FigCraft\figcraft-cli.exe"),
+    (Join-Path $programFilesX86 "FigCraft\figcraft-cli.exe")
+)
+
+foreach ($key in $uninstallKeys) {
+    $installations = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like "*FigCraft*" -and $_.InstallLocation }
+    foreach ($installation in $installations) {
+        $figcraftCandidates += Join-Path $installation.InstallLocation "figcraft-cli.exe"
+        $figcraftCandidates += Join-Path $installation.InstallLocation "FigCraft\figcraft-cli.exe"
+    }
+}
+
+$figcraftCli = $figcraftCandidates |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+    Select-Object -First 1
+
+if ($figcraftCli) {
+    $keepFigCraft = $configuredFigCraft -and ($configuredFigCraft.command -eq $figcraftCli)
+    if (-not $keepFigCraft) {
+        $figcraftServer = [pscustomobject]@{
+            command = $figcraftCli
+            args = @("mcp")
+            env = [pscustomobject]@{}
+        }
+        if ($configuration.mcpServers.PSObject.Properties["figcraft"]) {
+            $configuration.mcpServers.figcraft = $figcraftServer
+        }
+        else {
+            $configuration.mcpServers | Add-Member -MemberType NoteProperty -Name figcraft -Value $figcraftServer
+        }
+    }
+    Write-Host "FigCraft MCP detected: $figcraftCli"
+}
+elseif ($configuredFigCraft) {
+    Write-Host "Configured FigCraft MCP executable was not found: $($configuredFigCraft.command)"
+    Write-Host "Update mcpServers.figcraft.command in config.json to match your installation."
+}
+else {
+    Write-Host "FigCraft not found; install it from https://github.com/storytold/figcraft/releases to enable its MCP."
 }
 
 function Test-ReaNodeVersion {

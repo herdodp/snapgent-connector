@@ -17,7 +17,7 @@ if not exist "%~dp0bridge.exe" (
 )
 
 echo.
-echo   Configuring VS Code MCP and detecting Roblox Studio...
+echo   Configuring MCP servers...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-config.ps1"
 if errorlevel 1 (
     echo.
@@ -28,10 +28,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if exist "%~dp0start-effectcraft.ps1" (
+if exist "%~dp0start-figcraft.ps1" (
     echo.
-    echo   Checking EffectCraft control channel...
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-effectcraft.ps1"
+    echo   Checking for a manually opened FigCraft control channel...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-figcraft.ps1" -NoLaunch
 )
 
 REM Free the bridge port if a previous instance is still listening.

@@ -10,7 +10,7 @@
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
-[![Release](https://img.shields.io/badge/RELEASE-V3.9.11-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.11)
+[![Release](https://img.shields.io/badge/RELEASE-V3.9.12-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.12)
 [![MCP](https://img.shields.io/badge/PROTOCOL-MCP-FACC15?style=flat-square&labelColor=111111&logo=modelcontextprotocol&logoColor=FACC15)](https://modelcontextprotocol.io/)
 
 </div>
@@ -145,7 +145,7 @@ npm run dist     # build the Windows installer into dist/
 
 **① Load the extension**
 
-1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.11).
+1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.12).
 2. Open `edge://extensions` (Edge) or `chrome://extensions` (Chrome).
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select the `snapgent-extension` folder.
@@ -157,17 +157,18 @@ For VS Code, open the project folder you want to work on before clicking **Start
 
 **③ Start the bridge**
 
-- **Windows** — double-click `start.bat`. It configures VS Code MCP automatically.
+- **Windows** — double-click `start.bat`. It configures VS Code MCP and detects
+  installed FigCraft and EffectCraft targets automatically.
   You can start the bridge before VS Code.
   Machine-specific settings are written to the ignored local `config.json`.
 - **macOS** — double-click `MacOS_Start.command`. It detects the bundled
-  VS Code MCP server, Roblox Studio's MCP executable, and an installed
-  EffectCraft CLI, then writes their machine-specific paths to the ignored
+  VS Code MCP server, Roblox Studio's MCP executable, and installed FigCraft
+  and EffectCraft tools, then writes their machine-specific paths to the ignored
   local `config.json`. This launcher uses `bridge.py`; it does not run the
   Windows-only `bridge.exe`.
 - **Linux** — open a terminal in the extracted release folder and run
   `bash Linux_Start.sh`. It detects the bundled VS Code MCP server and
-  installed EffectCraft CLI, then writes
+  installed FigCraft and EffectCraft tools, then writes
   machine-specific paths to the ignored local `config.json`. It uses
   `bridge.py`; the first launch installs `websockets` for your user, or creates
   a local Python environment if your distribution blocks user installs.
@@ -178,17 +179,35 @@ under **System Settings → Privacy & Security**.
 
 **Optional: connect EffectCraft**
 
-On Windows, `start.bat` detects EffectCraft in common install locations and
-starts its control channel automatically. On macOS, install the separate
-EffectCraft CLI release and put `effectcraft-cli` on your `PATH`; the launcher
-detects it and starts the app's control channel when EffectCraft is installed
-in `/Applications` or `~/Applications`. On Linux, install the EffectCraft CLI
-and put `effectcraft-cli` on your `PATH`; the launcher detects it and starts
-EffectCraft when its executable is available on `PATH` or in a common
-installation location. On any system, save your work and close EffectCraft
-before restarting the launcher if EffectCraft is already open without the
-control channel. When the bridge connects, choose
-**EffectCraft** in the MCP target selector on the chat bar.
+Starting the Snapgent bridge does not open EffectCraft. When you want to use
+it, run `Open-EffectCraft-for-Snapgent.bat` on Windows or
+`bash open-effectcraft-for-snapgent.sh` on macOS/Linux. The helper detects the
+EffectCraft CLI and app, then starts the app with its control channel on port
+`9877`. Run or restart the normal Snapgent bridge launcher afterward so the
+MCP server connects. When connected, choose **EffectCraft** in the MCP target
+selector on the chat bar.
+
+On macOS, install the separate EffectCraft CLI release and put
+`effectcraft-cli` on your `PATH`. On Linux, install the CLI and put it on
+`PATH`, or install the app in a supported common location. If EffectCraft is
+already open without the control channel, Snapgent will not close or restart
+it; save your work, close it, run the helper, then restart the bridge launcher.
+
+**Optional: connect FigCraft**
+
+Starting the Snapgent bridge does not open FigCraft. When you want to use it,
+run `Open-FigCraft-for-Snapgent.bat` on Windows or
+`bash open-figcraft-for-snapgent.sh` on macOS/Linux. This helper detects the
+FigCraft CLI, selects an available loopback port, and opens FigCraft with its
+control channel. Then run or restart the normal Snapgent bridge launcher so
+the MCP server attaches to the app. When connected, choose **FigCraft** in the
+MCP target selector on the chat bar.
+
+If FigCraft is already running with a `--control` port, the helper detects and
+reuses it. If it is open without a control channel, Snapgent will not close or
+restart it; the MCP entry remains headless. Save your work, close FigCraft, run
+the helper, then restart the bridge launcher. Opening FigCraft normally from
+its desktop icon does not enable the control channel.
 
 On macOS, Roblox Studio MCP is detected at
 `/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP`; set
@@ -328,6 +347,6 @@ snapgent-full/
 
 **Built for creators who want to spend more time making.**
 
-[Latest release V3.9.11](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.11) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
+[Latest release V3.9.12](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.12) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
 
 </div>

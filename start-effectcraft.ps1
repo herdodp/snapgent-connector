@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $configPath = Join-Path $PSScriptRoot "config.json"
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-    Write-Host "EffectCraft MCP config not found; skipping automatic launch."
+    Write-Host "EffectCraft MCP config not found; skipping control setup."
     exit 0
 }
 
@@ -16,7 +16,7 @@ catch {
 
 $server = $configuration.mcpServers.effectcraft
 if (-not $server -or [string]::IsNullOrWhiteSpace($server.command)) {
-    Write-Host "EffectCraft MCP is not configured; skipping automatic launch."
+    Write-Host "EffectCraft MCP is not configured; skipping control setup."
     exit 0
 }
 
@@ -37,7 +37,7 @@ if ($listener) {
 $running = Get-Process -Name "effectcraft" -ErrorAction SilentlyContinue
 if ($running) {
     Write-Host "EffectCraft is already open without its control channel."
-    Write-Host "Save your work, close EffectCraft, then run start.bat again."
+    Write-Host "Save your work, close EffectCraft, then run Open-EffectCraft-for-Snapgent.bat."
     exit 0
 }
 
