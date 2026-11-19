@@ -14,6 +14,10 @@
 // walks. No jsdom, no npm install: the repo has no dependencies and this test
 // keeps it that way.
 const fs = require("fs");
+// A checkout with core.autocrlf=true (the Windows default) hands the test a \r\n
+// working tree, while the source pins below match exact "\n" text. Normalise at
+// read time so the assertions test the code, not the checkout's line endings.
+const readSource = (rel) => fs.readFileSync(__dirname + rel, "utf8").replace(/\r\n/g, "\n");
 const ZSParse = new Function(
   fs.readFileSync(__dirname + "/core/parser.js", "utf8") + "; return ZSParse;"
 )();
@@ -608,9 +612,9 @@ ok("mobile textarea text can be read", P.editorText() === "");
 // send.typed {len:0, want:2826} - no turn appeared, and because an empty
 // composer was the core's "sent" signal, Start sat on "Starting…" forever.
 {
-  const prov = fs.readFileSync(__dirname + "/providers/chatgpt.js", "utf8");
-  const cm = fs.readFileSync(__dirname + "/providers/chatgpt-cm.js", "utf8");
-  const core = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+  const prov = readSource("/providers/chatgpt.js");
+  const cm = readSource("/providers/chatgpt-cm.js");
+  const core = readSource("/core/main.js");
   ok("typeAndSend re-acquires and re-types on a fresh editor",
     /let got = 0;[\s\S]{0,600}for \(let attempt = 0; attempt < 6 && !got; attempt\+\+\)[\s\S]{0,700}ed = ready;/.test(prov));
   ok("typeAndSend verifies the text really landed in the composer",
@@ -631,9 +635,9 @@ ok("mobile textarea text can be read", P.editorText() === "");
 // window execCommand("insertText") returns FALSE and types nothing, silently -
 // so a "typed" report with len 0 was indistinguishable from a real send.
 {
-  const prov = fs.readFileSync(__dirname + "/providers/chatgpt.js", "utf8");
-  const cm = fs.readFileSync(__dirname + "/providers/chatgpt-cm.js", "utf8");
-  const main = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+  const prov = readSource("/providers/chatgpt.js");
+  const cm = readSource("/providers/chatgpt-cm.js");
+  const main = readSource("/core/main.js");
   ok("there is a composer readiness gate",
     /function editorReady\(ed\)/.test(prov) && /function waitEditorReady\(timeout\)/.test(prov));
   ok("readiness requires contenteditable true",
