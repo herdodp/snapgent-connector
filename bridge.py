@@ -546,6 +546,12 @@ class Bridge:
         self._catalog: List[Dict[str, Any]] = []
         self._last_studio: Optional[bool] = None
         self.hub = EventHub()
+        # Replay guard state, keyed by a monotonic per-connection token instead of
+        # id(websocket): the interpreter reuses an object id after a disconnect, and
+        # an entry keyed by it would answer a later, unrelated connection.
+        self._last_calls: Dict[int, Dict[str, Any]] = {}
+        self._client_tokens: Dict[int, int] = {}
+        self._next_client_token = 0
 
     def load_config(self) -> Dict[str, Dict[str, Any]]:
         if not CONFIG_PATH.exists():
@@ -730,7 +736,31 @@ class Bridge:
                 await asyncio.gather(*pending, return_exceptions=True)
             async with self._client_lock:
                 self.clients.discard(websocket)
+            self._forget_client(websocket)
             log("extension disconnected")
+
+    def _client_token(self, websocket: Any) -> int:
+        """Stable id for one live connection, used to key the replay cache.
+
+        `id(websocket)` alone is not safe across connections: CPython reuses an
+        object id once the socket is gone, so an entry left behind by a previous
+        connection could answer a new one. A monotonic token, discarded in
+        `_forget_client`, cannot outlive its socket.
+        """
+        key = id(websocket)
+        token = self._client_tokens.get(key)
+        if token is None:
+            self._next_client_token += 1
+            token = self._next_client_token
+            self._client_tokens[key] = token
+        return token
+
+    def _forget_client(self, websocket: Any) -> None:
+        """Drop every piece of per-connection state when the socket closes."""
+        key = id(websocket)
+        token = self._client_tokens.pop(key, None)
+        if token is not None:
+            self._last_calls.pop(token, None)
 
     async def _handle_request(self, websocket: Any, request: Dict[str, Any]) -> None:
         request_id = request.get("id")
@@ -822,18 +852,32 @@ class Bridge:
             timeout_seconds = max(1.0, min(float(timeout) / 1000, 300.0))
         except (TypeError, ValueError):
             timeout_seconds = 120.0
-        # Replay guard (see DUPLICATE_CALL_TTL): answer an immediately repeated
-        # identical call from the result just produced instead of running it again.
-        # Scoped PER CLIENT: two extension instances must not be answered from each
-        # other's results, and a caller that really wants the work done again sends
-        # "force": true to skip the cache.
+        # Replay guard (see DUPLICATE_CALL_TTL): a re-rendered turn re-sends the
+        # call it already ran, so the bridge answers that exact call from the result
+        # it just produced instead of running it again.
+        #
+        # Deduplication is scoped to ONE logical call. The extension states which
+        # turn the call belongs to ("turn": "<conversation>|<turn>"), so an identical
+        # call in a later turn carries a different turn id and really runs - a
+        # legitimate repeat is never answered from a stale result. A client that
+        # sends no turn id is not answered from the cache at all: running the work
+        # again is the safe default when the intent is unknown. A caller that really
+        # wants the work redone sends "force": true, and two sockets are never
+        # answered from each other's results.
+        turn = request.get("turn")
+        if isinstance(turn, str):
+            turn = turn.strip() or None
+        else:
+            turn = None
         try:
-            sig = json.dumps({"n": name, "a": arguments}, sort_keys=True, ensure_ascii=False)
+            sig = (
+                json.dumps({"n": name, "a": arguments, "t": turn}, sort_keys=True, ensure_ascii=False)
+                if turn
+                else None
+            )
         except (TypeError, ValueError):
             sig = None
-        if not hasattr(self, "_last_calls"):
-            self._last_calls: dict[int, dict] = {}
-        client_key = id(websocket)
+        client_key = self._client_token(websocket)
         now = time.time()
         for stale_key in [k for k, v in self._last_calls.items() if now - v.get("at", 0) > DUPLICATE_CALL_TTL]:
             self._last_calls.pop(stale_key, None)
