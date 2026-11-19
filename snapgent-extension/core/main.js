@@ -97,6 +97,12 @@
     { name: "Mistral", url: "https://chat.mistral.ai/code" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
+  let terminalRequest = null;
+  function terminalEmit(event, data) {
+    if (terminalRequest) {
+      try { chrome.runtime.sendMessage({ type: "zs-terminal-event", requestId: terminalRequest, event, data }); } catch {}
+    }
+  }
 
   // ── Background (multi-tab) sessions ─────────────────────────────────────
   // By default a session PARKS while its tab is hidden (see waitVisible): a
@@ -344,11 +350,11 @@
     A.sendToken = P.lastAssistantId ? P.lastAssistantId() : undefined;
   }
 
-  async function submitAndGetBase(text, images) {
+  async function submitAndGetBase(text, images, options = {}) {
     captureSendToken();
     diag("send", { text: String(text).slice(0, 60), busy: P.isBusyNow() });
     A.injecting = true;
-    ui.inputCover(true);
+    ui.inputCover(true, options.coverLabel);
     try {
       // Quick 2-point settle: sample the previous response's stream length before
       // and after a 200ms yield. A one-shot React batch flush (the common case)
@@ -419,6 +425,7 @@
         diag("send.failed", { tries });
         ui.banner("warn", "Message could not be sent",
           `Send "continue" to resume.`);
+        if (options.requireSent) throw new Error("Prompt was not sent to the chat. Check the browser tab and try again.");
       }
       return base;
     } finally {
@@ -1500,6 +1507,7 @@
                         // Stop click that landed before this loop actually started
     A.loopKey = null; // pinned by syncSessionState once this chat has an id + content
     let truncCount = 0;
+    let terminalFinalAnswer = null;
     const MAX_TRUNC = 6;
     // Re-send the command list after this many successful tool calls. Kept high
     // so the reminder does not bloat the context too often.
@@ -1639,7 +1647,10 @@
           base = await submitAndGetBase(ZS.FEEDBACK.parseError(res.reason, failName));
           continue;
         }
-        if (res.kind === "text") break; // final answer
+        if (res.kind === "text") {
+          terminalFinalAnswer = res.text || res.raw || "";
+          break; // final answer
+        }
 
         if (res.kind === "tool") {
           const calls = res.calls;
@@ -1685,9 +1696,11 @@
           // zloop/zResume markers (see the `executed` map).
           rememberExecuted(res.item);
           diag("tool.start", { name: call.tool });
+          terminalEmit("tool", { name: call.tool, phase: "start" });
           const feedback = await runTool(call);
           A.toolRunning = false;
           diag("tool.done", { name: call.tool, ok: !feedback.startsWith("ERROR"), out: feedback.slice(0, 50) });
+          terminalEmit("tool", { name: call.tool, phase: "done", ok: !feedbackIsError(feedback), summary: outSummary(feedback) });
           if (A.stop) {
             // User halted mid-tool: settle the spinning chip so it doesn't look
             // stuck loading forever, and MARK the turn so the sweep classifier
@@ -1775,6 +1788,7 @@
       diag("loop.error", { msg: String((e && e.message) || e) });
       ui.banner("warn", "Internal loop error", String((e && e.message) || e));
     } finally {
+      const terminalStopped = A.userStopped || A.stop;
       A.running = false;
       A.stop = false;
       // Keep the "Stopping…" state while the site's stream is still draining
@@ -1795,6 +1809,12 @@
       ui.inputCover(false); // lift the "Agent is working" cover when the loop ends
       P.setInputLock(false); // always unlock, even on error or stop
       diag("loop.end");
+      if (terminalRequest) {
+        terminalEmit(terminalFinalAnswer !== null ? "done" : "error",
+          terminalFinalAnswer !== null ? terminalFinalAnswer
+            : terminalStopped ? "Session stopped." : "Agent ended without a final text reply. Check the chat tab.");
+        terminalRequest = null;
+      }
     }
   }
 
@@ -4446,7 +4466,7 @@
       };
     }
 
-    function inputCover(on) {
+    function inputCover(on, label = "Agent is working…") {
       const ed = P.getEditor();
       // Scrolling up through history hides the busy cover as well: the user is
       // browsing, not watching the agent. The INTENT flag stays untouched, so
@@ -4472,6 +4492,7 @@
         cover.innerHTML = `<span>Agent is working…</span>`;
         document.documentElement.appendChild(cover);
       }
+      cover.firstElementChild.textContent = label;
       cover.dataset.on = "1"; // intent flag: keep the place() loop alive while set
       cover.style.display = "flex";
       const place = () => {
@@ -4919,7 +4940,50 @@
   //  WIRING
   // ════════════════════════════════════════════════════════════════════════
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  function terminalReadiness() {
+    if (A.starting) return "starting";
+    if (!A.started) return "not_started";
+    if (terminalRequest || A.running || P.isGenerating()) return "busy";
+    if (A.injecting) return "settling";
+    return "ready";
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg && msg.type === "zs-terminal-status") {
+      sendResponse({ started: !!A.started && !A.starting, state: terminalReadiness(), provider: P.displayName });
+      return;
+    }
+    if (msg && msg.type === "zs-terminal-prompt") {
+      if (typeof msg.text !== "string" || !msg.text.trim()) {
+        sendResponse({ ok: false, error: "Prompt is empty." });
+        return;
+      }
+      const state = terminalReadiness();
+      if (state !== "ready") {
+        const errors = {
+          starting: "Snapgent is still starting in this chat. Wait until Start session finishes.",
+          not_started: "Start a Snapgent session in a new browser chat first.",
+          busy: "The chat is still working on a reply. Wait for it to finish or press Stop in the browser.",
+          settling: "The previous message is still settling. Retrying shortly may help.",
+        };
+        sendResponse({ ok: false, kind: state === "settling" ? "transient" : state, error: errors[state] });
+        return;
+      }
+      terminalRequest = msg.requestId;
+      sendResponse({ ok: true });
+      (async () => {
+        try {
+          A.userStopped = false;
+          const base = await submitAndGetBase(msg.text, undefined, { requireSent: true });
+          terminalEmit("accepted", { provider: P.displayName });
+          await agentLoop(base);
+        } catch (error) {
+          terminalEmit("error", String(error));
+          terminalRequest = null;
+        }
+      })();
+      return;
+    }
     if (msg && msg.type === "zs-status") {
       ui.setStatus({ connected: msg.connected, mcpAlive: msg.mcpAlive, studio: msg.studio, studioApp: msg.studioApp, studioProc: msg.studioProc, tools: msg.tools, servers: msg.servers });
     }
@@ -5302,7 +5366,8 @@
     A.sysResendAt = Date.now();
     diag("sys.resend", { via: "ownTurn", ...spent });
     try {
-      const base = await submitAndGetBase(systemPrompt());
+      const base = await submitAndGetBase(systemPrompt(), undefined,
+        { coverLabel: "Refreshing agent context…" });
       await waitForResponse(base);
     } catch (e) {
       diag("sys.resendFailed", { err: String(e && e.message || e) });

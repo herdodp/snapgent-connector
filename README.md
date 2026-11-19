@@ -4,7 +4,7 @@
 <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=52&duration=3000&pause=1000&color=FACC15&center=true&vCenter=true&width=700&height=90&lines=snapgentV3;+Connector+agent+MCP" alt="snapgentV3: Connector agent for VS Code" />
 </a>
 
-<p><b>Turn any AI chatbot browser to many app via MCP</b></p>
+<p><b>Connecting AI chatbot browser to many app via MCP</b></p>
 
 <p><a href="https://discord.gg/rvaZ8KkvAX"><b>💬 Join Discord</b></a> to report problem</p>
 
@@ -70,6 +70,67 @@ The default target. Automatically connects to the workspace currently open in VS
 5. The **result** is sent back into chat, and the AI continues working.
 
 VS Code's MCP server is configured locally by `start.bat`; it detects the open VS Code workspace automatically.
+
+### Send prompts from the terminal
+
+The browser extension can relay a terminal prompt to an **already started** Snapgent chat. Interactive mode shows a prompt, an animated wait indicator, tool progress, and a formatted AI reply with readable headings, lists, quotes, and code blocks. When output is piped or redirected, stdout contains the unformatted reply and tool progress goes to stderr. The browser and bridge must stay open; keep the chat as the active browser tab. If you switch to another tab or minimize the browser, enable **Background sessions** in the Snapgent menu to allow the session to continue.
+
+Restart the bridge and reload the unpacked extension and chat tab after updating the source. On macOS/Linux, use the normal launcher. On Windows, `start.bat` uses `bridge.py` when Python 3.9+ and `websockets` are available; its bundled `bridge.exe` fallback does not include source-only terminal features until rebuilt.
+
+```sh
+python3 snapgent_cli.py --list               # optional: show active chat tabs
+python3 snapgent_cli.py "Build a login page"  # one prompt, print the reply
+python3 snapgent_cli.py                      # interactive prompts
+python3 snapgent_cli.py --tab 123 "Hello"    # choose when several chats are active
+```
+
+The CLI uses the same `websockets` Python dependency as the bridge. Run `python3 -m pip install websockets` if it is missing. In interactive mode, type `/exit` to quit. To send a longer prompt from stdin, use `python3 snapgent_cli.py -`. Only one terminal request can run in a chat tab at a time.
+
+#### Call the CLI with `snapgent`
+
+Replace the example path below with the **absolute path** to your `snapgent_cli.py` file. The alias or function only starts the CLI; keep the bridge and a supported chat session running as described above.
+
+**macOS (default zsh):** Open `~/.zshrc` (for example, `nano ~/.zshrc`) and add:
+
+```sh
+alias snapgent='python3 "/absolute/path/to/snapgent-connector/snapgent_cli.py"'
+```
+
+Run `source ~/.zshrc` or open a new Terminal window.
+
+**Linux (bash):** Open `~/.bashrc` (for example, `nano ~/.bashrc`) and add:
+
+```sh
+alias snapgent='python3 "/absolute/path/to/snapgent-connector/snapgent_cli.py"'
+```
+
+Run `source ~/.bashrc` or open a new terminal. If you use zsh on Linux, put the alias in `~/.zshrc` instead.
+
+**Windows (PowerShell):** Run the following commands to create and open your PowerShell profile:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
+notepad $PROFILE
+```
+
+Add this function to the profile, replacing the example path with your own:
+
+```powershell
+function snapgent { py -3 "C:\path\to\snapgent-connector\snapgent_cli.py" @args }
+```
+
+Save the file, then run `. $PROFILE` or open a new PowerShell window. If needed, install the CLI dependency with `py -3 -m pip install websockets`.
+
+Use the same commands on all three systems:
+
+```text
+snapgent --list                 # show active chat tabs
+snapgent                       # start an interactive prompt
+snapgent "Build a login page"  # send one prompt
+snapgent --tab 123 "Hello"     # choose a specific chat tab
+```
+
+If a prompt is refused, `--list` shows whether the chat is `ready`, `busy`, or still `settling`. A short `settling` state is retried automatically. A failed browser send now stops the terminal request instead of leaving the chat showing a working agent with no message. After updating the extension files, reload it in `chrome://extensions` and refresh the chat tab.
 
 ---
 
@@ -158,7 +219,9 @@ For VS Code, open the project folder you want to work on before clicking **Start
 **③ Start the bridge**
 
 - **Windows** — double-click `start.bat`. It configures VS Code MCP automatically.
-  You can start the bridge before VS Code.
+  It runs `bridge.py` when Python 3.9+ is available, installing `websockets`
+  if needed; otherwise it uses the bundled `bridge.exe`. You can start the
+  bridge before VS Code. The terminal CLI requires the Python bridge.
   Machine-specific settings are written to the ignored local `config.json`.
 - **macOS** — double-click `MacOS_Start.command`. It detects the bundled
   VS Code MCP server, Roblox Studio's MCP executable, and an installed
@@ -169,7 +232,8 @@ For VS Code, open the project folder you want to work on before clicking **Start
   `bash Linux_Start.sh`. It detects the bundled VS Code MCP server and
   installed EffectCraft CLI, then writes
   machine-specific paths to the ignored local `config.json`. It uses
-  `bridge.py`; the first launch installs `websockets` for your user, or creates
+  `bridge.py` unless an optional native `bridge` executable is present; the first
+  launch installs `websockets` for your user, or creates
   a local Python environment if your distribution blocks user installs.
 
 Keep the terminal window open while the bridge runs. On macOS, the first
@@ -241,7 +305,7 @@ The extension and the bridge are two separate parts, and each one has to be upda
 
 If the popup shows `bridge old`, the bridge is still running old code: repeat steps 2 and 3. On macOS and Linux, also make sure there is no old executable file named `bridge` in the folder, because the launcher runs it instead of `bridge.py`.
 
-> **Windows note (V3.9.4):** `start.bat` runs the bundled `bridge.exe`, which was rebuilt for V3.9.4 and includes the large-response fix, the version display and parallel server startup. If the popup still shows `bridge old`, close `start.bat` and start it again so the new `bridge.exe` is used. To run the bridge from source instead, install Python 3.9+ and `py -3 -m pip install websockets`, then run `py -3 bridge.py` in the project folder.
+> **Windows note:** `start.bat` now prefers the Python bridge when Python 3.9+ and `websockets` are available, so source updates work without rebuilding `bridge.exe`. Without Python, it falls back to the bundled executable. Check the launcher output to see which bridge started.
 
 ---
 
