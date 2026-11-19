@@ -26,9 +26,12 @@ echo "  === Snapgent Bridge (Linux) ==="
 echo
 log "===== Linux_Start.sh launched ====="
 
-if [ ! -f "./bridge.py" ]; then
-    echo "  ERROR: bridge.py is missing. Extract the complete Snapgent release first."
-    log "FATAL: bridge.py not found."
+BRIDGE_BIN=""
+if [ -x "./bridge" ]; then BRIDGE_BIN="./bridge"; fi
+if [ -z "$BRIDGE_BIN" ] && [ ! -f "./bridge.py" ]; then
+    echo "  ERROR: no Linux-compatible Snapgent bridge was found."
+    echo "  Extract the complete release, including bridge.py, then try again."
+    log "FATAL: no native bridge or bridge.py found."
     pause_and_exit 1
 fi
 
@@ -47,7 +50,9 @@ if [ -z "$PY" ]; then
     log "FATAL: no Python 3.9+ found."
     pause_and_exit 1
 fi
-echo "        Found: $("$PY" --version 2>&1)"
+PY_VER="$("$PY" --version 2>&1)"
+echo "        Found: $PY ($PY_VER)"
+log "Python found: $PY ($PY_VER)"
 
 echo "  [2/4] Checking websockets library..."
 if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
@@ -76,12 +81,19 @@ if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
     log "FATAL: websockets import failed after installation."
     pause_and_exit 1
 fi
+echo "        OK"
+log "websockets library OK."
 
-echo "  [3/4] Detecting VS Code, Roblox Studio, and EffectCraft..."
-if ! "$PY" "./setup-config.py"; then
-    echo "  ERROR: MCP configuration failed. See the message above."
-    log "MCP auto-configuration failed."
-    pause_and_exit 1
+if [ -f "./setup-config.py" ]; then
+    echo "  [3/4] Detecting VS Code, Roblox Studio, and EffectCraft..."
+    if ! "$PY" "./setup-config.py"; then
+        echo "  ERROR: MCP configuration failed. See the message above."
+        log "MCP auto-configuration failed."
+        pause_and_exit 1
+    fi
+else
+    echo "  [3/4] MCP auto-configuration is unavailable in this package."
+    log "MCP setup script not found; skipping automatic MCP configuration."
 fi
 
 echo "  [4/4] Starting bridge..."
@@ -90,10 +102,15 @@ if command -v lsof >/dev/null 2>&1; then
     for old_pid in $OLD_PIDS; do
         OLD_COMMAND="$(ps -p "$old_pid" -o args= 2>/dev/null || true)"
         case "$OLD_COMMAND" in
-            *bridge.py*)
+            *bridge.py*|*/bridge)
                 echo "        Replacing previous Snapgent bridge (pid $old_pid)..."
                 log "Stopping previous Snapgent bridge pid $old_pid."
                 kill -TERM "$old_pid" 2>/dev/null || true
+                sleep 1
+                if kill -0 "$old_pid" 2>/dev/null; then
+                    kill -KILL "$old_pid" 2>/dev/null || true
+                    sleep 1
+                fi
                 ;;
             *)
                 echo "  ERROR: port $BRIDGE_PORT is already in use by another process."
@@ -103,14 +120,22 @@ if command -v lsof >/dev/null 2>&1; then
                 ;;
         esac
     done
-    if [ -n "${OLD_PIDS:-}" ]; then sleep 1; fi
 fi
 
 echo
-echo "  Keep this window open while using Snapgent."
+echo "  ############################################################"
+echo "  ##   KEEP THIS WINDOW OPEN - DO NOT CLOSE IT              ##"
+echo "  ##   Snapgent stops working if you close it. Just       ##"
+echo "  ##   minimize this window and leave it running.           ##"
+echo "  ############################################################"
 echo
-log "Launching bridge.py with $PY"
-"$PY" bridge.py
+if [ -n "$BRIDGE_BIN" ]; then
+    log "Launching native bridge $BRIDGE_BIN"
+    "$BRIDGE_BIN"
+else
+    log "Launching bridge.py with $PY"
+    "$PY" bridge.py
+fi
 BRIDGE_EXIT=$?
 log "bridge exited with code $BRIDGE_EXIT"
 

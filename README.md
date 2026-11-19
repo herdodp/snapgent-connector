@@ -75,7 +75,7 @@ VS Code's MCP server is configured locally by `start.bat`; it detects the open V
 
 The browser extension can relay a terminal prompt to an **already started** Snapgent chat. Interactive mode shows a prompt, an animated wait indicator, tool progress, and a formatted AI reply with readable headings, lists, quotes, and code blocks. When output is piped or redirected, stdout contains the unformatted reply and tool progress goes to stderr. The browser and bridge must stay open; keep the chat as the active browser tab. If you switch to another tab or minimize the browser, enable **Background sessions** in the Snapgent menu to allow the session to continue.
 
-Restart `bridge.py` and reload the unpacked extension and chat tab after updating the source. On macOS/Linux, use the normal launcher. The bundled Windows `bridge.exe` does not include this source change until it is rebuilt, so run `py -3 bridge.py` from source on Windows.
+Restart the bridge and reload the unpacked extension and chat tab after updating the source. On macOS/Linux, use the normal launcher. On Windows, `start.bat` uses `bridge.py` when Python 3.9+ and `websockets` are available; its bundled `bridge.exe` fallback does not include source-only terminal features until rebuilt.
 
 ```sh
 python3 snapgent_cli.py --list               # optional: show active chat tabs
@@ -219,7 +219,9 @@ For VS Code, open the project folder you want to work on before clicking **Start
 **③ Start the bridge**
 
 - **Windows** — double-click `start.bat`. It configures VS Code MCP automatically.
-  You can start the bridge before VS Code.
+  It runs `bridge.py` when Python 3.9+ is available, installing `websockets`
+  if needed; otherwise it uses the bundled `bridge.exe`. You can start the
+  bridge before VS Code. The terminal CLI requires the Python bridge.
   Machine-specific settings are written to the ignored local `config.json`.
 - **macOS** — double-click `MacOS_Start.command`. It detects the bundled
   VS Code MCP server, Roblox Studio's MCP executable, and an installed
@@ -230,7 +232,8 @@ For VS Code, open the project folder you want to work on before clicking **Start
   `bash Linux_Start.sh`. It detects the bundled VS Code MCP server and
   installed EffectCraft CLI, then writes
   machine-specific paths to the ignored local `config.json`. It uses
-  `bridge.py`; the first launch installs `websockets` for your user, or creates
+  `bridge.py` unless an optional native `bridge` executable is present; the first
+  launch installs `websockets` for your user, or creates
   a local Python environment if your distribution blocks user installs.
 
 Keep the terminal window open while the bridge runs. On macOS, the first
@@ -302,7 +305,7 @@ The extension and the bridge are two separate parts, and each one has to be upda
 
 If the popup shows `bridge old`, the bridge is still running old code: repeat steps 2 and 3. On macOS and Linux, also make sure there is no old executable file named `bridge` in the folder, because the launcher runs it instead of `bridge.py`.
 
-> **Windows note (V3.9.4):** `start.bat` runs the bundled `bridge.exe`, which was rebuilt for V3.9.4 and includes the large-response fix, the version display and parallel server startup. If the popup still shows `bridge old`, close `start.bat` and start it again so the new `bridge.exe` is used. To run the bridge from source instead, install Python 3.9+ and `py -3 -m pip install websockets`, then run `py -3 bridge.py` in the project folder.
+> **Windows note:** `start.bat` now prefers the Python bridge when Python 3.9+ and `websockets` are available, so source updates work without rebuilding `bridge.exe`. Without Python, it falls back to the bundled executable. Check the launcher output to see which bridge started.
 
 ---
 
