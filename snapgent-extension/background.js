@@ -91,6 +91,7 @@ let toolsCache = [];
 let mcpAlive = false;
 let serversCache = [];
 let bridgeVersion = null;
+const terminalRequests = new Map(); // relay request id -> chat tab id
 // true/false = a PLACE is loaded and usable in Roblox Studio; null = unknown.
 // The MCP process stays alive when Studio is closed or its MCP option is off,
 // so this is probed separately (bridge "studio_status").
@@ -132,6 +133,7 @@ function connect() {
     lastMessageAt = Date.now();
     log("connected to bridge");
     startHeartbeat();
+    ws.send(JSON.stringify({ type: "terminal_register" }));
     broadcastStatus();
   };
 
@@ -305,6 +307,10 @@ async function refreshStudioStatus() {
 }
 
 function handleBridgeMessage(msg) {
+  if (msg.type === "terminal_sessions" || msg.type === "terminal_prompt") {
+    handleTerminalRequest(msg);
+    return;
+  }
   if ("studio" in msg && (typeof msg.studio === "boolean" || msg.studio === null)) {
     studioConnected = msg.studio;
   }
@@ -366,6 +372,51 @@ function handleBridgeMessage(msg) {
   }
 }
 
+function terminalEvent(requestId, event, data) {
+  if (connected && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "terminal_event", request_id: requestId, event, data }));
+  }
+  if (event === "done" || event === "error") terminalRequests.delete(requestId);
+}
+
+async function handleTerminalRequest(msg) {
+  const requestId = msg.request_id;
+  try {
+    const tabs = await chrome.tabs.query({ url: PROVIDER_URLS });
+    const sessions = (await Promise.all(tabs.map(async (tab) => {
+      try {
+        const status = await chrome.tabs.sendMessage(tab.id, { type: "zs-terminal-status" });
+        return status && status.started
+          ? { id: tab.id, title: tab.title || "AI chat", url: tab.url, state: status.state || "unknown" }
+          : null;
+      } catch { return null; }
+    }))).filter(Boolean);
+    if (msg.type === "terminal_sessions") {
+      terminalEvent(requestId, "sessions", sessions);
+      return;
+    }
+    const selected = msg.tab_id == null
+      ? (sessions.length === 1 ? sessions[0] : null)
+      : sessions.find((s) => s.id === msg.tab_id);
+    if (!selected) {
+      const reason = sessions.length === 0 ? "No active Snapgent chat. Open a supported chat and click Start session."
+        : "Select a chat tab with --tab. Run `python3 snapgent_cli.py --list` to see tab IDs.";
+      terminalEvent(requestId, "error", reason);
+      return;
+    }
+    terminalRequests.set(requestId, selected.id);
+    let reply;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      reply = await chrome.tabs.sendMessage(selected.id, { type: "zs-terminal-prompt", requestId, text: msg.text });
+      if (!reply || reply.ok || reply.kind !== "transient") break;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    if (!reply || !reply.ok) terminalEvent(requestId, "error", (reply && reply.error) || "Chat tab did not accept the prompt.");
+  } catch (error) {
+    terminalEvent(requestId, "error", String(error));
+  }
+}
+
 function resolvePending(id, value) {
   const p = pending.get(id);
   if (!p) return;
@@ -398,9 +449,15 @@ function broadcastStatus() {
 }
 
 // ── messages from content.js / popup.js ─────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     switch (msg.type) {
+      case "zs-terminal-event":
+        if (sender.tab && terminalRequests.get(msg.requestId) === sender.tab.id) {
+          terminalEvent(msg.requestId, msg.event, msg.data);
+        }
+        sendResponse({ ok: true });
+        break;
       case "status":
         if (!connected) connect(); // self-heal after a worker wake-up
         sendResponse(statusObj());

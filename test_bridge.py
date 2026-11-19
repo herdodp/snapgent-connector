@@ -55,6 +55,56 @@ MOCK_SLOW_MCP = "import time\n" + MOCK_MCP.replace(
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_terminal_prompt_relay_and_reply(self):
+        manager = bridge.Bridge()
+        extension, terminal = object(), object()
+        sent = []
+
+        async def capture(client, message):
+            sent.append((client, message))
+
+        manager._send_client = capture
+        await manager._handle_request(extension, {"type": "terminal_register"},
+                                      terminal_allowed=False, extension_allowed=True)
+        await manager._handle_request(terminal, {"type": "terminal_prompt", "id": 7,
+                                                 "text": "hello", "tab_id": 12},
+                                      terminal_allowed=True)
+        relay = sent[-1][1]
+        self.assertIs(sent[-1][0], extension)
+        self.assertEqual(relay["type"], "terminal_prompt")
+        self.assertEqual(relay["text"], "hello")
+        await manager._handle_request(extension, {"type": "terminal_event",
+                                                   "request_id": relay["request_id"],
+                                                   "event": "done", "data": "world"},
+                                      terminal_allowed=False, extension_allowed=True)
+        self.assertIs(sent[-1][0], terminal)
+        self.assertEqual(sent[-1][1]["data"], "world")
+        self.assertNotIn(relay["request_id"], manager.terminal_requests)
+
+        await manager._handle_request(terminal, {"type": "terminal_register", "id": 8},
+                                      terminal_allowed=True, extension_allowed=False)
+        self.assertEqual(sent[-1][1]["type"], "error")
+
+    async def test_terminal_websocket_round_trip(self):
+        manager = bridge.Bridge()
+        async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+            url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+            async with bridge.websockets.connect(url, origin="chrome-extension://snapgent-test") as extension:
+                await extension.recv()
+                await extension.send(json.dumps({"type": "terminal_register", "id": 1}))
+                self.assertTrue(json.loads(await extension.recv())["ok"])
+                async with bridge.websockets.connect(url) as terminal:
+                    await terminal.recv()
+                    await terminal.send(json.dumps({"type": "terminal_prompt", "id": 2,
+                                                    "text": "test prompt"}))
+                    forwarded = json.loads(await extension.recv())
+                    self.assertEqual(forwarded["text"], "test prompt")
+                    await extension.send(json.dumps({"type": "terminal_event",
+                                                     "request_id": forwarded["request_id"],
+                                                     "event": "done", "data": "test reply"}))
+                    reply = json.loads(await terminal.recv())
+                    self.assertEqual(reply["data"], "test reply")
+
     @contextlib.asynccontextmanager
     async def _ws_client(self, root, script):
         mock_path = root / "mock_mcp.py"

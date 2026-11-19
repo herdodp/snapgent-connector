@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -308,6 +309,8 @@ class Bridge:
         self._client_lock = asyncio.Lock()
         self._catalog: List[Dict[str, Any]] = []
         self._last_studio: Optional[bool] = None
+        self.terminal_extensions: set = set()
+        self.terminal_requests: Dict[str, Any] = {}
 
     def load_config(self) -> Dict[str, Dict[str, Any]]:
         if not CONFIG_PATH.exists():
@@ -425,6 +428,10 @@ class Bridge:
             log(f"send to client failed: {type(error).__name__}: {str(error)[:200]}")
 
     async def handle_client(self, websocket: Any, _path: Optional[str] = None) -> None:
+        origin = websocket.request.headers.get("Origin") if hasattr(websocket, "request") else websocket.request_headers.get("Origin")
+        # Web pages must not be able to drive local terminal sessions.
+        terminal_allowed = origin is None
+        extension_allowed = bool(origin and origin.startswith("chrome-extension://"))
         async with self._client_lock:
             self.clients.add(websocket)
         log("extension connected")
@@ -435,7 +442,7 @@ class Bridge:
         async def _run(request: Dict[str, Any]) -> None:
             async with limiter:
                 try:
-                    await self._handle_request(websocket, request)
+                    await self._handle_request(websocket, request, terminal_allowed, extension_allowed)
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
@@ -472,14 +479,52 @@ class Bridge:
                 task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+            if websocket in self.terminal_extensions:
+                for relay_id, owner in list(self.terminal_requests.items()):
+                    await self._send_client(owner, {"type": "terminal_event", "request_id": relay_id,
+                                                    "event": "error", "data": "Browser extension disconnected."})
+                    self.terminal_requests.pop(relay_id, None)
             async with self._client_lock:
                 self.clients.discard(websocket)
+                self.terminal_extensions.discard(websocket)
+                for key, owner in list(self.terminal_requests.items()):
+                    if owner is websocket:
+                        del self.terminal_requests[key]
             log("extension disconnected")
 
-    async def _handle_request(self, websocket: Any, request: Dict[str, Any]) -> None:
+    async def _handle_request(self, websocket: Any, request: Dict[str, Any], terminal_allowed: bool = True, extension_allowed: bool = False) -> None:
         request_id = request.get("id")
         kind = request.get("type")
-        if kind == "ping":
+        if kind == "terminal_register":
+            if extension_allowed:
+                self.terminal_extensions.add(websocket)
+                await self._send_client(websocket, {"type": "terminal_registered", "id": request_id, "ok": True})
+            else:
+                await self._send_client(websocket, {"type": "error", "id": request_id, "error": "Extension origin required."})
+        elif kind in ("terminal_sessions", "terminal_prompt"):
+            if not terminal_allowed:
+                await self._send_client(websocket, {"type": "error", "id": request_id, "error": "Terminal client required."})
+                return
+            extensions = list(self.terminal_extensions)
+            if len(extensions) != 1:
+                await self._send_client(websocket, {"type": "error", "id": request_id, "error": "Expected one connected Snapgent extension. Reload the extension and chat tab."})
+                return
+            if kind == "terminal_prompt" and (not isinstance(request.get("text"), str) or not request["text"].strip() or len(request["text"]) > 100000):
+                await self._send_client(websocket, {"type": "error", "id": request_id, "error": "Prompt must contain 1–100000 characters."})
+                return
+            relay_id = uuid.uuid4().hex
+            self.terminal_requests[relay_id] = websocket
+            await self._send_client(extensions[0], {"type": kind, "request_id": relay_id, "tab_id": request.get("tab_id"), "text": request.get("text")})
+        elif kind == "terminal_event":
+            if websocket not in self.terminal_extensions:
+                return
+            relay_id = request.get("request_id")
+            owner = self.terminal_requests.get(relay_id)
+            if owner:
+                await self._send_client(owner, {"type": "terminal_event", "id": request.get("id"), "event": request.get("event"), "request_id": relay_id, "data": request.get("data")})
+                if request.get("event") in ("done", "error", "sessions"):
+                    self.terminal_requests.pop(relay_id, None)
+        elif kind == "ping":
             await self._send_client(websocket, {"type": "pong", "id": request_id})
         elif kind == "studio_status":
             studio, studio_app, studio_proc = await self._studio_status()

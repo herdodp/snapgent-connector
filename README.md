@@ -71,6 +71,67 @@ The default target. Automatically connects to the workspace currently open in VS
 
 VS Code's MCP server is configured locally by `start.bat`; it detects the open VS Code workspace automatically.
 
+### Send prompts from the terminal
+
+The browser extension can relay a terminal prompt to an **already started** Snapgent chat. Interactive mode shows a prompt, an animated wait indicator, tool progress, and a formatted AI reply with readable headings, lists, quotes, and code blocks. When output is piped or redirected, stdout contains the unformatted reply and tool progress goes to stderr. The browser and bridge must stay open; keep the chat as the active browser tab. If you switch to another tab or minimize the browser, enable **Background sessions** in the Snapgent menu to allow the session to continue.
+
+Restart `bridge.py` and reload the unpacked extension and chat tab after updating the source. On macOS/Linux, use the normal launcher. The bundled Windows `bridge.exe` does not include this source change until it is rebuilt, so run `py -3 bridge.py` from source on Windows.
+
+```sh
+python3 snapgent_cli.py --list               # optional: show active chat tabs
+python3 snapgent_cli.py "Build a login page"  # one prompt, print the reply
+python3 snapgent_cli.py                      # interactive prompts
+python3 snapgent_cli.py --tab 123 "Hello"    # choose when several chats are active
+```
+
+The CLI uses the same `websockets` Python dependency as the bridge. Run `python3 -m pip install websockets` if it is missing. In interactive mode, type `/exit` to quit. To send a longer prompt from stdin, use `python3 snapgent_cli.py -`. Only one terminal request can run in a chat tab at a time.
+
+#### Call the CLI with `snapgent`
+
+Replace the example path below with the **absolute path** to your `snapgent_cli.py` file. The alias or function only starts the CLI; keep the bridge and a supported chat session running as described above.
+
+**macOS (default zsh):** Open `~/.zshrc` (for example, `nano ~/.zshrc`) and add:
+
+```sh
+alias snapgent='python3 "/absolute/path/to/snapgent-connector/snapgent_cli.py"'
+```
+
+Run `source ~/.zshrc` or open a new Terminal window.
+
+**Linux (bash):** Open `~/.bashrc` (for example, `nano ~/.bashrc`) and add:
+
+```sh
+alias snapgent='python3 "/absolute/path/to/snapgent-connector/snapgent_cli.py"'
+```
+
+Run `source ~/.bashrc` or open a new terminal. If you use zsh on Linux, put the alias in `~/.zshrc` instead.
+
+**Windows (PowerShell):** Run the following commands to create and open your PowerShell profile:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
+notepad $PROFILE
+```
+
+Add this function to the profile, replacing the example path with your own:
+
+```powershell
+function snapgent { py -3 "C:\path\to\snapgent-connector\snapgent_cli.py" @args }
+```
+
+Save the file, then run `. $PROFILE` or open a new PowerShell window. If needed, install the CLI dependency with `py -3 -m pip install websockets`.
+
+Use the same commands on all three systems:
+
+```text
+snapgent --list                 # show active chat tabs
+snapgent                       # start an interactive prompt
+snapgent "Build a login page"  # send one prompt
+snapgent --tab 123 "Hello"     # choose a specific chat tab
+```
+
+If a prompt is refused, `--list` shows whether the chat is `ready`, `busy`, or still `settling`. A short `settling` state is retried automatically. A failed browser send now stops the terminal request instead of leaving the chat showing a working agent with no message. After updating the extension files, reload it in `chrome://extensions` and refresh the chat tab.
+
 ---
 
 ## Snapgent App (standalone, Windows)
