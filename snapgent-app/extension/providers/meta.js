@@ -60,18 +60,21 @@ const ZSProvider = (() => {
     // and pick the visible one - see getEditor().
     input: [
       '[data-testid="composer-input"]',
-      'input[aria-label="Ask Meta AI"]',
-      'textarea[aria-label="Ask Meta AI"]',
-      'input[placeholder*="Meta AI"]',
+      'div[contenteditable="true"]',
+      '[contenteditable="true"]',
       'textarea[placeholder*="Meta AI"]',
-      '[contenteditable="true"][role="textbox"]',
+      'input[placeholder*="Meta AI"]',
+      'textarea[aria-label*="Meta AI"]',
+      'input[aria-label*="Meta AI"]',
+      'textarea',
     ].join(","),
     sendBtn: [
       '[data-testid="composer-send-button"]',
-      'button[aria-label="Send"]',
-      'button[aria-label="Send message"]',
-      'button[aria-label="Envoyer"]',
-      'button[aria-label="Envoyer le message"]',
+      '[data-testid*="send" i]',
+      'button[aria-label*="Send" i]',
+      'button[aria-label*="Submit" i]',
+      'button[aria-label*="Envoyer" i]',
+      'button[type="submit"]',
     ].join(","),
     stopBtn: [
       '[data-testid="composer-stop-button"]',
@@ -332,6 +335,8 @@ const ZSProvider = (() => {
   const writeEl = () => editorEls().find((e) => e.tagName === "TEXTAREA") ||
     editorEls().find((e) => e.tagName === "INPUT") || getEditor();
   const editorText = () => {
+    const v = visibleEditor();
+    if (v && !isValueEditor(v) && v.textContent && v.textContent.trim()) return v.textContent;
     const e = writeEl();
     if (!e) return "";
     return isValueEditor(e) ? (e.value || "") : (e.textContent || "");
@@ -540,6 +545,31 @@ const ZSProvider = (() => {
   }
 
   // ── Sending ─────────────────────────────────────────────────────────────────
+  function setEditorText(ed, text) {
+    if (!ed) return;
+    if (isValueEditor(ed)) {
+      setTextareaValue(ed, text);
+      return;
+    }
+    ed.setAttribute("contenteditable", "true");
+    ed.focus();
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ed);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      const inserted = document.execCommand("insertText", false, text);
+      if (!inserted) {
+        ed.textContent = text;
+        ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      }
+    } catch {
+      ed.textContent = text;
+      ed.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
   function setTextareaValue(el, v) {
     const ctor = el.tagName === "INPUT" ? window.HTMLInputElement : window.HTMLTextAreaElement;
     const proto = ctor && ctor.prototype;
@@ -561,12 +591,16 @@ const ZSProvider = (() => {
         diag("meta.tas.attached", { ok, imgId: images.__zsId });
       } catch (e) { diag("meta.tas.attachErr", { msg: String((e && e.message) || e) }); }
     }
-    // Write via the mirror textarea (the controlled input that drives Lexical).
-    const editor = writeEl();
-    if (!editor) throw new Error("Meta AI input box not found");
+    const visEd = visibleEditor();
+    const controlled = writeEl();
+    const targetEditor = visEd || controlled;
+    if (!targetEditor) throw new Error("Meta AI input box not found");
     const usersBeforeSend = userCount();
-    editor.focus();
-    setTextareaValue(editor, text);
+    targetEditor.focus();
+    if (visEd) setEditorText(visEd, text);
+    if (controlled && controlled !== visEd && isValueEditor(controlled)) {
+      setTextareaValue(controlled, text);
+    }
     const sendReady = () => {
       const b = sendButton();
       return !!b && !b.disabled && b.getAttribute("aria-disabled") !== "true";
@@ -576,14 +610,37 @@ const ZSProvider = (() => {
     // Meta may keep the mirror textarea's value after accepting a send. Treat a
     // new user turn or the stop button as acceptance too; do not click repeatedly,
     // since a delayed composer update could otherwise send the same prompt twice.
-    try { sendButton().click(); } catch (error) {
+    try {
+      const b = sendButton();
+      const pOpts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", button: 0, buttons: 1, view: window };
+      if (b) {
+        b.focus();
+        try { b.dispatchEvent(new PointerEvent("pointerdown", pOpts)); } catch {}
+        try { b.dispatchEvent(new MouseEvent("mousedown", pOpts)); } catch {}
+        try { b.dispatchEvent(new PointerEvent("pointerup", pOpts)); } catch {}
+        try { b.dispatchEvent(new MouseEvent("mouseup", pOpts)); } catch {}
+        try { b.click(); } catch {}
+        try {
+          if (b.form && typeof b.form.requestSubmit === "function") b.form.requestSubmit(b);
+        } catch {}
+      }
+      const edTarget = visEd || targetEditor;
+      if (edTarget) {
+        edTarget.focus();
+        try {
+          edTarget.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          edTarget.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          edTarget.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        } catch {}
+      }
+    } catch (error) {
       throw new Error(`Meta AI send button failed: ${String(error && error.message || error)}`);
     }
     const sent = await waitFor(() =>
       (editorText().trim() === "" && !hasPendingAttachment()) ||
       userCount() > usersBeforeSend ||
       !!stopButton(),
-    5000);
+    10000);
     if (sent) _attachedImages = null;
     diag("meta.tas.sent", {
       sent,
