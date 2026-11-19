@@ -133,7 +133,7 @@ npm run dist     # build the Windows installer into dist/
 
 ## `03` &nbsp; Requirements
 
-- **Chromium Browsers** (Google Chrome, Microsoft Edge, Brave, Opera, etc.) or **Mozilla Firefox** (v109+ with Manifest V3).
+- **Chromium Browsers** (Google Chrome, Microsoft Edge, Brave, Opera, etc.) or **Mozilla Firefox** (v128.0+ with Manifest V3).
 - **VS Code**, **VSCodium**, or **Code - OSS** for the default target. Keep the workspace you want to use open in your editor.
 - **Windows**, **macOS**, or **Linux** for the bridge.
 - **Python 3.9+** on macOS and Linux. Windows includes the bridge executable.

@@ -33,18 +33,23 @@ def _vscode_active_folder() -> Optional[Path]:
             return cand
 
     if sys.platform == "win32":
-        result = subprocess.run(
-            ["tasklist", "/NH"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            check=False,
-        )
-        if result.returncode == 0:
-            if not any(proc in result.stdout for proc in ("Code.exe", "VSCodium.exe")):
+        try:
+            result = subprocess.run(
+                ["tasklist", "/NH"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+            if result.returncode != 0:
                 return None
+            valid_procs = ("Code.exe", "Code - Insiders.exe", "VSCodium.exe")
+            if not any(proc in result.stdout for proc in valid_procs):
+                return None
+        except (subprocess.SubprocessError, OSError):
+            return None
 
     all_paths = list(_vscode_storage_paths())
     if sys.platform == "linux":

@@ -552,20 +552,22 @@ const ZSProvider = (() => {
       return;
     }
     ed.setAttribute("contenteditable", "true");
-    ed.focus();
+    if (typeof ed.focus === "function") ed.focus();
     try {
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(ed);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      const inserted = document.execCommand("insertText", false, text);
-      if (!inserted) {
-        ed.textContent = text;
-        ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      const sel = window.getSelection && window.getSelection();
+      const range = document.createRange && document.createRange();
+      if (sel && range && typeof document.execCommand === "function") {
+        range.selectNodeContents(ed);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        const inserted = document.execCommand("insertText", false, text);
+        if (inserted) return;
       }
+    } catch {}
+    ed.textContent = text;
+    try {
+      ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
     } catch {
-      ed.textContent = text;
       ed.dispatchEvent(new Event("input", { bubbles: true }));
     }
   }
@@ -596,7 +598,7 @@ const ZSProvider = (() => {
     const targetEditor = visEd || controlled;
     if (!targetEditor) throw new Error("Meta AI input box not found");
     const usersBeforeSend = userCount();
-    targetEditor.focus();
+    if (typeof targetEditor.focus === "function") targetEditor.focus();
     if (visEd) setEditorText(visEd, text);
     if (controlled && controlled !== visEd && isValueEditor(controlled)) {
       setTextareaValue(controlled, text);
@@ -607,40 +609,41 @@ const ZSProvider = (() => {
     };
     const ready = await waitFor(sendReady, 30000);
     if (!ready) throw new Error("Meta AI send button did not become available.");
-    // Meta may keep the mirror textarea's value after accepting a send. Treat a
-    // new user turn or the stop button as acceptance too; do not click repeatedly,
-    // since a delayed composer update could otherwise send the same prompt twice.
-    try {
-      const b = sendButton();
-      const pOpts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", button: 0, buttons: 1, view: window };
-      if (b) {
-        b.focus();
-        try { b.dispatchEvent(new PointerEvent("pointerdown", pOpts)); } catch {}
-        try { b.dispatchEvent(new MouseEvent("mousedown", pOpts)); } catch {}
-        try { b.dispatchEvent(new PointerEvent("pointerup", pOpts)); } catch {}
-        try { b.dispatchEvent(new MouseEvent("mouseup", pOpts)); } catch {}
-        try { b.click(); } catch {}
-        try {
-          if (b.form && typeof b.form.requestSubmit === "function") b.form.requestSubmit(b);
-        } catch {}
-      }
+
+    const isSubmitted = () =>
+      (editorText().trim() === "" && !hasPendingAttachment()) ||
+      userCount() > usersBeforeSend ||
+      !!stopButton();
+
+    let submitted = false;
+    const b = sendButton();
+
+    // Primary submission path: click the send button once
+    if (b) {
+      if (typeof b.focus === "function") b.focus();
+      try { b.click(); } catch {}
+      submitted = await waitFor(isSubmitted, 1500);
+    }
+
+    // Fallback path 1: if button click did not trigger submit, try form requestSubmit
+    if (!submitted && b && b.form && typeof b.form.requestSubmit === "function") {
+      try { b.form.requestSubmit(b); } catch {}
+      submitted = await waitFor(isSubmitted, 1500);
+    }
+
+    // Fallback path 2: if still not submitted, dispatch Enter on the editor
+    if (!submitted) {
       const edTarget = visEd || targetEditor;
       if (edTarget) {
-        edTarget.focus();
+        if (typeof edTarget.focus === "function") edTarget.focus();
         try {
           edTarget.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          edTarget.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
           edTarget.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
         } catch {}
       }
-    } catch (error) {
-      throw new Error(`Meta AI send button failed: ${String(error && error.message || error)}`);
     }
-    const sent = await waitFor(() =>
-      (editorText().trim() === "" && !hasPendingAttachment()) ||
-      userCount() > usersBeforeSend ||
-      !!stopButton(),
-    10000);
+
+    const sent = await waitFor(isSubmitted, 10000);
     if (sent) _attachedImages = null;
     diag("meta.tas.sent", {
       sent,
