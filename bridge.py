@@ -762,6 +762,7 @@ async def run() -> None:
             ping_interval=20,
             ping_timeout=90,
         )
+        listening_msg = f"listening on ws://127.0.0.1:{PORT} and ws://[::1]:{PORT}"
     except Exception:
         server = await websockets.serve(
             bridge.handle_client,
@@ -772,8 +773,9 @@ async def run() -> None:
             ping_interval=20,
             ping_timeout=90,
         )
+        listening_msg = f"listening on ws://127.0.0.1:{PORT}"
     log(f"snapgent bridge v{BRIDGE_VERSION}")
-    log(f"listening on ws://127.0.0.1:{PORT} - load the extension and open a supported AI chat")
+    log(f"{listening_msg} - load the extension and open a supported AI chat")
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     async def _startup_then_monitor() -> None:

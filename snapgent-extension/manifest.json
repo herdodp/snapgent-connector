@@ -6,10 +6,10 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "snapgent@connector.local",
-      "strict_min_version": "109.0"
+      "strict_min_version": "128.0"
     }
   },
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://chat.deepseek.com/*",
     "https://deepseek.com/*",
@@ -34,6 +34,7 @@
     "extension_pages": "script-src 'self'; connect-src 'self' ws://127.0.0.1:17613 http://127.0.0.1:17613 ws://localhost:17613 http://localhost:17613;"
   },
   "background": {
+    "service_worker": "background.js",
     "scripts": ["core/guard.js", "background.js"]
   },
   "icons": {
@@ -60,6 +61,7 @@
     {
       "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
       "js": ["providers/chatgpt-cm.js"],
+      "world": "MAIN",
       "run_at": "document_start"
     },
     {
@@ -125,6 +127,7 @@
     {
       "matches": ["https://chat.qwen.ai/*"],
       "js": ["providers/qwen-net.js"],
+      "world": "MAIN",
       "run_at": "document_start"
     },
     {

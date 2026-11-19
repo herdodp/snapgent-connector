@@ -93,7 +93,10 @@ def _vscode_storage_paths() -> List[Path]:
         appdata = os.environ.get("APPDATA")
         if not appdata:
             return []
-        return [Path(appdata) / "Code" / "User" / "globalStorage" / "storage.json"]
+        return [
+            Path(appdata) / product / "User" / "globalStorage" / "storage.json"
+            for product in ("Code", "Code - Insiders", "VSCodium")
+        ]
 
     if sys.platform == "linux":
         config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -111,15 +114,9 @@ def _vscode_storage_paths() -> List[Path]:
 
 def get_root() -> Path:
     active = _vscode_active_folder()
-    if active is not None:
-        return active.resolve()
-
-    # Fallback to current working directory so the server is always functional
-    cwd = Path.cwd().resolve()
-    if cwd.is_dir():
-        return cwd
-
-    raise RuntimeError("Open a project folder in VS Code before using the VS Code MCP server.")
+    if active is None:
+        raise RuntimeError("Open a project folder in VS Code before using the VS Code MCP server.")
+    return active.resolve()
 
 
 def normalize_target(rel_or_abs: str, root: Path) -> Path:
