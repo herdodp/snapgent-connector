@@ -676,10 +676,30 @@ const ZSProvider = (() => {
     b.getAttribute("data-testid") === "stop-button" ||
     /\b(stop|interrompre|arrêter)\b/i.test(b.getAttribute("aria-label") || "")
   );
-  const submitButton = () => {
-    const b = document.querySelector(S.submitBtn);
-    return b && b.offsetParent !== null ? b : null;
-  };
+  // ChatGPT keeps a SECOND, zero-size copy of the composer form in the DOM and
+  // its submit control there ("Stop", aria-label matched by S.submitBtn) has a
+  // NON-NULL offsetParent. querySelector returned that ghost first, so
+  // sendButton() was always null: every send fell through to a synthetic Enter,
+  // which ProseMirror ignores unless the document has focus, leaving the tool
+  // result in the composer - send.typed 2745/2826 (only whitespace differs),
+  // four retries, send.failed, bar stuck on "Starting…". Measured live on
+  // chatgpt.com 2026-11-20 (Chrome 157): ghost form buttons 0x0, the real
+  // composer's control is aria-label="Send" (and "Start Voice" while empty,
+  // i.e. no submit control exists until the composer holds text).
+  // So: only laid-out controls count, and the visible composer's own form wins.
+  function pickSubmit(list, ed) {
+    const arr = [].slice.call(list || []);
+    if (!arr.length) return null;
+    const laidOut = arr.filter((b) => (b.getClientRects ? b.getClientRects().length > 0 : true));
+    if (!laidOut.length) return null;
+    const form = ed && ed.closest ? ed.closest("form") : null;
+    if (form) {
+      const own = laidOut.filter((b) => form.contains(b));
+      if (own.length) return own[0];
+    }
+    return laidOut[0];
+  }
+  const submitButton = () => pickSubmit(document.querySelectorAll(S.submitBtn), getEditor());
   const sendButton = () => {
     const b = submitButton();
     return b && !isStopBtn(b) ? b : null;
@@ -1021,6 +1041,18 @@ const ZSProvider = (() => {
   async function typeViaMain(ed, text) {
     if (!ed || !ed.isConnected) return null;
     const id = "zs" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    // The editor selector matches EVERY ProseMirror node ChatGPT has mounted, not
+    // just the live composer: a remount leaves the old one in the DOM at 0x0 while
+    // the new visible composer sits later in the list (measured live 2026-11-20:
+    // two matches, first hidden with 2745 chars, second 512x36 and empty). The
+    // main world used to resolve req.sel with document.querySelector - the FIRST
+    // match - so the text landed in the invisible node, this world's editorText()
+    // read the visible composer as empty, send.typed reported len:0/want:2826,
+    // the core burned all four retries and the bar sat on "Starting…". Send the
+    // index of the node we picked (getEditor is visible-first) so both worlds
+    // write into the SAME editor.
+    let idx = -1;
+    try { idx = [...document.querySelectorAll(S.editor)].indexOf(ed); } catch { idx = -1; }
     return await new Promise((resolve) => {
       let settled = false;
       const onDone = (ev) => {
@@ -1034,7 +1066,7 @@ const ZSProvider = (() => {
       document.addEventListener("zs-type-done", onDone, true);
       try {
         document.dispatchEvent(new CustomEvent("zs-type", {
-          detail: JSON.stringify({ id, text: String(text), sel: S.editor }),
+          detail: JSON.stringify({ id, text: String(text), sel: S.editor, idx }),
         }));
       } catch (e) {
         return resolve({ ok: false, len: 0, err: "dispatchFailed", path: "main" });

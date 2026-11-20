@@ -3274,7 +3274,15 @@
         const pendingExec = !stopped && !orphanPending && !live &&
           neverRun && item === P.lastAssistant() && Date.now() - A.lastGenAt <= RESUME_FRESH_MS;
         let phase = stopped ? "err" : (orphanPending ? "idle" : ((live || pendingExec) ? "run" : "done"));
-        let detail = stopped ? "stopped" : (orphanPending ? "not run" : "");
+        // A SUPERSEDED command (a newer command turn sits below it) was never a
+        // failure: the loop deliberately ran the later block instead. Painting it
+        // "not run" read as "the tool you asked for never ran" (user report
+        // 2026-11-20) when the truth is "this block was skipped because the reply
+        // went on to name another command". Keep the grey idle state, but say what
+        // happened. The genuinely dead case (stale LAST turn after a reload) keeps
+        // "not run": there the command really did never execute.
+        let detail = stopped ? "stopped"
+          : (staleLastOrphan ? "not run" : (supersededOrphan ? "skipped" : ""));
         // A DSML turn is the model calling a tool in its OWN markup, which can
         // never be executed - it always resolves to the "dsml" parse_error. So
         // once it has FINISHED streaming, "waiting to run" (spinner) and "not
