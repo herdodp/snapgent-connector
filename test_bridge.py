@@ -348,16 +348,67 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                             self.assertFalse(third.get("duplicate"))
                             self.assertEqual(len(calls), 2)
 
-                            # A client that states no turn is never answered from a
-                            # cache: intent unknown, so run the work again.
+                            # A client that states no turn cannot use the long cache,
+                            # but an identical call right after itself is a re-render
+                            # replay and must not become a second real execution.
                             no_turn = {k: v for k, v in payload.items() if k != "turn"}
                             await client.send(json.dumps({"id": 4, **no_turn}))
                             fourth = json.loads(await asyncio.wait_for(client.recv(), 5))
                             self.assertFalse(fourth.get("duplicate"))
                             await client.send(json.dumps({"id": 5, **no_turn}))
                             fifth = json.loads(await asyncio.wait_for(client.recv(), 5))
-                            self.assertFalse(fifth.get("duplicate"))
-                            self.assertEqual(len(calls), 4)
+                            self.assertTrue(fifth.get("duplicate"))
+                            self.assertEqual(len(calls), 3)
+                finally:
+                    await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_a_turnless_repeat_after_the_replay_window_runs_again(self):
+        # The turnless window is deliberately short: once it lapses, the same call
+        # is new work again (the bridge must not hide a genuine second request).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps({"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path), patch.object(
+                bridge, "TURNLESS_REPLAY_TTL", 0.05
+            ):
+                await manager.start_servers()
+                try:
+                    mock_server = manager.servers["mock"]
+                    calls = []
+                    original_call_tool = mock_server.call_tool
+
+                    async def counting_call_tool(tool_name, arguments, timeout):
+                        calls.append((tool_name, dict(arguments)))
+                        return await original_call_tool(tool_name, arguments, timeout)
+
+                    mock_server.call_tool = counting_call_tool
+                    async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                            await client.recv()  # initial "connected" message
+                            payload = {
+                                "type": "call_tool",
+                                "name": "echo",
+                                "arguments": {"message": "no turn here"},
+                                "timeout": 2000,
+                            }
+                            await client.send(json.dumps({"id": 1, **payload}))
+                            first = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(first.get("duplicate"))
+
+                            await asyncio.sleep(0.1)
+                            await client.send(json.dumps({"id": 2, **payload}))
+                            second = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(second.get("duplicate"))
+                            self.assertEqual(len(calls), 2)
                 finally:
                     await manager.stop_servers()
 

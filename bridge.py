@@ -184,6 +184,17 @@ BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
 # is never suppressed) and only within this window.
 DUPLICATE_CALL_TTL = 300.0
 
+# A caller that sends no turn id cannot be answered from the long cache: a repeat
+# may be deliberate new work, and only the caller knows. But a byte-identical call
+# that arrives seconds apart is a re-render replay, not a new request: the page
+# re-dispatches the same DOM chip, and an extension that predates the turn threading
+# (or the workspace probe, which never carries a turn) re-sends the identical call
+# over and over. Running that again multiplies turns in a long chat and is one of
+# the ways such a chat hits provider rate limits, so a turnless repeat is answered
+# from the previous result - but only inside this short window. After it, the call
+# is real work again, which keeps an intentional repeat honest.
+TURNLESS_REPLAY_TTL = 5.0
+
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(LOG_PATH),
@@ -859,24 +870,29 @@ class Bridge:
         # Deduplication is scoped to ONE logical call. The extension states which
         # turn the call belongs to ("turn": "<conversation>|<turn>"), so an identical
         # call in a later turn carries a different turn id and really runs - a
-        # legitimate repeat is never answered from a stale result. A client that
-        # sends no turn id is not answered from the cache at all: running the work
-        # again is the safe default when the intent is unknown. A caller that really
-        # wants the work redone sends "force": true, and two sockets are never
-        # answered from each other's results.
+        # legitimate repeat is never answered from a stale result. A caller that
+        # sends no turn id is honoured only inside TURNLESS_REPLAY_TTL: a byte-identical
+        # call seconds apart is a re-render replay, while the same call later is real
+        # work. A caller that really wants the work redone sends "force": true, and
+        # two sockets are never answered from each other's results.
         turn = request.get("turn")
         if isinstance(turn, str):
             turn = turn.strip() or None
         else:
             turn = None
         try:
-            sig = (
-                json.dumps({"n": name, "a": arguments, "t": turn}, sort_keys=True, ensure_ascii=False)
-                if turn
-                else None
-            )
+            if turn:
+                sig = json.dumps({"n": name, "a": arguments, "t": turn}, sort_keys=True, ensure_ascii=False)
+                replay_ttl = DUPLICATE_CALL_TTL
+            else:
+                # Turnless: identity is the bare call, honoured only for a few
+                # seconds (see TURNLESS_REPLAY_TTL) so a re-render replay is not
+                # turned into a second real execution.
+                sig = json.dumps({"n": name, "a": arguments}, sort_keys=True, ensure_ascii=False)
+                replay_ttl = TURNLESS_REPLAY_TTL
         except (TypeError, ValueError):
             sig = None
+            replay_ttl = DUPLICATE_CALL_TTL
         client_key = self._client_token(websocket)
         now = time.time()
         for stale_key in [k for k, v in self._last_calls.items() if now - v.get("at", 0) > DUPLICATE_CALL_TTL]:
@@ -887,7 +903,7 @@ class Bridge:
             and sig
             and last
             and last.get("sig") == sig
-            and now - last.get("at", 0) <= DUPLICATE_CALL_TTL
+            and now - last.get("at", 0) <= replay_ttl
         ):
             cached = dict(last.get("response") or {})
             if cached:
