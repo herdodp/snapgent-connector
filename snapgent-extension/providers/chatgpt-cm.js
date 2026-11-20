@@ -110,6 +110,30 @@
   // Protocol: "zs-type" (detail = JSON string) in, "zs-type-done" (detail = JSON
   // string) out, dispatched asynchronously because the DOM parse lands on the
   // next observer turn.
+  // Which node the composer selector actually means. ChatGPT remounts the
+  // ProseMirror composer on every turn and leaves the previous node in the DOM at
+  // 0x0, so the selector matches BOTH: measured live 2026-11-20, the first match
+  // was the stale hidden node (0x0) and the second the live composer (512x36).
+  // Resolving with document.querySelector typed into the invisible one: the
+  // content script's read-back saw an empty composer (send.typed len:0/want:2826),
+  // every retry failed and the bar stuck on "Starting…". Prefer the node the
+  // content script named by index when it is visible, otherwise the first VISIBLE
+  // match, and only then fall back to the raw index/first (a textarea composer,
+  // or a provider whose composer is not laid out yet).
+  function pickEditor(sel, idx) {
+    let list = [];
+    try { list = [...document.querySelectorAll(sel)]; } catch { list = []; }
+    if (!list.length) return null;
+    const visible = (e) => {
+      try { return e.isConnected !== false && e.getClientRects().length > 0; } catch { return false; }
+    };
+    const want = Number.isInteger(idx) && idx >= 0 && idx < list.length ? list[idx] : null;
+    if (want && visible(want)) return want;
+    const firstVisible = list.find(visible);
+    if (firstVisible) return firstVisible;
+    return want || list[0];
+  }
+
   document.addEventListener("zs-type", (ev) => {
     let req = null;
     try { req = JSON.parse(ev.detail || "{}"); } catch { return; }
@@ -120,7 +144,7 @@
         document.dispatchEvent(new CustomEvent("zs-type-done", { detail: JSON.stringify(out) }));
       } catch {}
     };
-    const ed = req.sel ? document.querySelector(req.sel) : null;
+    const ed = req.sel ? pickEditor(req.sel, req.idx) : null;
     if (!ed) { done({ id, ok: false, len: 0, want: text.length, err: "no editor", path: "main" }); return; }
     // PM keeps the authoritative doc on the view desc; innerText is the fallback.
     const read = () => {

@@ -729,3 +729,98 @@ ok("mobile textarea text can be read", P.editorText() === "");
   ok("typeAndSend logs when the composer never became ready",
     /diag\("send\.notReady"/.test(prov));
 }
+
+// ── The composer selector matches MORE than the live composer. ChatGPT leaves the
+// previous ProseMirror node in the DOM at 0x0 on every remount, so the list holds
+// a stale hidden node AND the visible one. The MAIN-world tap resolved req.sel with
+// document.querySelector - the FIRST match - and typed into the hidden node, so the
+// content script read the visible composer as empty (send.typed len:0/want:2826),
+// burned all four retries and left the bar on "Starting…". Measured live 2026-11-20
+// on chatgpt.com (Chrome 157): two matches, first 0x0 with 2745 chars, second
+// 512x36 and empty. Both worlds must agree on the node, and a superseded command
+// must not be labelled "not run" when the loop deliberately ran a later block.
+{
+  const prov = readSource("/providers/chatgpt.js");
+  const cm = readSource("/providers/chatgpt-cm.js");
+  const core = readSource("/core/main.js");
+
+  ok("the content script reports which editor it picked, not just the selector",
+    /detail: JSON\.stringify\(\{ id, text: String\(text\), sel: S\.editor, idx \}\)/.test(prov) &&
+    /\[\.\.\.document\.querySelectorAll\(S\.editor\)\]\.indexOf\(ed\)/.test(prov));
+  ok("the main world no longer resolves the selector to the first match",
+    /function pickEditor\(sel, idx\)/.test(cm) &&
+    !/document\.querySelector\(req\.sel\)/.test(cm) &&
+    /const ed = req\.sel \? pickEditor\(req\.sel, req\.idx\) : null;/.test(cm));
+
+  // Behaviour: run the real picker against the node lists the browser produces.
+  const pickSrc = (cm.match(/function pickEditor\(sel, idx\) \{[\s\S]*?\n  \}/) || [""])[0];
+  const node = (visible, text) => ({
+    isConnected: true,
+    textContent: text || "",
+    getClientRects: () => (visible ? [{}] : []),
+  });
+  const hiddenStale = node(false, "Output of 'list_commands': ...");
+  const liveEd = node(true, "");
+  const pickWith = (list) => {
+    try { return new Function("document", "return (" + pickSrc + ");")({ querySelectorAll: () => list }); }
+    catch { return null; }
+  };
+  const p1 = pickWith([hiddenStale, liveEd]);
+  ok("a stale hidden composer is never the node that gets typed into",
+    !!p1 && p1("#ed", -1) === liveEd && p1("#ed", undefined) === liveEd);
+  ok("the index the content script sent wins when it is the visible editor",
+    !!p1 && p1("#ed", 1) === liveEd);
+  ok("an index pointing at the hidden node still lands on the visible editor",
+    !!p1 && p1("#ed", 0) === liveEd);
+  const p2 = pickWith([hiddenStale, node(false, "")]);
+  ok("with no visible editor the index (then first match) is used",
+    !!p2 && p2("#ed", 1) !== hiddenStale && p2("#ed", 99) === hiddenStale);
+  ok("no editor at all stays a miss, so the caller keeps its `no editor` error",
+    !!p1 && p1("#ed", 0) !== null && pickWith([])("#ed", 0) === null);
+
+  ok("a superseded command is labelled skipped, not not-run",
+    /let detail = stopped \? "stopped"\s*\n\s*: \(staleLastOrphan \? "not run" : \(supersededOrphan \? "skipped" : ""\)\);/.test(core));
+}
+
+// ── The submit control lives in TWO forms. ChatGPT keeps a zero-size copy of the
+// composer form whose submit button ("Stop", matched by S.submitBtn) has a
+// non-null offsetParent, and querySelector returned it first - so sendButton() was
+// ALWAYS null, every send fell back to a synthetic Enter that ProseMirror ignores
+// without document focus, and the tool result stayed in the composer: send.typed
+// 2745/2826 (whitespace-only difference, so composerHolds passed), four retries,
+// send.failed, bar stuck on "Starting…". Measured live 2026-11-20 on Chrome 157:
+// the real control carries aria-label="Send" only while the composer holds text.
+{
+  const prov = readSource("/providers/chatgpt.js");
+  ok("the submit lookup no longer takes the first match in the document",
+    /function pickSubmit\(list, ed\)/.test(prov) &&
+    /const submitButton = \(\) => pickSubmit\(document\.querySelectorAll\(S\.submitBtn\), getEditor\(\)\);/.test(prov) &&
+    !/const b = document\.querySelector\(S\.submitBtn\);/.test(prov));
+
+  const pickSrc = (prov.match(/function pickSubmit\(list, ed\) \{[\s\S]*?\n  \}/) || [""])[0];
+  const btn = (aria, visible) => ({
+    aria,
+    getClientRects: () => (visible ? [{}] : []),
+    getAttribute: (n) => (n === "aria-label" ? aria : null),
+  });
+  const ghostStop = btn("Stop", false);
+  const liveSend = btn("Send", true);
+  const liveStop = btn("Stop", true);
+  const formOf = (members) => ({ contains: (b) => members.includes(b) });
+  const liveForm = formOf([liveSend, liveStop]);
+  const ed = { closest: (s) => (s === "form" ? liveForm : null) };
+  const pickWith = (list) => {
+    try { return new Function("return (" + pickSrc + ");")(); }
+    catch { return null; }
+  };
+  const pick = pickWith();
+  ok("a control that is not laid out never wins, even though its offsetParent is not null",
+    !!pick && pick([ghostStop, liveSend], ed) === liveSend);
+  const otherFormSend = btn("Send message", true);
+  ok("the visible composer's own form is preferred over another laid-out form",
+    !!pick && pick([otherFormSend, liveSend], ed) === liveSend);
+  ok("an empty composer exposes no submit control, so the ghost is still not used",
+    !!pick && pick([ghostStop], ed) === null);
+  ok("while generating, the visible Stop is what the widget reports",
+    !!pick && pick([ghostStop, liveStop], ed) === liveStop);
+}
