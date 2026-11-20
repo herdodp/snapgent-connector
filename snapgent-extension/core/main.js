@@ -4388,11 +4388,13 @@
         // re-entrant (status timer + DOM mutations + this block's own finally()),
         // so the probe could fire twice in a row and reach ~24 list_dir/min -
         // measured 29,280 probe calls in one day, which starved real tool calls
-        // and made the bridge look unreachable. Backoff grows after a failure and
-        // success resets it to the floor.
+        // and made the bridge look unreachable. The success floor is 120 s: a live
+        // probe log showed 788 list_dir results (592 of them this exact probe) in
+        // six hours, i.e. one probe every 30 s, all of them saying the same thing.
+        // Backoff grows after a failure and success resets it to the floor.
         const probeFloor = workspaceReady === false && workspaceProbeFails > 0
           ? Math.min(5000 * Math.pow(2, Math.min(workspaceProbeFails, 5)), 300000)
-          : 30000;
+          : 120000;
         if (selectedTargetId === "vscode" && serverConnected && !workspaceProbePending &&
             Date.now() - workspaceProbeAt >= probeFloor) {
           workspaceProbeAt = Date.now();
