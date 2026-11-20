@@ -824,3 +824,38 @@ ok("mobile textarea text can be read", P.editorText() === "");
   ok("while generating, the visible Stop is what the widget reports",
     !!pick && pick([ghostStop, liveStop], ed) === liveStop);
 }
+
+// ── Reopening an adopted conversation must still count as a snapgentV3 session.
+// Measured live 2026-11-20 (Chrome 157, chatgpt.com): ChatGPT's turn container
+// glues its chip label into the same textContent, so the caption arrives as
+// "list_commands · resultOutput of 'list_commands': …". domHasZsSignal() matched
+// the caption only at a line start, so every OLD snapgent chat read as
+// "No agent. Open a new chat." and the bar offered no way back in - while the
+// very same chat was startable again only by opening a fresh one and losing it.
+{
+  const core = readSource("/core/main.js");
+  ok("session-signal matching is a testable pure function",
+    /function isZsSignalText\(txt\) \{/.test(core) &&
+    /if \(isZsSignalText\(it\.textContent \|\| ""\)\) return true;/.test(core));
+  const fnSrc = (core.match(/function isZsSignalText\(txt\) \{[\s\S]*?\n  \}/) || [""])[0];
+  const ZS = { SYS_MARKER: "⟦ZS-SYS⟧" };
+  let sig = null;
+  try { sig = new Function("return (" + fnSrc + ");").call(null); } catch (e) { sig = null; }
+  // The extracted body references ZS from its closure; bind it explicitly.
+  const call = (t) => {
+    try { return new Function("ZS", "return (" + fnSrc + ");")(ZS)(t); } catch (e) { return null; }
+  };
+  ok("the chip label glued to the caption still marks a session",
+    call("list_commands · resultOutput of 'list_commands': vscode commands (28):") === true);
+  ok("the classic line-start caption still marks a session",
+    call("Output of 'run_command': ok") === true);
+  ok("the system-prompt marker still marks a session",
+    call(ZS.SYS_MARKER + "\noperating instructions") === true);
+  ok("the restated system note still marks a session",
+    call("(System note from snapgentV3 - an automatic re-statement)") === true);
+  ok("plain prose in a never-started chat is NOT a session",
+    call("Hitung 3 + 4, hasilnya 7.") === false);
+  ok("a quoted command shape alone is NOT a session",
+    call('Explain this format: {"command":"list_commands","params":{}}') === false);
+  ok("an empty turn is NOT a session", call("") === false);
+}

@@ -5476,15 +5476,33 @@
       }
     });
   } catch {}
+  // Does one turn's text carry a snapgentV3 artefact? Pure so a test can pin it;
+  // domHasZsSignal() applies it to every rendered turn.
+  function isZsSignalText(txt) {
+    if (!txt) return false;
+    if (txt.includes(ZS.SYS_MARKER)) return true;
+    // The injected result caption used to be matched only at a line start. But
+    // ChatGPT's 2026-11 turn container glues the chip label into the SAME
+    // textContent ("list_commands · resultOutput of 'list_commands': …"), so
+    // that anchored form missed EVERY adopted conversation: reopening an old
+    // snapgent chat showed "No agent. Open a new chat." and no way back in
+    // (measured live 2026-11-20). The caption is our own fabricated string, so
+    // match it wherever it sits - still NOT a bare command shape (see below).
+    if (/Output of '[^']+':/.test(txt)) return true;
+    if (txt.includes("(System note:")) return true;
+    // The restated-instructions rider is sent WITHOUT a colon after "note"
+    // (core/config.js: "(System note from snapgentV3 - this is an automatic…"),
+    // so the colon test alone never recognised that turn either.
+    if (txt.includes("(System note from snapgentV3")) return true;
+    return false;
+  }
   // A conversation IS a snapgentV3 session if any rendered turn carries a
   // telltale artefact: the system-prompt marker, an injected tool-result /
   // system-note turn, or a snapgentV3 command an assistant wrote. Works even
   // after a full cold start and regardless of scroll position.
   function domHasZsSignal() {
     for (const it of P.allItems()) {
-      const txt = it.textContent || "";
-      if (txt.includes(ZS.SYS_MARKER)) return true;
-      if (/(^|\n)\s*Output of '[^']+':/.test(txt) || txt.includes("(System note:")) return true;
+      if (isZsSignalText(it.textContent || "")) return true;
       // Deliberately NO bare command-shape test here. An assistant turn that
       // merely CONTAINS {"command":...} / ###LUA### is NOT proof of a session:
       // in a plain, never-started chat the model can simply EXPLAIN the format
