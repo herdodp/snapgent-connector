@@ -91,7 +91,7 @@ async function handleRuntimeMessage(msg) {
 // Only the main frame of an allow-listed provider host may talk to the bridge.
 const PROVIDER_HOSTS = new Set([
   "chat.deepseek.com", "chatgpt.com", "chat.openai.com", "claude.ai", "gemini.google.com",
-  "www.kimi.ai", "kimi.ai", "chat.z.ai", "chat.qwen.ai", "arena.ai", "www.meta.ai",
+  "www.kimi.ai", "kimi.ai", "chat.z.ai", "chat.qwen.ai", "coder.qwen.ai", "arena.ai", "www.meta.ai",
   "meta.ai", "ptero.pro", "grok.com", "chat.mistral.ai",
 ]);
 function trustedSender(e) {

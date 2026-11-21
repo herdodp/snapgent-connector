@@ -90,6 +90,7 @@
     { name: "Kimi", url: "https://www.kimi.ai/" },
     { name: "GLM", url: "https://chat.z.ai/" },
     { name: "Qwen", url: "https://chat.qwen.ai/" },
+    { name: "Qwen Coder", url: "https://coder.qwen.ai/" },
     { name: "Arena", url: "https://arena.ai/text/direct" },
     { name: "Meta AI", url: "https://www.meta.ai/" },
     { name: "Ptero", url: "https://ptero.pro/" },
@@ -139,7 +140,7 @@
     return backgroundSessions;
   }
 
-  let selectedTargetId = "vscode";
+  let selectedTargetId = "none";
   try {
     chrome.storage.local.get(TARGET_STORAGE_KEY, (result) => {
       const saved = result && result[TARGET_STORAGE_KEY];
@@ -987,7 +988,7 @@
   const TOOLS_TTL_MS = 30000;
 
   function activeTools() {
-    if (!isMcpEnabled(selectedTargetId)) return [];
+    if (selectedTargetId === "none" || !isMcpEnabled(selectedTargetId)) return [];
     return A.toolList.filter((tool) => (tool.server || "roblox") === selectedTargetId);
   }
 
@@ -1007,6 +1008,7 @@
   // writing"). A short TTL collapses those three calls into one, and the caller
   // keeps the catalogue it already has instead of stalling for a fresh one.
   async function ensureTools(force) {
+    if (selectedTargetId === "none") return [];
     if (!force && A.toolList.length && Date.now() - A.toolsAt < TOOLS_TTL_MS) {
       diag("tools.cached", { age: Date.now() - A.toolsAt, n: A.toolList.length });
       return A.toolList;
@@ -1027,6 +1029,9 @@
     const name = call.tool;
     const args = call.arguments || {};
     if (!name) return ZS.FEEDBACK.parseError("malformed");
+    if (selectedTargetId === "none") {
+      return `ERROR: no MCP target is selected, so '${name}' was not run. Do NOT retry. Ask the user to select an MCP target in the snapgentV3 bar first.`;
+    }
     // SCROLL-AWAY RULE (final choke point): while the user is scrolling up
     // through history nothing is executed - but the command is HELD, not
     // cancelled. It used to return "skipped: conversation scrolled up", which
@@ -1119,11 +1124,11 @@
       const lines = servers.length
         ? servers.map((sv) => {
             const label = sv.id === "vscode"
-              ? "VS Code (default target)"
+              ? "VS Code"
               : sv.id === "roblox" ? "Roblox Studio" : `${sv.id} (addon)`;
             return `- ${sv.id}: ${label} - ${sv.alive ? `${sv.tools || 0} commands available` : "offline (no tools)"}`;
           })
-        : ["- vscode: VS Code (default target) - unknown (bridge did not report server health)"];
+        : ["- vscode: VS Code - unknown (bridge did not report server health)"];
       return (
         `Output of 'list_mcp_servers':\n` +
         `Connected MCP servers (${lines.length}):\n${lines.join("\n")}\n` +
@@ -2375,6 +2380,10 @@
   // ════════════════════════════════════════════════════════════════════════
   async function startSession() {
     if (A.running || A.starting) return;
+    if (selectedTargetId === "none") {
+      ui.toast("Select an MCP target first.");
+      return;
+    }
     // "Start session" is allowed ONLY on a blank conversation. Opening an
     // EXISTING conversation must never trigger the bootstrap.
     if (!P.chatIsEmpty() && !A.started) {
@@ -3189,6 +3198,7 @@
           <button id="zs-stop" hidden>■ Stop</button>
           <div class="zs-target-wrap" title="Choose which MCP server receives commands">
             <select id="zs-target" aria-label="MCP target" hidden tabindex="-1">
+              <option value="none">None</option>
               <option value="vscode">VS Code</option>
               <option value="roblox">Roblox Studio</option>
             </select>
@@ -3217,7 +3227,7 @@
         // Switching is always allowed (even while a session is running).
         // After the new target is persisted, reload the page so the whole
         // extension restarts cleanly against the newly selected MCP server.
-        selectedTargetId = targetSelect.value || "vscode";
+        selectedTargetId = targetSelect.value || "none";
         const reloadPage = () => { try { location.reload(); } catch {} };
         try {
           chrome.storage.local.set({ [TARGET_STORAGE_KEY]: selectedTargetId }, reloadPage);
@@ -3366,6 +3376,7 @@
     }
 
     function getTargetName(id = selectedTargetId) {
+      if (id === "none") return "None";
       if (id === "roblox") return "Roblox Studio";
       if (id === "vscode") return "VS Code";
       if (id === "effectcraft") return "EffectCraft";
@@ -3378,13 +3389,14 @@
     function setTarget(id = selectedTargetId) {
       if (!targetSelect) return;
       const options = [
+        { id: "none", name: "None" },
         { id: "vscode", name: "VS Code" },
         { id: "roblox", name: "Roblox Studio" },
         { id: "effectcraft", name: "EffectCraft" },
         ...mergedMcpServers()
           .filter((server) => !["vscode", "roblox", "effectcraft"].includes(server.id))
           .map((server) => ({ id: server.id, name: getTargetName(server.id) })),
-      ].filter((option) => isMcpEnabled(option.id));
+      ].filter((option) => option.id === "none" || isMcpEnabled(option.id));
       if (!options.some((option) => option.id === id)) {
         options.push({ id, name: getTargetName(id) });
       }
@@ -3852,52 +3864,59 @@
         // which used to drop into the discouraging "No agent here" branch on a page
         // that is actually empty and startable. "No agent here" is only correct for
         // an EXISTING conversation (one that has turns) we did not start.
-        const selectedServer = (A.bridge.servers || []).find((item) => item.id === selectedTargetId);
-        const vscodeWorkspaceMissing = selectedTargetId === "vscode" &&
-          !!A.bridge.connected && !!selectedServer && !!selectedServer.alive &&
-          !(selectedServer.tools > 0);
-        if (selectedTargetId !== "roblox" &&
-            (!bridgeOk || (selectedTargetId === "vscode" && !workspaceReady))) {
-          toneClass = "warn"; warn = true;
-          msg = !A.bridge.connected
-            ? `Run <b>start.bat</b>`
-            : selectedTargetId === "vscode" && (bridgeOk || vscodeWorkspaceMissing)
-              ? workspaceProbePending
-                ? `Checking <b>VS Code workspace</b>…`
-                : `Open a <b>folder in VS Code</b>`
-              : `<b>${targetNameHtml()} unavailable</b>`;
-          label = `▶︎ Start`; kind = "start"; disabled = true;
-        } else if (bridgeOk && (selectedTargetId !== "vscode" || workspaceReady)) {
+        if (selectedTargetId === "none") {
           toneClass = "standby";
-          msg = `Ready.`;
-          label = `▶︎ Start`; kind = "start";
-        } else if (addonOk) {
-          // Roblox is down but another MCP server is live: allow a DEGRADED start
-          // (yellow). The agent runs on the other server(s); Roblox tools stay
-          // unavailable until Studio is back. Button enabled, but visibly warned.
-          toneClass = "warn"; warn = true;
-          msg = !A.bridge.connected
-            ? `Run <b>start.bat</b>`
-            : studioProcUp
-              ? `<b>Studio not connected</b>`
-              : `<b>Studio offline</b>`;
-          label = "▶︎ Start (offline)"; kind = "start-degraded";
+          msg = `No MCP target selected`;
+          label = `▶︎ Start`; kind = "start"; disabled = true;
+          actionBtn.title = "Select an MCP target first";
         } else {
-          toneClass = "warn"; warn = true;
-          msg = !A.bridge.connected
-            ? `Run <b>start.bat</b>`
-            : placeDown
-              ? `Open a <b>place</b> in Studio`
-              : (appDown || studioDown) && studioProcUp
-                ? `Studio not connected`
-                : appDown
-                  ? `Open <b>Studio</b>`
-                  : studioDown
+          const selectedServer = (A.bridge.servers || []).find((item) => item.id === selectedTargetId);
+          const vscodeWorkspaceMissing = selectedTargetId === "vscode" &&
+            !!A.bridge.connected && !!selectedServer && !!selectedServer.alive &&
+            !(selectedServer.tools > 0);
+          if (selectedTargetId !== "roblox" &&
+              (!bridgeOk || (selectedTargetId === "vscode" && !workspaceReady))) {
+            toneClass = "warn"; warn = true;
+            msg = !A.bridge.connected
+              ? `Run <b>start.bat</b>`
+              : selectedTargetId === "vscode" && (bridgeOk || vscodeWorkspaceMissing)
+                ? workspaceProbePending
+                  ? `Checking <b>VS Code workspace</b>…`
+                  : `Open a <b>folder in VS Code</b>`
+                : `<b>${targetNameHtml()} unavailable</b>`;
+            label = `▶︎ Start`; kind = "start"; disabled = true;
+          } else if (bridgeOk && (selectedTargetId !== "vscode" || workspaceReady)) {
+            toneClass = "standby";
+            msg = `Ready.`;
+            label = `▶︎ Start`; kind = "start";
+          } else if (addonOk) {
+            // Roblox is down but another MCP server is live: allow a DEGRADED start
+            // (yellow). The agent runs on the other server(s); Roblox tools stay
+            // unavailable until Studio is back. Button enabled, but visibly warned.
+            toneClass = "warn"; warn = true;
+            msg = !A.bridge.connected
+              ? `Run <b>start.bat</b>`
+              : studioProcUp
+                ? `<b>Studio not connected</b>`
+                : `<b>Studio offline</b>`;
+            label = "▶︎ Start (offline)"; kind = "start-degraded";
+          } else {
+            toneClass = "warn"; warn = true;
+            msg = !A.bridge.connected
+              ? `Run <b>start.bat</b>`
+              : placeDown
+                ? `Open a <b>place</b> in Studio`
+                : (appDown || studioDown) && studioProcUp
+                  ? `Studio not connected`
+                  : appDown
                     ? `Open <b>Studio</b>`
-                    : `Open <b>Studio</b>`;
-          label = `▶︎ Start`; kind = "start";
+                    : studioDown
+                      ? `Open <b>Studio</b>`
+                      : `Open <b>Studio</b>`;
+            label = `▶︎ Start`; kind = "start";
+          }
+          if (selectedTargetId === "roblox") disabled = !bridgeOk && !addonOk;
         }
-        if (selectedTargetId === "roblox") disabled = !bridgeOk && !addonOk;
       } else {
         toneClass = "noagent";
         msg = `No agent. Open a new chat.`;

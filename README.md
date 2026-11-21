@@ -10,7 +10,7 @@
 
 [![License](https://img.shields.io/badge/LICENSE-GPL--3.0-FACC15?style=flat-square&labelColor=111111&logo=opensourceinitiative&logoColor=FACC15)](LICENSE)
 [![Manifest](https://img.shields.io/badge/MANIFEST-V3-FACC15?style=flat-square&labelColor=111111&logo=googlechrome&logoColor=FACC15)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3/)
-[![Release](https://img.shields.io/badge/RELEASE-V3.9.12-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.12)
+[![Release](https://img.shields.io/badge/RELEASE-V3.9.13-FACC15?style=flat-square&labelColor=111111&logo=semanticrelease&logoColor=FACC15)](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.13)
 [![MCP](https://img.shields.io/badge/PROTOCOL-MCP-FACC15?style=flat-square&labelColor=111111&logo=modelcontextprotocol&logoColor=FACC15)](https://modelcontextprotocol.io/)
 
 </div>
@@ -47,7 +47,7 @@ snapgentV3 is a browser extension plus a local bridge that connects a normal AI 
 <td width="100%" valign="top">
 
 ### 💻 VS Code / VSCodium
-The default target. Automatically connects to the workspace currently open in VS Code, VSCodium, or Code - OSS.
+Supports VS Code, VSCodium, or Code - OSS. Choose a target in the snapgentV3 bar before starting; until then, Snapgent will not send commands to an MCP server.
 
 </td>
 </tr>
@@ -124,6 +124,7 @@ npm run dist     # build the Windows installer into dist/
 | **Mistral (Vibe Code)** | `chat.mistral.ai` | 🧪 Experimental | Requires signing in to Mistral; selectors need testing on the live site |
 | **GLM (Z.ai)** | `chat.z.ai` | ✅ Supported | |
 | **Qwen** | `chat.qwen.ai` | ✅ Supported | |
+| **Qwen Coder** | `coder.qwen.ai` | ✅ Supported | |
 | **Arena** | `arena.ai` | ✅ Supported | Use **Direct** mode |
 | **Meta AI** | `meta.ai` | ✅ Supported | |
 | **Ptero** | `ptero.pro` | ✅ Supported | |
@@ -146,7 +147,7 @@ npm run dist     # build the Windows installer into dist/
 
 **① Load the extension**
 
-1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.12) (or clone this repository).
+1. Download and extract the [latest SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.13) (or clone this repository).
 
 * **For Chrome / Edge / Brave / Chromium:**
   1. Open `chrome://extensions` (Chrome/Brave) or `edge://extensions` (Edge).
@@ -162,7 +163,7 @@ npm run dist     # build the Windows installer into dist/
 
 **② Set up the MCP target**
 
-For VS Code, open the project folder you want to work on before clicking **Start** in the chat bar. The bridge can be started before VS Code; the agent waits until a workspace is available and does not fall back to the Snapgent release folder.
+The MCP target starts as **None**. Choose the target in the chat bar before clicking **Start**. For VS Code, open the project folder you want to work on; the bridge can be started before VS Code, and the agent waits for a workspace instead of falling back to the Snapgent release folder.
 
 **③ Start the bridge**
 
@@ -281,12 +282,12 @@ Once a session is running, just talk to the AI normally:
 
 > "Add a search bar to the books page and wire it to the existing API."
 
-The AI sends commands, snapgentV3 runs them in the selected target (VS Code by default), and the results appear in chat. You can give the AI another instruction at any time.
+The AI sends commands, snapgentV3 runs them in the selected target, and the results appear in chat. No MCP target is selected until you choose one in the bar. You can give the AI another instruction at any time.
 
 **Tips**
 
 - Keep the bridge window open — closing it disconnects the agent.
-- Keep your intended project open in VS Code; it is the default MCP target.
+- Keep your intended project open in VS Code when VS Code is selected as the MCP target.
 - On **Arena**, use **Direct** mode.
 - If **Gemini** or **Kimi** stops using tools in a long session, remind it to use the snapgentV3 commands or start a new chat.
 
@@ -357,6 +358,6 @@ snapgent-full/
 
 **Built for creators who want to spend more time making.**
 
-[Latest release V3.9.12](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.12) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
+[Latest release V3.9.13](https://github.com/herdodp/snapgent-connector/releases/tag/V3.9.13) · [Issues](https://github.com/herdodp/snapgent-connector/issues) · [License](LICENSE)
 
 </div>

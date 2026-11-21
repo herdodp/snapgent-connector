@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 const EXT = path.join(__dirname, "..", "extension");
-const VERSION = "3.9.12";
+const VERSION = "3.9.13";
 
 // hostname -> provider file (mirrors manifest.json content_scripts)
 const PROVIDERS = {
@@ -21,6 +21,7 @@ const PROVIDERS = {
   "kimi.ai": "kimi",
   "chat.z.ai": "glm",
   "chat.qwen.ai": "qwen",
+  "coder.qwen.ai": "qwen-coder",
   "arena.ai": "arena",
   "www.meta.ai": "meta",
   "meta.ai": "meta",

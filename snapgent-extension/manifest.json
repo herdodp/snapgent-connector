@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "snapgentV3",
-  "version": "3.9.12",
-  "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Grok, Kimi, GLM, Qwen, Arena, Meta AI, Ptero or Mistral into a VS Code agent through a local bridge.",
+  "version": "3.9.13",
+  "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Grok, Kimi, GLM, Qwen, Qwen Coder, Arena, Meta AI, Ptero or Mistral into a VS Code agent through a local bridge.",
   "browser_specific_settings": {
     "gecko": {
       "id": "snapgent@connector.local",
@@ -21,6 +21,7 @@
     "https://kimi.ai/*",
     "https://chat.z.ai/*",
     "https://chat.qwen.ai/*",
+    "https://coder.qwen.ai/*",
     "https://arena.ai/*",
     "https://www.meta.ai/*",
     "https://meta.ai/*",
@@ -133,6 +134,12 @@
     {
       "matches": ["https://chat.qwen.ai/*"],
       "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/qwen.js", "core/main.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://coder.qwen.ai/*"],
+      "js": ["core/config.js", "core/antislop-data.js", "core/parser.js", "core/guard.js", "providers/qwen-coder.js", "core/main.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }

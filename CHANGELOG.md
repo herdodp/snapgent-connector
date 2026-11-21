@@ -2,6 +2,19 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.13] - 2026-11-21
+
+### Added
+- **Qwen Coder support.** `coder.qwen.ai` uses its own provider and composer selectors,
+  separate from Qwen Chat (`chat.qwen.ai`), in both the extension and desktop app.
+- **Safe initial MCP target.** Fresh installations start with **None** selected. The agent
+  does not load a tool catalogue or run MCP commands until the user chooses a target.
+  Existing saved target preferences are preserved.
+
+### Changed
+- Extension and Snapgent App versions bumped to **3.9.13**. The bridge is unchanged
+  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+
 ## [V3.9.12] - 2026-11-20
 
 ### Changed
