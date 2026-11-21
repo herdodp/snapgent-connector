@@ -386,21 +386,124 @@ const ZSProvider = (() => {
   // Yielding does not make the insert faster, it makes the page stay alive while
   // it happens - and lets the Stop button remain usable.
   const INSERT_CHUNK_LINES = 120;
-  async function setEditorText(ed, text) {
-    ed.focus();
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(ed);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    const lines = String(text).split("\n");
+  // Whitespace-insensitive fingerprint of a composer value. Quill turns every
+  // insertLineBreak into a soft <br> (and a hard newline into a fresh <p>), and
+  // neither contributes a "\n" to textContent - so a plain string compare can
+  // never confirm a multi-line insert. Comparing with all whitespace stripped
+  // still proves the actual characters landed, in order.
+  const settleText = (s) => String(s == null ? "" : s).replace(/\s+/g, "");
+  // Whether the text really landed must be MEASURED, not assumed: execCommand
+  // returns true and silently does nothing when the editable does not own focus.
+  // Validated live on Gemini's Start path: every insertText returned true while
+  // the composer stayed at length 0, no send (arrow_upward) button rendered, and
+  // Start sat on "Starting…" until the empty-response timeout.
+  //
+  // The editor node is RE-RESOLVED on every pass on purpose. Angular remounts
+  // the composer (Quill re-init) while a session starts, so the handle captured
+  // a moment earlier is detached - and a detached element can never become
+  // document.activeElement, so focus() and the insert that follows are both
+  // silent no-ops even though the page looks perfectly normal. Same failure
+  // class as ChatGPT's ProseMirror remount described in core/main.js.
+  const editorUsable = (e) => !!e && e.isConnected !== false && e.offsetParent !== null;
+  const focusEditor = async (fallbackEl, timeoutMs = 2500) => {
     const t0 = Date.now();
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i]) document.execCommand("insertText", false, lines[i]);
-      if (i < lines.length - 1) document.execCommand("insertLineBreak");
-      if (i && i % INSERT_CHUNK_LINES === 0) await sleep(0);
+    let n = 0;
+    let ed = getEditor() || fallbackEl;
+    while (Date.now() - t0 < timeoutMs) {
+      const live = getEditor();
+      if (editorUsable(live)) ed = live;
+      if (editorUsable(ed)) {
+        if (document.activeElement === ed) return ed;
+        // Blur whatever holds focus (Gemini parks it on <body> while the page is
+        // still hydrating) and then take it.
+        try {
+          const a = document.activeElement;
+          if (a && a !== ed && typeof a.blur === "function") a.blur();
+        } catch {}
+        try { ed.focus({ preventScroll: true }); } catch { try { ed.focus(); } catch {} }
+        if (document.activeElement === ed) return ed;
+        // focus() is not always enough: Quill hands the caret to its own text
+        // node only after a pointer gesture, so every other pass replays a real
+        // click sequence on the editor before focusing again.
+        if (n % 2) {
+          try {
+            const r = ed.getBoundingClientRect();
+            const o = {
+              bubbles: true, cancelable: true, button: 0,
+              clientX: r.left + 12, clientY: r.top + Math.max(8, r.height / 2),
+            };
+            ed.dispatchEvent(new MouseEvent("mousedown", o));
+            ed.dispatchEvent(new MouseEvent("mouseup", o));
+            ed.dispatchEvent(new MouseEvent("click", o));
+            ed.focus({ preventScroll: true });
+          } catch {}
+          if (document.activeElement === ed) return ed;
+        }
+      }
+      n++;
+      await sleep(50);
     }
-    if (lines.length > INSERT_CHUNK_LINES) diag("send.insertDone", { lines: lines.length, ms: Date.now() - t0 });
+    return null;
+  };
+
+  // Last resort when focus cannot be taken at all: write the value straight into
+  // the DOM and announce it. Gemini's Quill mirrors external DOM edits and emits
+  // text-change, so the composer registers the text and the send button appears
+  // (validated live in the extension's isolated world). innerHTML is blocked by
+  // the page's Trusted Types policy - build nodes instead.
+  function setEditorTextDom(ed, text) {
+    const lines = String(text).split("\n");
+    const frag = document.createDocumentFragment();
+    for (const line of lines) {
+      const p = document.createElement("p");
+      if (line) p.textContent = line;
+      else p.appendChild(document.createElement("br"));
+      frag.appendChild(p);
+    }
+    if (typeof ed.replaceChildren === "function") ed.replaceChildren(frag);
+    else { while (ed.firstChild) ed.removeChild(ed.firstChild); ed.appendChild(frag); }
+    const data = String(text);
+    ed.dispatchEvent(new InputEvent("beforeinput", {
+      bubbles: true, cancelable: true, inputType: "insertText", data,
+    }));
+    ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data }));
+    ed.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Returns true only when the editor verifiably holds `text`.
+  async function setEditorText(fallbackEl, text) {
+    let ed = await focusEditor(fallbackEl);
+    if (!ed) {
+      // No focus anywhere: fall back to the DOM write rather than reporting a
+      // failure that leaves Start stuck (it is also the only path that works in
+      // some isolated-world/CSP combinations).
+      const live = getEditor();
+      if (!editorUsable(live)) return false;
+      diag("send.domInsert", {});
+      setEditorTextDom(live, text);
+      ed = live;
+    } else {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ed);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      const lines = String(text).split("\n");
+      const t0 = Date.now();
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i]) document.execCommand("insertText", false, lines[i]);
+        if (i < lines.length - 1) document.execCommand("insertLineBreak");
+        if (i && i % INSERT_CHUNK_LINES === 0) await sleep(0);
+      }
+      if (lines.length > INSERT_CHUNK_LINES) diag("send.insertDone", { lines: lines.length, ms: Date.now() - t0 });
+    }
+    const want = settleText(text);
+    const got = settleText(editorText());
+    // An all-whitespace payload has no fingerprint; the only honest check is
+    // that the editor is no longer empty.
+    const ok = want ? got === want : got.length > 0;
+    if (!ok) diag("send.insertMiss", { focused: !!ed, want: want.length, got: got.length });
+    return ok;
   }
 
   async function typeAndSend(text, images) {
@@ -421,7 +524,23 @@ const ZSProvider = (() => {
       // calls with 3 different files, and the model's replies stayed generic
       // - it never got one coherent image). So: only retype if the text isn't
       // already there, and only attach if nothing is pending yet.
-      if (editorText() !== text) await setEditorText(ed, text);
+      if (editorText() !== text) {
+        if ((await setEditorText(ed, text)) === false) {
+          // One cheap self-retry: a modal/cover can hold focus for a beat while
+          // the composer mounts. A verified insert costs ~10ms once the editor
+          // really owns focus, which is far cheaper than a core-level send
+          // retry (1s sleep + jitter).
+          diag("send.insertRetry", {});
+          await sleep(150);
+          if ((await setEditorText(ed, text)) === false) {
+            diag("send.emptyComposer", { why: "insert no-op" });
+            // Report the failure instead of leaving an empty composer behind:
+            // submitAndGetBase treats an empty editor as "sent and cleared", the
+            // false positive that stranded Start on "Starting…" for minutes.
+            return false;
+          }
+        }
+      }
       const hasPendingAttachment = () => {
         const box = document.querySelector(S.inputArea);
         return !!(box && box.querySelector("[class*='preview'], [class*='thumbnail']"));
@@ -446,16 +565,20 @@ const ZSProvider = (() => {
       // cleared is safe: the editor is either empty or holds our own text.
       if (!sendButton() && editorText() !== text) {
         diag("send.retype", {});
-        await setEditorText(ed, text);
+        if ((await setEditorText(ed, text)) === false) {
+          diag("send.emptyComposer", { why: "retype no-op" });
+          return false;
+        }
         await waitFor(() => !!sendButton(), 2000);
       }
       const btn = sendButton();
       diag("send.click", { found: !!btn, pending: hasPendingAttachment() });
-      if (btn) { btn.click(); return; }
+      if (btn) { btn.click(); return true; }
       // Fallback: Enter sends in Gemini's composer.
       const o = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
       ed.dispatchEvent(new KeyboardEvent("keydown", o));
       ed.dispatchEvent(new KeyboardEvent("keyup", o));
+      return true;
     } finally {
       if (relock) { const e2 = getEditor(); if (e2) e2.setAttribute("contenteditable", "false"); }
     }
