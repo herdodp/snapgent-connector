@@ -170,7 +170,7 @@ es.onmessage=()=>{};
 poll(); setInterval(poll,1000);
 </script></body></html>"""
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.12"
+BRIDGE_VERSION = "3.9.13"
 MAX_LOG_CHARS = 1000
 MAX_CONCURRENT_REQUESTS = 32
 BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
