@@ -158,7 +158,7 @@ npm run dist     # build the Windows installer into dist/
 * **For Mozilla Firefox:**
   1. Open a new tab and go to `about:debugging#/runtime/this-firefox`.
   2. Under **Temporary Extensions**, click **Load Temporary Add-on...**
-  3. Select the `snapgent-extension/manifest.json` file.
+  3. Navigate into the `snapgent-extension` folder and select the `manifest.json` file (unlike Chromium browsers which select the folder, Firefox requires choosing a file inside the extension).
   4. The snapgentV3 icon appears in your toolbar and connects to the bridge automatically.
 
 **② Set up the MCP target**
