@@ -98,6 +98,10 @@
     { name: "Mistral", url: "https://chat.mistral.ai/code" },
   ];
   const TARGET_STORAGE_KEY = "zsSelectedMcpTarget";
+  // Collapsed-status preference: the floating status card can be hidden, leaving
+  // a small round blue button that brings it back. Persisted so a reload keeps
+  // the user's choice instead of forcing the card back.
+  const HUD_HIDDEN_KEY = "zsHudHidden";
 
   // ── Background (multi-tab) sessions ─────────────────────────────────────
   // By default a session PARKS while its tab is hidden (see waitVisible): a
@@ -140,6 +144,35 @@
     return backgroundSessions;
   }
 
+  // Opt-in: execute a command block that turns up in an assistant reply while the
+  // loop is idle. Replies written from the ChatGPT mobile app arrive through the
+  // server-side conversation sync, so they never pass through the loop's "wait
+  // for the reply I just sent" path and used to be read as plain text.
+  const REMOTE_COMMANDS_KEY = "zsRemoteCommands";
+  let remoteCommands = false;
+  // Watchers that only need to work while the opt-in is on register here, so
+  // turning the toggle off also stops their timers instead of leaving a poll
+  // running for the life of the page.
+  const remoteCommandListeners = [];
+  function applyRemoteCommands(on) {
+    remoteCommands = on === true;
+    for (const fn of remoteCommandListeners) {
+      try { fn(remoteCommands); } catch (error) { console.warn("[snapgentV3] remote-command listener failed:", error); }
+    }
+    return remoteCommands;
+  }
+  try {
+    chrome.storage.local.get(REMOTE_COMMANDS_KEY, (result) => {
+      if (result && result[REMOTE_COMMANDS_KEY] === true) applyRemoteCommands(true);
+    });
+  } catch (error) {
+    console.warn("[snapgentV3] Could not load remote-command setting:", error);
+  }
+  function setRemoteCommands(on) {
+    const value = applyRemoteCommands(on);
+    try { chrome.storage.local.set({ [REMOTE_COMMANDS_KEY]: value }); } catch {}
+    return value;
+  }
   let selectedTargetId = "none";
   try {
     chrome.storage.local.get(TARGET_STORAGE_KEY, (result) => {
@@ -230,6 +263,14 @@
     toolName: "",
     toolItem: null,
     toolArg: "",
+    // Per-run stats for the chip ("what did it do · ~N tok · 1.4s"). tokIn is the
+    // streamed command text (what the model sent, sampled live as it streams);
+    // chars/ms are measured around the bridge call itself. Advisory only: a
+    // missing value just shortens the detail line.
+    toolTokIn: 0,
+    toolChars: 0,
+    toolMs: 0,
+    genTok: 0,
     toolList: [],
     toolNames: new Set(),
     // Successful tool calls since the last command-list reminder. DeepSeek (and
@@ -391,7 +432,21 @@
         }
         await jitterBeforeSend();
         diag("submit.typeAndSend", { hasImages: !!(images && images.length) });
-        await P.typeAndSend(text, images);
+        const typed = await P.typeAndSend(text, images);
+        // The provider returns false when it could not get the text into the
+        // composer at all (ChatGPT replaces the ProseMirror node on every
+        // remount, so an editor handle captured a moment earlier is detached
+        // and execCommand silently no-ops). The composer then reads EMPTY,
+        // which the gate below used to count as "sent and cleared" - that is
+        // the false positive that stranded Start on "Starting…" for minutes
+        // with zero turns. Retry the send instead of believing it went out.
+        if (typed === false) {
+          diag("send.emptyComposer", { tries });
+          tries++;
+          await sleep(250 + tries * 250);
+          if (A.stop) break;
+          continue;
+        }
         // Re-arm the pre-hide window NOW that typeAndSend has returned (the send
         // was just clicked, so our result turn is about to render). The initial
         // arm above can EXPIRE during an image upload - typeAndSend blocks ~3-6s
@@ -1025,9 +1080,13 @@
     return A.toolList;
   }
 
-  async function runTool(call) {
+  async function runTool(call, turn) {
     const name = call.tool;
     const args = call.arguments || {};
+    // The bridge dedupes a re-rendered turn against the result it already produced,
+    // so it needs to know WHICH turn this call belongs to: the same call in a later
+    // turn is a legitimate repeat and must run for real.
+    const turnKeyForCache = typeof turn === "string" && turn ? turn : undefined;
     if (!name) return ZS.FEEDBACK.parseError("malformed");
     if (selectedTargetId === "none") {
       return `ERROR: no MCP target is selected, so '${name}' was not run. Do NOT retry. Ask the user to select an MCP target in the snapgentV3 bar first.`;
@@ -1257,8 +1316,36 @@
     const stopWatch = new Promise((res) => {
       stopTimer = setInterval(() => { if (A.stop) res({ ok: false, kind: "stopped" }); }, 150);
     });
-    let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }), hardCap, stopWatch]);
+    // Publish "still loading" frames while the bridge works. A long tool (a package
+    // build, a big search) used to be completely invisible until it finished; now
+    // `GET http://127.0.0.1:<PORT+1>/events` on the bridge streams these so the run
+    // is observable while it happens. Advisory only: never awaited, never fatal.
+    const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const loadingAt = Date.now();
+    const loadingTick = setInterval(() => {
+      bg({
+        type: "stream",
+        // tok = the streamed command's token estimate so the bridge live view can
+        // show "how much the model wrote" while the tool itself is still running.
+        frame: { phase: "tool_loading", tool: name, id: callId, ms: Date.now() - loadingAt, tok: A.genTok || 0 },
+      }).catch(() => {});
+    }, 1000);
+    bg({ type: "stream", frame: { phase: "tool_start", tool: name, id: callId, tok: A.genTok || 0 } }).catch(() => {});
+    let r = await Promise.race([bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId, turn: turnKeyForCache }), hardCap, stopWatch]);
+    clearInterval(loadingTick);
     clearInterval(stopTimer);
+    bg({
+      type: "stream",
+      frame: {
+        phase: "tool_end", tool: name, id: callId, ms: Date.now() - loadingAt,
+        ok: !!r && r.ok !== false,
+        // Result size + token estimate, so the bridge view answers "how many
+        // tokens did this call get" without reading the tool output.
+        chars: (r && r.text ? r.text.length : 0),
+        tok: Math.floor((r && r.text ? r.text.length : 0) / 4),
+        tokIn: A.genTok || 0,
+      },
+    }).catch(() => {});
     if (r && r.kind === "stopped") return "(stopped by user)";
     if (!r) return ZS.FEEDBACK.bridgeOffline;
     // The MCP server answers SUCCESSFULLY (ok:true) when no Studio is attached
@@ -1348,7 +1435,7 @@
       diag("bridge.disconnectedRetry", { name });
       await new Promise((res) => setTimeout(res, 1200));
       const retry = await Promise.race([
-        bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId }),
+        bg({ type: "call_tool", name, arguments: args, timeout, server: selectedTargetId, turn: turnKeyForCache }),
         hardCap,
       ]);
       // The retry itself has to be judged by the same rule. A second attempt
@@ -1673,6 +1760,14 @@
           //     the auto-resume watchdog refuses to re-fire an "executed" turn.
           // Parking first keeps all of that truthful: we only commit once we are
           // foreground and about to really dispatch.
+          // Replay guard: this EXACT call already ran in this turn (same tool,
+          // same canonical arguments). Re-running it cannot produce new
+          // information - it only spams the bridge and the transcript. Checked
+          // before the park so a hidden tab does not queue a duplicate either.
+          if (executedCalls.has(turnKey(res.item), call)) {
+            diag("tool.skip.duplicateCall", { name: call.tool });
+            break;
+          }
           if (document.hidden && !A.stop) {
             diag("tool.parkBeforeDispatch", { name: call.tool });
             if (!(await waitVisible()) || A.stop) break;
@@ -1685,13 +1780,25 @@
           A.toolName = call.tool;
           A.toolItem = res.item;
           A.toolArg = argSummary(call);
+          // Stats for this run: the command text has already been sampled while it
+          // streamed (A.genTok), and the call's own timing starts now. Reset the
+          // result side so a re-own cannot inherit the PREVIOUS call's numbers.
+          A.toolTokIn = A.genTok || 0;
+          A.toolChars = 0;
+          A.toolMs = 0;
           // Record this turn as dispatched OFF the DOM so the auto-resume
           // watchdog never re-fires it after a scroll re-render wipes the node's
           // zloop/zResume markers (see the `executed` map).
           rememberExecuted(res.item);
+          executedCalls.remember(turnKey(res.item), call);
           diag("tool.start", { name: call.tool });
-          const feedback = await runTool(call);
+          const feedback = await runTool(call, `${P.conversationKey()}|${turnKey(res.item)}`);
           A.toolRunning = false;
+          // Measured once, here, so the chip and the bridge frames agree. The
+          // result size is the honest "how many tokens did it get" proxy (no
+          // tokenizer in the extension; labelled "~" everywhere it is shown).
+          A.toolChars = (feedback || "").length;
+          A.toolMs = A.toolStart ? Date.now() - A.toolStart : 0;
           diag("tool.done", { name: call.tool, ok: !feedback.startsWith("ERROR"), out: feedback.slice(0, 50) });
           if (A.stop) {
             // User halted mid-tool: settle the spinning chip so it doesn't look
@@ -1722,7 +1829,13 @@
           const hasImages = !!(A.pendingImages && A.pendingImages.length);
           if (hasImages) rememberImageTool(call.tool);
           const resultCat = hasImages ? "screen" : category;
-          decorate.toolBox(res.item, call.tool, isErr ? "err" : "done", outSummary(feedback),
+          // Settle detail = what it did (summary) + how much came back + how long
+          // it took. Kept in ONE string so the re-own path (A.toolSettle.detail)
+          // restores the exact same chip after a DOM swap.
+          const runStats = ZSGuard.formatRunStats({ chars: A.toolChars, ms: A.toolMs, tokIn: A.toolTokIn });
+          const doneSummary = outSummary(feedback);
+          const doneDetail = runStats ? (doneSummary ? `${doneSummary} · ${runStats}` : runStats) : doneSummary;
+          decorate.toolBox(res.item, call.tool, isErr ? "err" : "done", doneDetail,
             true, outBody, resultCat);
           // Snapshot the settled outcome. If the site swaps this turn's DOM node
           // while we wait for the model's next turn (wiping the chip AND the
@@ -1730,7 +1843,7 @@
           // outcome instead of letting branch-3 classification re-spin a "run"
           // chip on an already-executed call.
           A.toolSettle = {
-            phase: isErr ? "err" : "done", detail: outSummary(feedback),
+            phase: isErr ? "err" : "done", detail: doneDetail,
             body: outBody, category: resultCat, count: P.assistantCount(),
             // Node IDENTITY of the settled turn (virtualization-proof), when the
             // provider exposes it. The count guard alone misfires on Qwen: the
@@ -1875,6 +1988,12 @@
   // re-execution IDEMPOTENT regardless of any isGenerating/lastGenAt heuristic
   // misfire - the hard part (is this a live turn?) can be wrong without harm.
   const executed = new Map(); // "conv|turnKey" → text prefix at dispatch time
+  // Per-CALL replay guard. The map above keys on a text prefix, which the site
+  // invalidates whenever it re-renders the answer after a result lands - the
+  // reason one identical `list_dir` ran again every 30s for 20 minutes. Keyed on
+  // (turn, tool, canonical args) a call can only run once per turn. See
+  // ZSGuard.createCallMemory (and test-guard.js) for the rule itself.
+  const executedCalls = ZSGuard.createCallMemory({ limit: 64 });
   // ── Scroll-away suppression ───────────────────────────────────────────────
   // The user's own rule, requested after the replay bug: while they scroll UP
   // through history, nothing about the agent may look alive. Scrolling a
@@ -2471,7 +2590,10 @@
       if (startRes.kind === "tool" && startRes.calls && startRes.calls.length === 1 &&
           (firstName === "list_commands" || firstName === "list_tools")) {
         decorate.toolBox(startRes.item, "Loading commands", "run", "", true);
-        const toolFeedback = await runTool(startRes.calls[0]);
+        const toolFeedback = await runTool(
+          startRes.calls[0],
+          startRes.item ? `${P.conversationKey()}|${turnKey(startRes.item)}` : undefined
+        );
         // Roblox down short-circuits list_commands into a plain "offline" note
         // (main.js, list_commands handler) instead of the real catalogue - detect
         // that and show it as such, rather than the STALE cached tool count below
@@ -2580,15 +2702,73 @@
     const chip = item.querySelector(".zs-chip");
     if (chip) chip.remove();
     item.classList.remove("zs-hidden");
+    item.querySelectorAll(".zs-hidden-part").forEach((e) => e.classList.remove("zs-hidden-part"));
     item.querySelectorAll(".zs-tool-hide").forEach((e) => e.classList.remove("zs-tool-hide"));
     item.querySelectorAll(".zs-cmd-mask").forEach((e) => e.classList.remove("zs-cmd-mask"));
     delete item.dataset.zs;
     delete item.dataset.zsig;
     delete item.dataset.zphase;
     delete item.dataset.zStopped;
+    delete item.dataset.zargs;
+    delete item.dataset.zopen;
+    delete item.dataset.zanim;
+    delete item.dataset.zdurfinal;
     delete item.dataset.zRegenLen;
     delete item.dataset.zRegenAt;
     delete item.__zsChip;
+  }
+
+  // A chip may only be painted on a TURN node. Sites virtualize: they detach
+  // and recycle turn nodes, and a chip whose turn was torn down has been seen
+  // surviving as a DIRECT CHILD OF <main> - measured live 2026-11-18, a "run"
+  // card parked at the very top of the transcript, overlapping ChatGPT's chat
+  // header while its elapsed time kept climbing forever. A container of turns
+  // (or the app shell itself) is never a valid host: refuse to mount there and
+  // strip any chip that already slipped out.
+  function isTurnHost(el) {
+    if (!el || !el.tagName) return false;
+    if (el === document.body || el === document.documentElement) return false;
+    if (el.tagName === "MAIN") return false;
+    const sel = (P && P.msgSel) || "";
+    if (!sel) return true;
+    try {
+      // The host a provider hands us is either the turn itself or a block
+      // INSIDE it; both are fine. Only a node that is neither - and that holds
+      // several turns - is a container the chip must never be pinned to.
+      if (el.matches(sel) || el.closest(sel)) return true;
+      if (el.querySelectorAll(sel).length > 2) return false;
+    } catch {}
+    return true;
+  }
+
+  // Injections live in a container that, on ChatGPT's 2026-11 layout, ALSO
+  // holds the answer the model wrote. Masking the container therefore hid the
+  // answer (chips with no narration between them). A provider can name the
+  // exact subtree holding the injected text; everything else stays visible.
+  function injectedHidePart(item) {
+    try {
+      return item && (P.injectedHideNode ? P.injectedHideNode(item) : null);
+    } catch { return null; }
+  }
+  function hideInjectedWhole(item) {
+    const part = injectedHidePart(item);
+    if (part) {
+      item.classList.remove("zs-hidden");
+      part.classList.add("zs-hidden-part");
+      return;
+    }
+    item.classList.add("zs-hidden");
+  }
+  function unhideInjectedWhole(item) {
+    const part = injectedHidePart(item);
+    if (part) part.classList.remove("zs-hidden-part");
+    item.classList.remove("zs-hidden");
+  }
+  function injectedWholeHidden(item) {
+    if (item.classList.contains("zs-hidden")) return true;
+    const part = injectedHidePart(item);
+    if (part && part.classList.contains("zs-hidden-part")) return true;
+    return !!item.querySelector(".zs-hidden-part");
   }
 
   const decorate = {
@@ -2597,43 +2777,149 @@
       const { label, detail = "", body = "", category = "tool", phase, cls, whole } = opts;
       let chip = item.querySelector(".zs-chip");
       const hasBody = !!body;
-      // While a command streams, the site re-renders the raw block on every token
-      // and we get called on nearly every sweep. If what we'd draw is identical,
-      // we must NOT rebuild the chip's innerHTML: doing so re-creates the
-      // <span class="zs-spin"> and restarts its CSS animation each time, so the
-      // spinner looks frozen / stutters ("retry en rafale"). Rebuild the inner
-      // markup ONLY when the rendered content actually changes; otherwise reuse
-      // the existing element (and keep its expand/collapse state) so the spinner
-      // keeps spinning smoothly. Re-anchoring + masking below still run each pass.
-      const sig = `${category}|${phase}|${cls || ""}|${whole ? 1 : 0}|${label}|${detail}|${hasBody ? body.length : 0}`;
+      // The sweep calls us on nearly every DOM mutation, and the detail string
+      // changes character by character while a command streams. Rebuilding
+      // innerHTML on every one of those re-created the spinner and the state
+      // icon ~4x/s: the ring restarted (a visible BLINK), the icon-pop animation
+      // never reached its end so a FINISHED card showed no icon at all
+      // (measured 2026-11-18: done chip's svg stuck at opacity:0 inside
+      // zs-icon-pop), and a card the user had expanded lost its `open` class on
+      // the next pass. Build the shell ONCE, then patch icon/label/detail in
+      // place and carry the open state across every repaint.
+      if (!isTurnHost(item)) {
+        // Detached/recycled turn (or the app shell): never paint a chip here.
+        if (chip && chip.parentElement === item) chip.remove();
+        return null;
+      }
       if (!chip) chip = document.createElement("div");
-      if (chip.dataset.csig !== sig) {
-        chip.dataset.csig = sig;
-        chip.className = `zs-chip cat-${category} ${cls || ""}`;
+      // Open state outlives the NODE: ChatGPT/React replaces the turn's subtree
+      // on unrelated updates, our chip element is re-created (chipGone), and the
+      // fresh node has no `open` class - a card the user had just expanded
+      // snapped shut ~1s later ("pas diklik ga mau kebuka", 2026-11-18). The
+      // turn element (and its dataset) survives that churn, so the user's
+      // decision is mirrored there and re-applied to every rebuilt chip.
+      const wasOpen = chip.classList.contains("open") || item.dataset.zopen === "1";
+      const keepEnter = chip.classList.contains("zs-chip-enter");
+      const wantCls = `zs-chip cat-${category} ${cls || ""}${wasOpen ? " open" : ""}${keepEnter ? " zs-chip-enter" : ""}`;
+      if (chip.className.trim() !== wantCls.trim()) chip.className = wantCls;
+
+      let head = chip.querySelector(".zs-chip-head");
+      if (!head) {
         chip.innerHTML =
           `<div class="zs-chip-head">` +
-            `<span class="zs-chip-ic">${iconFor(category, phase)}</span>` +
+            `<span class="zs-chip-ic"></span>` +
             `<span class="zs-chip-tx"></span>` +
             `<span class="zs-chip-dt"></span>` +
-            (hasBody ? `<span class="zs-chip-cv">${SVG('<polyline points="6 9 12 15 18 9"/>')}</span>` : "") +
-          `</div>` +
-          (hasBody ? `<div class="zs-chip-body"><pre></pre></div>` : "");
-        chip.querySelector(".zs-chip-tx").textContent = label;
-        if (detail) chip.querySelector(".zs-chip-dt").textContent = detail;
-        if (hasBody) {
-          chip.querySelector(".zs-chip-body pre").textContent = body;
-          const head = chip.querySelector(".zs-chip-head");
-          head.style.cursor = "pointer";
-          head.onclick = () => chip.classList.toggle("open");
+          `</div>`;
+        head = chip.querySelector(".zs-chip-head");
+        head.style.cursor = "pointer";
+        // Delegated once: the handler used to be re-bound on every innerHTML
+        // rebuild, and the rebuild also wiped `open`, so a click looked dead.
+        head.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const openNow = chip.classList.toggle("open");
+          if (openNow) item.dataset.zopen = "1";
+          else delete item.dataset.zopen;
+        });
+      }
+      // Chevron exists only when there is a body to reveal.
+      const cvNow = head.querySelector(".zs-chip-cv");
+      if (hasBody && !cvNow) {
+        head.insertAdjacentHTML("beforeend", `<span class="zs-chip-cv">${SVG('<polyline points="6 9 12 15 18 9"/>')}</span>`);
+      } else if (!hasBody && cvNow) {
+        cvNow.remove();
+      }
+      const bodyNow = chip.querySelector(".zs-chip-body");
+      if (hasBody && !bodyNow) {
+        chip.insertAdjacentHTML("beforeend", `<div class="zs-chip-body"><pre></pre></div>`);
+      } else if (!hasBody && bodyNow) {
+        bodyNow.remove();
+      }
+
+      // Icon: rewritten ONLY when the state changes, so the ring keeps turning
+      // through the whole run and the settled tick pops exactly once.
+      const icEl = chip.querySelector(".zs-chip-ic");
+      const iconKey = `${category}|${phase}`;
+      if (icEl && icEl.dataset.zicon !== iconKey) {
+        icEl.dataset.zicon = iconKey;
+        icEl.innerHTML = iconFor(category, phase);
+      }
+      const txEl = chip.querySelector(".zs-chip-tx");
+      if (txEl && txEl.textContent !== label) txEl.textContent = label;
+
+      // Entrance animation: once per turn+label, silent on repaint.
+      const zanim = `${category}|${label}`;
+      if (item.dataset.zanim !== zanim) {
+        item.dataset.zanim = zanim;
+        chip.classList.add("zs-chip-enter");
+        setTimeout(() => chip.classList.remove("zs-chip-enter"), 300);
+      }
+
+      // Detail line: argument summary plus the live (run) or frozen (settled)
+      // duration. Written here immediately - the 200ms ticker would otherwise
+      // leave a fresh card showing the bare tool name.
+      if (chip.querySelector(".zs-chip-dt")) {
+        const dtEl = chip.querySelector(".zs-chip-dt");
+        let dtText = detail;
+        if (phase === "run" && item && item.dataset.zrunstart) {
+          const ms = Date.now() - (+item.dataset.zrunstart || Date.now());
+          const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+          dtText = detail ? `${detail} · ${dur}` : dur;
+        } else if (!whole && (phase === "done" || phase === "err" || phase === "idle")) {
+          const keep = detail || item.dataset.zargs || "";
+          dtText = [keep, item.dataset.zdurfinal || ""].filter(Boolean).join(" · ");
         }
+        if (dtEl.textContent !== dtText) dtEl.textContent = dtText;
+      }
+      if (hasBody) {
+        const pre = chip.querySelector(".zs-chip-body pre");
+        if (pre && pre.textContent !== body) pre.textContent = body;
+      }
+
+      // LIVE DURATION. A running chip that only shows the tool NAME ("list_dir")
+      // for the whole call reads as a stuck loader: the user cannot tell whether
+      // anything is happening (report 2026-11-18, ChatGPT vs Claude's
+      // "run_command command: bash · 39.0s"). The static detail (argument
+      // summary) is painted above; here we stamp the start instant on the chip
+      // so the global ticker can append the elapsed time to that same
+      // .zs-chip-dt span - `path: x · 12.4s` - and keep it climbing.
+      // The start is only set when absent so a re-render mid-run (detail
+      // changed → innerHTML rebuilt) keeps counting from the real start.
+      if (phase === "run" && !whole) {
+        if (!item.dataset.zrunstart) item.dataset.zrunstart = String(Date.now());
+        // Remember the argument summary so the settled card can still show
+        // "path: … · 1.3s" after the loop stops passing it.
+        if (detail) item.dataset.zargs = detail;
+        chip.dataset.zstart = item.dataset.zrunstart;
+        chip.dataset.zdt = detail || "";
+      } else {
+        // Freeze the total run time before dropping the start stamp, so the
+        // done/err card keeps a final duration instead of losing it entirely.
+        if (item && !whole && item.dataset.zrunstart &&
+            (phase === "done" || phase === "err" || phase === "idle")) {
+          const ms = Date.now() - (+item.dataset.zrunstart || Date.now());
+          item.dataset.zdurfinal = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+          const dtEl = chip.querySelector(".zs-chip-dt");
+          if (dtEl && !dtEl.textContent) {
+            const keep = detail || item.dataset.zargs || "";
+            const text = [keep, item.dataset.zdurfinal].filter(Boolean).join(" · ");
+            if (text) dtEl.textContent = text;
+          }
+        }
+        delete item.dataset.zrunstart;
+        delete chip.dataset.zstart;
+        delete chip.dataset.zdt;
       }
 
       if (whole) {
-        // Fully injected turn (result / sys) → hide the whole item.
+        // Fully injected turn (result / sys) → hide what carries the injected
+        // text. On a dual-side turn that is only the user bubble, so the
+        // model's answer in the same container survives (see injectedHidePart).
         if (chip.parentElement !== item) item.insertBefore(chip, item.firstChild);
-        item.classList.add("zs-hidden");
+        hideInjectedWhole(item);
       } else {
-        item.classList.remove("zs-hidden");
+        unhideInjectedWhole(item);
         // findToolBlockSpot ALSO applies the .zs-tool-hide classes (its real job);
         // we call it for that even when we don't use its returned position.
         const spot = P.findToolBlockSpot(item, chip);
@@ -2797,7 +3083,7 @@
         const hasImg = !isErr && IMAGE_FEEDBACK_RE.test(txt);
         if (hasImg && m) rememberImageTool(m[1]);
         const sig = (m ? m[1] : "note") + "|" + (isErr ? "err" : hasImg ? "img" : "result");
-        if (item.dataset.zsig !== sig || !item.classList.contains("zs-hidden") || chipGone) {
+        if (item.dataset.zsig !== sig || !injectedWholeHidden(item) || chipGone) {
           this.chip(item, {
             label: m ? `${m[1]} · result` : "result",
             category: hasImg ? "screen" : m ? ZS.toolCategory(m[1]) : "tool",
@@ -2988,7 +3274,15 @@
         const pendingExec = !stopped && !orphanPending && !live &&
           neverRun && item === P.lastAssistant() && Date.now() - A.lastGenAt <= RESUME_FRESH_MS;
         let phase = stopped ? "err" : (orphanPending ? "idle" : ((live || pendingExec) ? "run" : "done"));
-        let detail = stopped ? "stopped" : (orphanPending ? "not run" : "");
+        // A SUPERSEDED command (a newer command turn sits below it) was never a
+        // failure: the loop deliberately ran the later block instead. Painting it
+        // "not run" read as "the tool you asked for never ran" (user report
+        // 2026-11-20) when the truth is "this block was skipped because the reply
+        // went on to name another command". Keep the grey idle state, but say what
+        // happened. The genuinely dead case (stale LAST turn after a reload) keeps
+        // "not run": there the command really did never execute.
+        let detail = stopped ? "stopped"
+          : (staleLastOrphan ? "not run" : (supersededOrphan ? "skipped" : ""));
         // A DSML turn is the model calling a tool in its OWN markup, which can
         // never be executed - it always resolves to the "dsml" parse_error. So
         // once it has FINISHED streaming, "waiting to run" (spinner) and "not
@@ -3021,6 +3315,25 @@
             if (item.dataset.zphase !== "err") diag("chip.errSettle", { name: ZSParse.toolNameFromText(txt) });
           }
         }
+        // ARGUMENT SUMMARY while the call is live. This branch paints detail=""
+        // for run/idle by design (the loop used to own that text), but it ALSO
+        // repaints on rawVisible/chipGone - which silently WIPED the loop's
+        // `path: …` detail and left a bare tool name spinning (2026-11-18
+        // report). Re-derive the summary from the command block itself, so the
+        // chip reads `list_dir  path: immersed-tube-tunnel · 3.1s` no matter who
+        // repainted it. Static part only; the ticker appends the elapsed time.
+        if (!detail && (phase === "run" || phase === "idle" || phase === "done" || phase === "err")) {
+          try {
+            const calls = ZSParse.parseToolCalls(txt);
+            if (calls && calls.length) {
+              detail = argSummary(calls[calls.length - 1]);
+              // Keep the settled summary on the turn: a later repaint (rawVisible
+              // flip, site re-render) passes detail="" and would otherwise blank
+              // the argument line of an already-settled card.
+              if (detail && (phase === "done" || phase === "err")) item.dataset.zargs = detail;
+            }
+          } catch { /* parser is advisory here; never break classification */ }
+        }
         // A command block that is VISIBLE right now (its hide classes live on
         // child nodes that sites like Gemini re-create on every update, and the
         // block may render only AFTER the chip was first placed mid-stream).
@@ -3047,6 +3360,25 @@
         const cat = A.imageTools.has(bareToolName(nm)) ? "screen" : undefined;
         const chipNow = item.querySelector(".zs-chip");
         const catStale = cat === "screen" && chipNow && !chipNow.classList.contains("cat-screen");
+        // CHEVRON BODY for a re-derived card. The loop passes the call payload
+        // as `body` while IT owns the turn, but a reload/revisit re-derives the
+        // chip from the conversation here with body=undefined - so `.zs-chip-cv`
+        // (the collapse/expand chevron) was never created and the settled card
+        // read as "not expandable" ("belum ada icon v" - report 2026-11-18).
+        // Rebuild that payload from the parsed call so the chevron exists and
+        // opens the same JSON the card showed while it ran. An already painted
+        // body wins: on a live turn it carries the real tool output.
+        let chipBody = "";
+        if (phase === "run" || phase === "done" || phase === "err") {
+          const preNow = chipNow && chipNow.querySelector(".zs-chip-body pre");
+          if (preNow && preNow.textContent) chipBody = preNow.textContent;
+          if (!chipBody) {
+            try {
+              const calls = ZSParse.parseToolCalls(txt);
+              if (calls && calls.length) chipBody = callBody(calls[calls.length - 1]);
+            } catch { /* parser is advisory here; never break classification */ }
+          }
+        }
         // Chip drift for chipAppend providers (Kimi): the RUN chip is painted by
         // the SWEEP (owned=false, no zloop) until the loop takes over at
         // tool.start ~2s later, so ensureOwnedChip's drift fix (zloop-only) does
@@ -3084,7 +3416,7 @@
               ...(P.genDebug ? { g: P.genDebug() } : {}),
             });
           }
-          this.toolBox(item, nm, phase, detail, false, undefined, cat);
+          this.toolBox(item, nm, phase, detail, false, chipBody, cat);
         }
         return;
       }
@@ -3125,6 +3457,12 @@
     },
 
     sweep() {
+      // Strip chips that escaped their turn (detached/recycled nodes). They are
+      // what parked a spinning card on top of the site's own header.
+      for (const stray of document.querySelectorAll(".zs-chip")) {
+        const host = stray.parentElement;
+        if (host && !isTurnHost(host)) stray.remove();
+      }
       // Pass each turn's FOLLOWING turn too: a command chip needs it to know
       // whether its injected result was an ERROR (error-aware settle above).
       const items = P.allItems();
@@ -3151,7 +3489,8 @@
   //  UI  (control panel, onboarding, stop button, banners, toast, input cover)
   // ════════════════════════════════════════════════════════════════════════
   const ui = (() => {
-    let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl;
+    let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl, hideBtn, dotBtn;
+    let hudHidden = false; // collapsed status card → round blue button (persisted)
     let targetBtn, targetMenuEl;
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
@@ -3206,7 +3545,9 @@
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </div>
           <button id="zs-switch" aria-label="Switch AI and options" title="Switch AI and options"><span id="zs-switch-name"></span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <button id="zs-bar-hide" type="button" aria-label="Hide status card" title="Hide status card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg></button>
         </div>
+        <button id="zs-dot" type="button" hidden aria-label="Show Snapgent status" title="Show Snapgent status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></button>
         <div id="zs-menu" hidden></div>
         <div id="zs-target-menu" hidden></div>
         ${P.unstableWarning ? `<button id="zs-unstable" aria-label="Provider may be unstable" hidden>⚠ unstable</button>` : ""}
@@ -3220,6 +3561,44 @@
       targetBtn = root.querySelector("#zs-target-btn");
       targetMenuEl = root.querySelector("#zs-target-menu");
       switchBtn = root.querySelector("#zs-switch");
+      hideBtn = root.querySelector("#zs-bar-hide");
+      dotBtn = root.querySelector("#zs-dot");
+      const applyHud = () => {
+        if (bar) {
+          bar.hidden = hudHidden;
+          bar.style.display = hudHidden ? "none" : "flex";
+        }
+        if (dotBtn) dotBtn.hidden = !hudHidden;
+        if (hudHidden && menuEl) menuEl.hidden = true;
+        if (hudHidden && targetMenuEl) targetMenuEl.hidden = true;
+      };
+      const persistHud = () => {
+        try { chrome.storage.local.set({ [HUD_HIDDEN_KEY]: hudHidden }); } catch {}
+      };
+      if (hideBtn) {
+        hideBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          hudHidden = true;
+          applyHud();
+          persistHud();
+        });
+      }
+      if (dotBtn) {
+        dotBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          hudHidden = false;
+          applyHud();
+          persistHud();
+        });
+      }
+      try {
+        chrome.storage.local.get(HUD_HIDDEN_KEY, (r) => {
+          hudHidden = !!(r && r[HUD_HIDDEN_KEY]);
+          applyHud();
+        });
+      } catch {}
       const swName = root.querySelector("#zs-switch-name");
       if (swName) swName.textContent = P.displayName || P.id;
       setTarget(selectedTargetId);
@@ -3494,6 +3873,7 @@
           `<div class="zs-mcp-pop-list">${rows}</div>` +
           `<div class="zs-mcp-pop-head" style="border-top:1px solid rgba(128,128,128,.25);margin-top:4px"><span>Sessions</span></div>` +
           `<label class="zs-mcp-row" title="Let a hidden tab keep its session running instead of parking it"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Background sessions</span><span class="zs-mcp-row-meta">Keep working while this tab is in the background</span></span><input type="checkbox" id="zs-bg-sessions" ${backgroundSessions ? "checked" : ""}></label>` +
+          `<label class="zs-mcp-row" title="Run a command that arrives in a reply written somewhere else, e.g. from the ChatGPT mobile app"><span class="zs-mcp-row-info"><span class="zs-mcp-row-name">Remote commands</span><span class="zs-mcp-row-meta">Run commands from replies written on another device</span></span><input type="checkbox" id="zs-remote-commands" ${remoteCommands ? "checked" : ""}></label>` +
           
         `</div>`;
       document.documentElement.appendChild(pop);
@@ -3517,6 +3897,18 @@
       pop.querySelector(".zs-mcp-pop-close").addEventListener("click", close);
       const bgBox = pop.querySelector("#zs-bg-sessions");
       if (bgBox) bgBox.addEventListener("change", () => setBackgroundSessions(bgBox.checked));
+      const remoteBox = pop.querySelector("#zs-remote-commands");
+      if (remoteBox) remoteBox.addEventListener("change", () => {
+        setRemoteCommands(remoteBox.checked);
+        // Turning it on must not fire a command that was already on screen: make
+        // the reply in front of the user the baseline, so only replies that turn
+        // up from now on are adopted.
+        if (remoteBox.checked && remoteAdopter) {
+          const item = P.lastAssistant();
+          remoteAdopter.clear();
+          remoteAdopter.setBaseline(item ? turnKey(item) : null);
+        }
+      });
       pop.querySelectorAll(".zs-mcp-check").forEach((box) =>
         box.addEventListener("change", () => {
           setMcpEnabled(box.dataset.id, box.checked);
@@ -4004,11 +4396,13 @@
         // re-entrant (status timer + DOM mutations + this block's own finally()),
         // so the probe could fire twice in a row and reach ~24 list_dir/min -
         // measured 29,280 probe calls in one day, which starved real tool calls
-        // and made the bridge look unreachable. Backoff grows after a failure and
-        // success resets it to the floor.
+        // and made the bridge look unreachable. The success floor is 120 s: a live
+        // probe log showed 788 list_dir results (592 of them this exact probe) in
+        // six hours, i.e. one probe every 30 s, all of them saying the same thing.
+        // Backoff grows after a failure and success resets it to the floor.
         const probeFloor = workspaceReady === false && workspaceProbeFails > 0
           ? Math.min(5000 * Math.pow(2, Math.min(workspaceProbeFails, 5)), 300000)
-          : 30000;
+          : 120000;
         if (selectedTargetId === "vscode" && serverConnected && !workspaceProbePending &&
             Date.now() - workspaceProbeAt >= probeFloor) {
           workspaceProbeAt = Date.now();
@@ -4292,6 +4686,20 @@
       u.style.top = Math.round(Math.max(4, br.top - uh - 5)) + "px";
     }
 
+    // Position of the collapsed-status button: OUTSIDE the text input, pinned
+    // above the composer's right edge (same band the bar occupies when open), so
+    // it never covers the editor, the send/stop control or the voice button.
+    function placeDot() {
+      if (!dotBtn || dotBtn.hidden) return;
+      const e = (P.getEditor && P.getEditor()) || (P.composerFrame && P.composerFrame());
+      if (!e) { dotBtn.style.display = "none"; return; }
+      const r = e.getBoundingClientRect();
+      if (!r.width) { dotBtn.style.display = "none"; return; }
+      dotBtn.style.display = "inline-flex";
+      dotBtn.style.left = Math.round(r.right - 38) + "px";
+      dotBtn.style.top = Math.max(4, Math.round(r.top - 44)) + "px";
+    }
+
     function placeBar() {
       barRaf = requestAnimationFrame(placeBar);
       if (!bar) return;
@@ -4305,6 +4713,19 @@
       if (root && !root.isConnected) {
         try { document.documentElement.appendChild(root); } catch {}
       }
+
+      // Collapsed on purpose: keep the card down and park the round blue button
+      // instead (it sits outside the input). The frame loop stays alive, so the
+      // button follows the composer if the layout moves.
+      if (hudHidden) {
+        bar.style.display = "none";
+        clearAnchorPad();
+        if (menuEl) menuEl.hidden = true;
+        if (targetMenuEl) targetMenuEl.hidden = true;
+        placeDot();
+        return;
+      }
+      if (dotBtn && !dotBtn.hidden) dotBtn.hidden = true;
 
       // The instability warning floats just ABOVE the bar (not inside it), so it
       // never crowds the row on narrow composers like Gemini. Positioned from the
@@ -4474,21 +4895,31 @@
       if (on && scrollSuppressed()) {
         if (cover) cover.style.display = "none";
         if (ed) ed.classList.remove("zs-typing");
+        // Cover is hidden while the user browses history, so let the site's own
+        // placeholder show again; the intent flag stays on and place() hides it
+        // once the cover returns.
+        document.documentElement.classList.remove("zs-cover-on");
         cancelAnimationFrame(coverRaf);
         return;
       }
       if (!on) {
         if (cover) { cover.style.display = "none"; cover.dataset.on = ""; }
         if (ed) ed.classList.remove("zs-typing");
+        // Agent finished: the composer's own placeholder ("Ask ChatGPT") must
+        // come back the moment the cover is lifted (user request 2026-11-18).
+        document.documentElement.classList.remove("zs-cover-on");
         cancelAnimationFrame(coverRaf);
         return;
       }
       if (!ed) return;
+      // Hide the site's placeholder for as long as the cover is intended on, so
+      // "Agent is working…" is the only readable line in the composer band.
+      document.documentElement.classList.add("zs-cover-on");
       ed.classList.add("zs-typing"); // make the typed text itself invisible
       if (!cover) {
         cover = document.createElement("div");
         cover.id = "zs-input-cover";
-        cover.innerHTML = `<span>Agent is working…</span>`;
+        cover.innerHTML = `<span class="zs-cover-spin" aria-hidden="true"></span><span class="zs-cover-main">Agent is working…</span>`;
         document.documentElement.appendChild(cover);
       }
       cover.dataset.on = "1"; // intent flag: keep the place() loop alive while set
@@ -4615,9 +5046,12 @@
         cover.style.top = (centerY - h / 2) + "px";
         cover.style.width = (r.width + PAD * 2) + "px";
         cover.style.height = h + "px";
-        // Composite the surface BEHIND the cover target so the fill matches what
-        // the user sees (a translucent composer card blends over the page).
-        cover.style.background = opaqueBg(covNode);
+        // TRANSPARENT surface (user request 2026-11-18: "background item di bikin
+        // transparant aja"). The typed text is already invisible via .zs-typing,
+        // so the cover does not need a painted slab - it just has to sit on top
+        // and eat the clicks. Kept deliberately not opaque: matching the composer
+        // colour read as a solid block dropped over the input.
+        cover.style.background = "transparent";
         // When the cover blankets a whole composer card (coverTarget), match its
         // corner radius so the cover's square corners don't poke past the card's
         // rounded ones. Editor-sized covers keep the CSS default.
@@ -4634,6 +5068,22 @@
       root.appendChild(t);
       setTimeout(() => t.classList.add("show"), 10);
       setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    // Live "what it is doing right now" line under the cover label, fed by the
+    // 200ms meter: the streaming token estimate while the model writes the call,
+    // then the command + measured time while the bridge runs it. Without it the
+    // cover was a static "Agent is working…" for whole minutes.
+    function setCoverDetail(text) {
+      if (!cover || cover.dataset.on !== "1") return;
+      let sub = cover.querySelector(".zs-cover-sub");
+      if (!sub) {
+        sub = document.createElement("span");
+        sub.className = "zs-cover-sub";
+        cover.appendChild(sub);
+      }
+      const next = text || "";
+      if (sub.textContent !== next) sub.textContent = next;
     }
 
     function banner(kind, title, msg) {
@@ -4682,7 +5132,7 @@
     }
 
     build();
-    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
+    return { setStatus, setTarget, getTargetName, staleExtensionAlert, setStarted, setStarting, showStop, markStopping, inputCover, setCoverDetail, toast, banner, showImages, nudgeStart, updateStartGate, refreshSetup, getCustomPrompt, openMenu: (toSupport) => openMenuFn && openMenuFn(toSupport) };
   })();
 
   // ── Live token + timer, shown ONLY on a tool call's chip detail. The
@@ -4707,8 +5157,15 @@
   }
 
   function setChipDetail(item, text) {
-    const dt = item && item.querySelector(".zs-chip .zs-chip-dt");
-    if (dt) dt.textContent = text;
+    const chip = item && item.querySelector(".zs-chip");
+    const dt = chip && chip.querySelector(".zs-chip-dt");
+    if (!dt) return;
+    dt.textContent = text;
+    // Tell the elapsed-time ticker this line is FRESH (it carries the richer
+    // argv + in/out token stats). Without the stamp the ticker would overwrite
+    // it within 200ms with its poorer "arg · 3.4s" form, and the two writers
+    // would alternate.
+    if (chip) chip.dataset.zmeter = String(Date.now());
   }
 
   // Update ONLY the chip's label text (no innerHTML rebuild), so live-correcting
@@ -4910,10 +5367,17 @@
     ui.showStop((A.held || !scrollSuppressed()) &&
       (A.running || A.toolRunning || A.stopping || (A.started && P.isHardGenerating())));
 
-    // Tool is executing on the MCP → timer on its chip.
+    // Tool is executing on the MCP → timer + stats on its chip.
     if (A.toolRunning && A.toolItem) {
-      const s = elapsedOn(A.toolItem, "zsToolT0", A.toolStart).toFixed(1);
-      setChipDetail(A.toolItem, (A.toolArg ? A.toolArg + " · " : "") + `${s}s`);
+      const ms = A.toolStart ? Date.now() - A.toolStart : 0;
+      const live = ZSGuard.formatRunStats({ arg: A.toolArg, ms, tokIn: A.toolTokIn });
+      setChipDetail(A.toolItem, live || `${(ms / 1000).toFixed(1)}s`);
+      // NOT on the cover any more: the same "path: … · 12.4s" line belongs to
+      // the tool's own chip (user report 2026-11-18: the composer cover read
+      // "Agent is working… | path: /tmp · …", which is where the status ended
+      // up instead of the run_command/list_dir chip). The loop is alive - that
+      // is all the cover has to say.
+      ui.setCoverDetail("");
       return;
     }
     // The site is streaming a tool call → token count + timer on its chip.
@@ -4928,7 +5392,11 @@
         if (name && name !== "command") setChipLabel(item, name);
         const tokens = Math.floor(reply.length / TOKEN_CHARS);
         const s = Math.round(elapsedOn(item, "zsGenT0"));
+        A.genTok = tokens; // reused by the dispatched call's chip as "in ~N tok"
         setChipDetail(item, `~${formatCount(tokens)} tokens · ${s}s`);
+        // Same rule as the tool branch: the meter feeds the CHIP, the cover
+        // stays a plain "Agent is working…".
+        ui.setCoverDetail("");
         return;
       }
     }
@@ -4938,9 +5406,20 @@
   //  WIRING
   // ════════════════════════════════════════════════════════════════════════
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.type === "zs-status") {
       ui.setStatus({ connected: msg.connected, mcpAlive: msg.mcpAlive, studio: msg.studio, studioApp: msg.studioApp, studioProc: msg.studioProc, tools: msg.tools, servers: msg.servers });
+    }
+    if (msg && msg.type === "zs-resume") {
+      // Manual "resume the pending command" - from the popup's Resume button.
+      // Answer the caller so the button can say whether it actually dispatched.
+      resumePending({ force: !!(msg.force) })
+        .then((r) => {
+          diag("resume.request", r);
+          try { sendResponse && sendResponse(r); } catch {}
+        })
+        .catch(() => { try { sendResponse && sendResponse({ ok: false, why: "error" }); } catch {} });
+      return true; // keep the channel open for the async response
     }
     if (msg && msg.type === "zs-open-menu") {
       ui.openMenu(false); // from the popup's Settings button — opens at the top (Switch AI)
@@ -4997,15 +5476,33 @@
       }
     });
   } catch {}
+  // Does one turn's text carry a snapgentV3 artefact? Pure so a test can pin it;
+  // domHasZsSignal() applies it to every rendered turn.
+  function isZsSignalText(txt) {
+    if (!txt) return false;
+    if (txt.includes(ZS.SYS_MARKER)) return true;
+    // The injected result caption used to be matched only at a line start. But
+    // ChatGPT's 2026-11 turn container glues the chip label into the SAME
+    // textContent ("list_commands · resultOutput of 'list_commands': …"), so
+    // that anchored form missed EVERY adopted conversation: reopening an old
+    // snapgent chat showed "No agent. Open a new chat." and no way back in
+    // (measured live 2026-11-20). The caption is our own fabricated string, so
+    // match it wherever it sits - still NOT a bare command shape (see below).
+    if (/Output of '[^']+':/.test(txt)) return true;
+    if (txt.includes("(System note:")) return true;
+    // The restated-instructions rider is sent WITHOUT a colon after "note"
+    // (core/config.js: "(System note from snapgentV3 - this is an automatic…"),
+    // so the colon test alone never recognised that turn either.
+    if (txt.includes("(System note from snapgentV3")) return true;
+    return false;
+  }
   // A conversation IS a snapgentV3 session if any rendered turn carries a
   // telltale artefact: the system-prompt marker, an injected tool-result /
   // system-note turn, or a snapgentV3 command an assistant wrote. Works even
   // after a full cold start and regardless of scroll position.
   function domHasZsSignal() {
     for (const it of P.allItems()) {
-      const txt = it.textContent || "";
-      if (txt.includes(ZS.SYS_MARKER)) return true;
-      if (/(^|\n)\s*Output of '[^']+':/.test(txt) || txt.includes("(System note:")) return true;
+      if (isZsSignalText(it.textContent || "")) return true;
       // Deliberately NO bare command-shape test here. An assistant turn that
       // merely CONTAINS {"command":...} / ###LUA### is NOT proof of a session:
       // in a plain, never-started chat the model can simply EXPLAIN the format
@@ -5126,19 +5623,28 @@
     if (A.injectHideUntil && Date.now() < A.injectHideUntil) {
       const users = items.filter((it) => P.isUserItem(it));
       const last = users[users.length - 1];
-      if (last && !last.classList.contains("zs-hidden") &&
+      if (last && !injectedWholeHidden(last) &&
           users.length > (A.injectPreUser || 0)) {
-        last.classList.add("zs-hidden");
+        hideInjectedWhole(last);
         A.injectHideUntil = 0; // one-shot: this turn is now masked
         diag("result.prehide", { users: users.length });
       }
     }
     for (const item of items) {
-      if (item.classList.contains("zs-hidden")) continue;
+      if (item.classList.contains("zs-hidden")) {
+        // The optimistic pre-hide masks the node before the bubble exists. Once
+        // the bubble renders, downgrade to a partial mask so the answer stays.
+        const part = injectedHidePart(item);
+        if (part) {
+          item.classList.remove("zs-hidden");
+          part.classList.add("zs-hidden-part");
+        }
+        continue;
+      }
       const txt = P.classifyText(item, ".zs-chip");
       if (txt.includes(ZS.SYS_MARKER) ||
           (P.isUserItem(item) && ZSParse.isInjectedFeedback(txt))) {
-        item.classList.add("zs-hidden");
+        hideInjectedWhole(item);
       }
     }
   }
@@ -5150,6 +5656,26 @@
   // Belt-and-braces: a low-frequency sweep regardless of tab visibility or
   // mutation timing, so camouflage always converges.
   setInterval(scheduleSweep, 1500);
+  // Chip elapsed-time ticker (see decorate.chip's data-zstart stamp). Deliberately
+  // a plain text update, NOT a chip() repaint: repainting would restart the
+  // spinner animation (the "frozen spinner" bug) and reset expand/collapse. It
+  // only touches chips that are mid-run, so the cost is a handful of nodes.
+  setInterval(() => {
+    const now = Date.now();
+    for (const el of document.querySelectorAll(".zs-chip[data-zstart]")) {
+      // The 200ms meter (setChipDetail) owns this line while it is live: it has
+      // the argument summary AND token stats AND a fresh duration. Stand down
+      // for a moment after it writes, so the two never flip-flop.
+      if (now - (+el.dataset.zmeter || 0) < 400) continue;
+      const dt = el.querySelector(".zs-chip-dt");
+      if (!dt) continue;
+      const ms = now - (+el.dataset.zstart || now);
+      const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+      const base = el.dataset.zdt || "";
+      const next = base ? `${base} · ${dur}` : dur;
+      if (dt.textContent !== next) dt.textContent = next;
+    }
+  }, 200);
   // When the user returns to the tab, immediately refresh camouflage/state.
   document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleSweep(); });
 
@@ -5278,8 +5804,18 @@
     if (isRememberedExecuted(item, txt)) return;
     // Resume only when a COMPLETE, parseable command is present - and re-attempt
     // if the turn has GROWN since our last try.
-    if (!ZSParse.parseToolCalls(txt).length) return;
+    const parsed = ZSParse.parseToolCalls(txt);
+    if (!parsed.length) return;
     const len = txt.length;
+    // Per-call replay guard: the reply may have been re-rendered (which defeats
+    // the text-prefix check above), yet the commands it carries already ran.
+    if (parsed.every((c) => executedCalls.has(turnKey(item), c))) {
+      if (A._skipDupTurn !== turnKey(item)) {
+        A._skipDupTurn = turnKey(item);
+        diag("resume.skip.duplicateCall", { len });
+      }
+      return;
+    }
     if (item.dataset.zResume && Number(item.dataset.zResumeLen || 0) >= len) return;
     item.dataset.zResume = "1";
     item.dataset.zResumeLen = String(len);
@@ -5290,6 +5826,126 @@
     A.sendToken = null;
     agentLoop(P.assistantCount() - 1);
   }, 1000);
+
+  // ── Resume a PENDING command (manual, and after a reload) ────────────────
+  // The autoResume watchdog right above refuses a reply that is no longer
+  // "fresh" (A.lastGenAt ages out within RESUME_FRESH_MS) and never runs while
+  // the tab is occluded (document.hidden). Both guards protect against
+  // re-running HISTORY, but they also block the one case the user hits every
+  // day: reload the page / restart Chrome while a command is still pending -
+  // the reply is on screen, never executed, and no loop is running. Nothing
+  // ever picks it up, so the session looks wedged until the user retypes.
+  //
+  // This entry point dispatches it while keeping every guard that protects
+  // history: a turn whose injected result is already below, a turn already
+  // recorded as dispatched, a halted turn and an unparseable payload are all
+  // still refused. `force` only bypasses the freshness/visibility waits.
+  async function resumePending(opts) {
+    const force = !!(opts && opts.force);
+    if (A.running || A.starting || A.injecting) return { ok: false, why: "busy" };
+    if (!A.started) return { ok: false, why: "not-started" };
+    const item = P.lastAssistant();
+    if (!item) return { ok: false, why: "no-turn" };
+    const all = P.allItems();
+    const after = all[all.indexOf(item) + 1];
+    if (after && P.isUserItem(after) &&
+        ZSParse.isInjectedFeedback(P.classifyText(after, ".zs-chip"))) {
+      return { ok: false, why: "settled" };
+    }
+    if (P.turnHalted && P.turnHalted(item)) return { ok: false, why: "halted" };
+    const txt = P.itemText(item);
+    if (!ZSParse.hasToolSignature(txt)) return { ok: false, why: "no-command" };
+    const parsedPending = ZSParse.parseToolCalls(txt);
+    if (!parsedPending.length) return { ok: false, why: "unparseable" };
+    if (isRememberedExecuted(item, txt)) return { ok: false, why: "already" };
+    // Every command in this reply already ran in this turn - a re-rendered
+    // reply, not a pending one.
+    if (parsedPending.every((c) => executedCalls.has(turnKey(item), c))) {
+      return { ok: false, why: "already-call" };
+    }
+    if (!force) {
+      if (document.hidden) return { ok: false, why: "hidden" };
+      if (P.isGenerating()) return { ok: false, why: "generating" };
+    }
+    rememberExecuted(item);
+    diag("resume.manual", { len: txt.length, force });
+    A.sendToken = null; // reply is already on screen: take it as this turn
+    agentLoop(P.assistantCount() - 1);
+    return { ok: true, len: txt.length };
+  }
+  // ── Commands that arrive from another device (opt-in) ──────────────────────
+  // A reply written in the ChatGPT mobile app reaches this page through the
+  // server-side conversation sync, so nothing in the loop's own send/wait path
+  // ever sees it: it used to be read as plain text and dropped. Watch the
+  // conversation instead and adopt such a reply the moment it is painted.
+  // MutationObserver for immediacy, plus a slow interval because a hidden tab
+  // throttles timers to roughly one tick a minute.
+  const remoteAdopter = ZSGuard.createRemoteCommandAdopter({ limit: 64 });
+  (function watchRemoteCommands() {
+    if (typeof MutationObserver !== "function") return;
+    let timer = null;
+    const check = async () => {
+      // Nothing to do while the opt-in is off: reading the last assistant turn and
+      // parsing its commands is the heaviest work in this watcher.
+      if (!remoteCommands) return;
+      const item = P.lastAssistant();
+      const key = item ? turnKey(item) : null;
+      let txt = "";
+      try { txt = item ? P.itemText(item) : ""; } catch { txt = ""; }
+      const hasSignature = !!txt && ZSParse.hasToolSignature(txt);
+      const calls = hasSignature ? ZSParse.parseToolCalls(txt) : [];
+      let generating = false;
+      try { generating = !!(P.isGenerating && P.isGenerating()); } catch {}
+      const decision = remoteAdopter.decide({
+        enabled: remoteCommands,
+        started: !!A.started,
+        busy: !!(A.running || A.starting || A.injecting),
+        generating,
+        key,
+        hasSignature,
+        callCount: calls.length,
+        allExecuted: !!key && calls.length > 0 && calls.every((c) => executedCalls.has(key, c)),
+      });
+      if (decision !== "adopt") return;
+      diag("remote.command", { calls: calls.map((c) => c.tool || c.command), len: txt.length });
+      const r = await resumePending({ force: true });
+      diag("remote.resume", r);
+    };
+    const schedule = () => {
+      if (!remoteCommands) return;
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; check().catch(() => {}); }, 800);
+    };
+    try {
+      if (document.body) new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+      else document.addEventListener("DOMContentLoaded", () => schedule(), { once: true });
+    } catch {}
+    // A hidden tab throttles timers to about one tick a minute, so the observer
+    // alone is not enough there - poll while the feature is on, and stop polling
+    // when the user switches it off.
+    let poll = null;
+    const setPolling = (on) => {
+      if (on && !poll) {
+        poll = setInterval(() => { check().catch(() => {}); }, 5000);
+      } else if (!on && poll) {
+        clearInterval(poll);
+        poll = null;
+      }
+    };
+    remoteCommandListeners.push(setPolling);
+    setPolling(remoteCommands);
+  })();
+
+  // Retry loop for the reload case: cheap, and it only ever acts on a pending
+  // command with no result below it. Silent unless it actually resumes.
+  setInterval(() => {
+    if (!A.started || A.running || A.starting || A.injecting) return;
+    if (document.hidden) return;
+    resumePending({}).then((r) => {
+      if (!r || !r.ok) return;
+      diag("resume.afterReload", r);
+    }).catch(() => {});
+  }, 5000);
 
   // ── System-prompt re-injection fallback ───────────────────────────────────
   // The piggyback path (withSysResend) is free but needs a tool result to ride

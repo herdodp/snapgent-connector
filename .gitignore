@@ -33,3 +33,6 @@ devtools/
 Thumbs.db
 desktop.ini
 __pycache__/
+
+# Editor local backups
+*.bak-*

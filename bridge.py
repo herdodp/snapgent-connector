@@ -2,6 +2,7 @@
 """Cross-platform local WebSocket bridge for Snapgent MCP servers."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -29,11 +30,170 @@ CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
+# Live progress channel: GET /events (SSE) + GET /status on a plain HTTP port next to
+# the websocket, so any consumer (curl, browser, an API wrapper) can watch what the
+# bridge is doing while a tool call is still running instead of waiting for the result.
+STREAM_PORT = int(os.environ.get("ZS_BRIDGE_STREAM_PORT", str(PORT + 1)))
+STREAM_BACKLOG = 200
+
+# WebSocket origin policy. A browser always sends an Origin header on the handshake, so
+# without a check any page the user has open could connect to ws://127.0.0.1:PORT and
+# run MCP tools, including run_command and write_file through the VS Code server. Only
+# extension origins are accepted. Requests without an Origin (CLI clients, tests,
+# native apps) are allowed because they are not cross-site browser requests.
+EXTENSION_ORIGIN_SCHEMES = ("chrome-extension", "moz-extension", "safari-web-extension")
+EXTRA_ORIGINS = tuple(
+    origin.strip().lower()
+    for origin in os.environ.get("ZS_BRIDGE_EXTRA_ORIGINS", "").split(",")
+    if origin.strip()
+)
+
+
+def _origin_allowed(origin: Optional[str]) -> bool:
+    if origin is None:
+        return True
+    candidate = origin.strip().lower()
+    if not candidate:
+        return True
+    if candidate in EXTRA_ORIGINS:
+        return True
+    scheme, separator, rest = candidate.partition("://")
+    return bool(separator) and bool(rest) and scheme in EXTENSION_ORIGIN_SCHEMES
+
+
+def _websocket_origin(websocket: Any) -> Optional[str]:
+    request = getattr(websocket, "request", None)
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    try:
+        return headers.get("Origin")
+    except Exception:
+        return None
+
+
+def _build_origin_gate() -> Optional[Any]:
+    """Reject foreign origins during the handshake, across websockets API versions.
+
+    websockets >= 14 serves with ``process_request(connection, request)`` and expects a
+    Response from ``connection.respond()``; older releases call ``process_request(path,
+    request_headers)`` and expect a ``(status, headers, body)`` tuple.
+    """
+    if websockets is None:
+        return None
+    serve = getattr(websockets, "serve", None)
+    modern = str(getattr(serve, "__module__", "")).startswith("websockets.asyncio")
+
+    if modern:
+        async def process_request(connection: Any, request: Any) -> Any:
+            origin = request.headers.get("Origin")
+            if _origin_allowed(origin):
+                return None
+            log(f"rejected websocket origin={origin!r}")
+            return connection.respond(403, "Origin not allowed.\n")
+        return process_request
+
+    async def process_request_legacy(path: Any, request_headers: Any) -> Any:
+        origin = request_headers.get("Origin")
+        if _origin_allowed(origin):
+            return None
+        log(f"rejected websocket origin={origin!r}")
+        return (403, [], b"Origin not allowed.\n")
+    return process_request_legacy
+
+
+# Self-contained live view served at "/" on the stream port. Kept as one small
+# string so the bridge still has no template/build dependency: it renders the
+# SAME frames /events already streams (event, tool, ms, chars/tok) plus a
+# /status poll for the "running now" elapsed time.
+INDEX_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>snapgentV3 bridge · live</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ :root{color-scheme:dark}
+ body{margin:0;background:#0d0f12;color:#e6e6ea;font:13px/1.45 ui-sans-serif,"Segoe UI",sans-serif}
+ header{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #23262d;position:sticky;top:0;background:#0d0f12}
+ h1{font-size:14px;margin:0;font-weight:700;letter-spacing:.2px}
+ .dot{width:8px;height:8px;border-radius:50%;background:#5cbf9a;box-shadow:0 0 8px #5cbf9a}
+ .dot.busy{background:#eab308;box-shadow:0 0 8px #eab308}
+ .muted{color:#8a8f9a}
+ .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ #now{padding:12px 18px;border-bottom:1px solid #23262d}
+ #now .row{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
+ table{width:100%;border-collapse:collapse}
+ th,td{text-align:left;padding:6px 18px;border-bottom:1px solid #171a1f;white-space:nowrap}
+ th{color:#8a8f9a;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+ tr.start td:nth-child(2){color:#fde68a}
+ tr.end td:nth-child(2){color:#5cbf9a}
+ tr.end.bad td:nth-child(2){color:#ef6b6b}
+ td.cmd{max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+</style></head><body>
+<header><span class="dot" id="dot"></span><h1>snapgentV3 bridge</h1>
+ <span class="muted mono" id="meta">connecting…</span></header>
+<div id="now"><div class="row muted"><span>running now</span><span class="mono" id="queue">0</span></div><div id="busy"></div></div>
+<table><thead><tr><th>time</th><th>event</th><th>tool</th><th>ms</th><th>tok</th><th>detail</th></tr></thead>
+<tbody id="rows"></tbody></table>
+<script>
+const rows=document.getElementById('rows'), dot=document.getElementById('dot'),
+      meta=document.getElementById('meta'), busy=document.getElementById('busy'),
+      queue=document.getElementById('queue');
+const esc=(s)=>String(s==null?'':s).replace(/[&<>"]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function add(f){
+  const tr=document.createElement('tr');
+  const bad=f.ok===false||f.error;
+  tr.className=(f.event==='tool_start'?'start':f.event==='tool_end'?'end':'')+(bad?' bad':'');
+  const t=new Date((f.at||Date.now()/1000)*1000).toLocaleTimeString();
+  const detail=f.error||f.detail||f.phase||f.server||(f.chars!=null?f.chars+' chars':'');
+  tr.innerHTML='<td class="mono muted">'+t+'</td><td>'+esc(f.event)+'</td><td class="cmd">'+esc(f.tool||'')+
+    '</td><td class="mono">'+(f.ms!=null?esc(f.ms):'')+'</td><td class="mono">'+(f.tok!=null?esc(f.tok):'')+
+    '</td><td class="cmd muted">'+esc(detail)+'</td>';
+  rows.prepend(tr);
+  while(rows.children.length>200) rows.lastChild.remove();
+}
+async function poll(){
+  try{
+    const s=await (await fetch('/status',{cache:'no-store'})).json();
+    meta.textContent='v'+(s.version||'?')+' · seq '+s.seq+' · '+s.subscribers+' subscriber(s)';
+    queue.textContent=s.queue;
+    dot.className='dot'+(s.queue?' busy':'');
+    busy.innerHTML=(s.busy||[]).map(b=>'<div class="row"><span>'+esc(b.tool||'?')+
+      '</span><span class="mono">'+(((b.elapsed_ms||0)/1000).toFixed(1))+'s</span></div>').join('')
+      ||'<div class="row muted"><span>idle</span><span></span></div>';
+  }catch(e){ meta.textContent='bridge unreachable'; dot.className='dot busy'; }
+}
+const es=new EventSource('/events');
+es.onmessage=()=>{};
+['tool_start','tool_end','tool_loading','stream','stall'].forEach(n=>es.addEventListener(n,e=>{
+  try{ add(Object.assign({event:n},JSON.parse(e.data))); }catch(_){}
+}));
+poll(); setInterval(poll,1000);
+</script></body></html>"""
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.7"
+BRIDGE_VERSION = "3.9.13"
 MAX_LOG_CHARS = 1000
 MAX_CONCURRENT_REQUESTS = 32
 BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
+# Transport-level replay guard. Two live extension instances can share this bridge
+# (the daily Chrome and the CDP test Chrome both load the same unpacked folder), and
+# a stale instance keeps re-sending one identical call - measured: the same
+# `list_dir` every 30-40 s for over an hour because that process still runs the old
+# bundle in memory. Re-running it cannot yield new information, so an identical call
+# that arrives AGAIN right after itself is answered from the previous result.
+# Deliberately narrow: only a consecutive repeat (list_dir -> write_file -> list_dir
+# is never suppressed) and only within this window.
+DUPLICATE_CALL_TTL = 300.0
+
+# A caller that sends no turn id cannot be answered from the long cache: a repeat
+# may be deliberate new work, and only the caller knows. But a byte-identical call
+# that arrives seconds apart is a re-render replay, not a new request: the page
+# re-dispatches the same DOM chip, and an extension that predates the turn threading
+# (or the workspace probe, which never carries a turn) re-sends the identical call
+# over and over. Running that again multiplies turns in a long chat and is one of
+# the ways such a chat hits provider rate limits, so a turnless repeat is answered
+# from the previous result - but only inside this short window. After it, the call
+# is real work again, which keeps an intentional repeat honest.
+TURNLESS_REPLAY_TTL = 5.0
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -301,6 +461,94 @@ class MCPServer:
             raise
 
 
+class EventHub:
+    """Fan-out of bridge progress frames to HTTP (SSE) and websocket consumers.
+
+    Nothing here changes the tool result path: a frame is advisory only, so a slow or
+    absent subscriber can never block or fail a tool call.
+    """
+
+    def __init__(self, backlog: int = STREAM_BACKLOG) -> None:
+        self._backlog = backlog
+        self._recent: List[Dict[str, Any]] = []
+        self._subs: set = set()
+        self._seq = 0
+        self._busy: Dict[str, Dict[str, Any]] = {}
+
+    def snapshot(self) -> Dict[str, Any]:
+        # elapsed_ms is computed HERE, not stored: a consumer polling /status gets
+        # a live "how long has this been running" number without doing clock math
+        # against a `started` epoch it may render in another timezone.
+        now = time.time()
+        busy = []
+        for entry in self._busy.values():
+            row = dict(entry)
+            started = row.get("started")
+            if isinstance(started, (int, float)):
+                row["elapsed_ms"] = int((now - started) * 1000)
+            busy.append(row)
+        return {
+            "seq": self._seq,
+            "queue": len(self._busy),
+            "busy": busy,
+            "subscribers": len(self._subs),
+        }
+
+    def publish(self, event: str, **payload: Any) -> Dict[str, Any]:
+        self._seq += 1
+        frame = {"seq": self._seq, "at": time.time(), "event": event, **payload}
+        self._recent.append(frame)
+        if len(self._recent) > self._backlog:
+            del self._recent[: len(self._recent) - self._backlog]
+        for queue in list(self._subs):
+            try:
+                queue.put_nowait(frame)
+            except asyncio.QueueFull:
+                # A stalled reader loses frames; it must never stall the bridge.
+                pass
+        return frame
+
+    def begin(self, call_id: Any, tool: Optional[str], **extra: Any) -> Dict[str, Any]:
+        entry = {"id": call_id, "tool": tool, "started": time.time(), **extra}
+        self._busy[str(call_id)] = entry
+        return self.publish("tool_start", **entry)
+
+    def end(self, call_id: Any, ok: bool = True, **extra: Any) -> Dict[str, Any]:
+        entry = self._busy.pop(str(call_id), {})
+        started = entry.get("started", time.time())
+        # Tokens are an ESTIMATE of the result text (chars/4): the bridge has no
+        # tokenizer and the number is informational, not billed usage.
+        chars = extra.get("chars")
+        if isinstance(chars, int) and chars >= 0 and "tok" not in extra:
+            extra["tok"] = chars // 4
+        frame = {
+            "id": call_id,
+            "tool": entry.get("tool"),
+            "ok": bool(ok),
+            "ms": int((time.time() - started) * 1000),
+            **extra,
+        }
+        return self.publish("tool_end", **frame)
+
+    def busy_for(self, call_id: Any) -> Optional[Dict[str, Any]]:
+        return self._busy.get(str(call_id))
+
+    @contextlib.asynccontextmanager
+    async def subscribe(self, since: int = 0):
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
+        for frame in self._recent:
+            if frame["seq"] > since:
+                try:
+                    queue.put_nowait(frame)
+                except asyncio.QueueFull:
+                    break
+        self._subs.add(queue)
+        try:
+            yield queue
+        finally:
+            self._subs.discard(queue)
+
+
 class Bridge:
     def __init__(self) -> None:
         self.servers: Dict[str, MCPServer] = {}
@@ -308,6 +556,13 @@ class Bridge:
         self._client_lock = asyncio.Lock()
         self._catalog: List[Dict[str, Any]] = []
         self._last_studio: Optional[bool] = None
+        self.hub = EventHub()
+        # Replay guard state, keyed by a monotonic per-connection token instead of
+        # id(websocket): the interpreter reuses an object id after a disconnect, and
+        # an entry keyed by it would answer a later, unrelated connection.
+        self._last_calls: Dict[int, Dict[str, Any]] = {}
+        self._client_tokens: Dict[int, int] = {}
+        self._next_client_token = 0
 
     def load_config(self) -> Dict[str, Dict[str, Any]]:
         if not CONFIG_PATH.exists():
@@ -425,9 +680,27 @@ class Bridge:
             log(f"send to client failed: {type(error).__name__}: {str(error)[:200]}")
 
     async def handle_client(self, websocket: Any, _path: Optional[str] = None) -> None:
+        origin = _websocket_origin(websocket)
+        if not _origin_allowed(origin):
+            # Defence in depth: even if a server was started without the handshake gate,
+            # a page origin never reaches the request loop that can run tools.
+            log(f"rejected websocket origin={origin!r} peer={getattr(websocket, 'remote_address', None)}")
+            try:
+                await websocket.close(code=1008, reason="Origin not allowed")
+            except Exception:
+                pass
+            return
         async with self._client_lock:
             self.clients.add(websocket)
-        log("extension connected")
+        try:
+            _hdr = {}
+            _req = getattr(websocket, "request", None)
+            if _req is not None and getattr(_req, "headers", None) is not None:
+                _hdr = {k: _req.headers.get(k) for k in ("Origin", "User-Agent", "Sec-WebSocket-Protocol")}
+            _peer = getattr(websocket, "remote_address", None)
+        except Exception:
+            _hdr, _peer = {}, None
+        log(f"extension connected path={_path!r} peer={_peer} nclients={len(self.clients)} hdr={_hdr}")
         await self._send_client(websocket, self._connected_message())
         pending: set = set()
         limiter = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -474,11 +747,41 @@ class Bridge:
                 await asyncio.gather(*pending, return_exceptions=True)
             async with self._client_lock:
                 self.clients.discard(websocket)
+            self._forget_client(websocket)
             log("extension disconnected")
+
+    def _client_token(self, websocket: Any) -> int:
+        """Stable id for one live connection, used to key the replay cache.
+
+        `id(websocket)` alone is not safe across connections: CPython reuses an
+        object id once the socket is gone, so an entry left behind by a previous
+        connection could answer a new one. A monotonic token, discarded in
+        `_forget_client`, cannot outlive its socket.
+        """
+        key = id(websocket)
+        token = self._client_tokens.get(key)
+        if token is None:
+            self._next_client_token += 1
+            token = self._next_client_token
+            self._client_tokens[key] = token
+        return token
+
+    def _forget_client(self, websocket: Any) -> None:
+        """Drop every piece of per-connection state when the socket closes."""
+        key = id(websocket)
+        token = self._client_tokens.pop(key, None)
+        if token is not None:
+            self._last_calls.pop(token, None)
 
     async def _handle_request(self, websocket: Any, request: Dict[str, Any]) -> None:
         request_id = request.get("id")
         kind = request.get("type")
+        if kind == "call_tool":
+            try:
+                peer = getattr(websocket, "remote_address", None)
+            except Exception:
+                peer = None
+            log(f"[call] conn={id(websocket) % 100000} peer={peer} keys={sorted(request.keys())}")
         if kind == "ping":
             await self._send_client(websocket, {"type": "pong", "id": request_id})
         elif kind == "studio_status":
@@ -524,6 +827,21 @@ class Bridge:
             await self._change_server(websocket, request, remove=False)
         elif kind == "remove_server":
             await self._change_server(websocket, request, remove=True)
+        elif kind in ("stream", "progress"):
+            # Fire-and-forget progress frame (from the extension or any client): relay it
+            # to every websocket client and to the HTTP /events subscribers. No reply is
+            # sent - the sender already moved on, and a reply would look like a result.
+            nested = request.get("frame")
+            payload = {k: v for k, v in request.items() if k not in ("type", "frame", "id")}
+            if isinstance(nested, dict):
+                payload.update(nested)
+            event = payload.pop("event", None) or ("stream" if kind == "stream" else "progress")
+            self.hub.publish(str(event), **payload)
+        elif kind == "stream_status":
+            await self._send_client(
+                websocket,
+                {"type": "stream_status", "id": request_id, **self.hub.snapshot()},
+            )
         else:
             await self._send_client(
                 websocket,
@@ -545,6 +863,58 @@ class Bridge:
             timeout_seconds = max(1.0, min(float(timeout) / 1000, 300.0))
         except (TypeError, ValueError):
             timeout_seconds = 120.0
+        # Replay guard (see DUPLICATE_CALL_TTL): a re-rendered turn re-sends the
+        # call it already ran, so the bridge answers that exact call from the result
+        # it just produced instead of running it again.
+        #
+        # Deduplication is scoped to ONE logical call. The extension states which
+        # turn the call belongs to ("turn": "<conversation>|<turn>"), so an identical
+        # call in a later turn carries a different turn id and really runs - a
+        # legitimate repeat is never answered from a stale result. A caller that
+        # sends no turn id is honoured only inside TURNLESS_REPLAY_TTL: a byte-identical
+        # call seconds apart is a re-render replay, while the same call later is real
+        # work. A caller that really wants the work redone sends "force": true, and
+        # two sockets are never answered from each other's results.
+        turn = request.get("turn")
+        if isinstance(turn, str):
+            turn = turn.strip() or None
+        else:
+            turn = None
+        try:
+            if turn:
+                sig = json.dumps({"n": name, "a": arguments, "t": turn}, sort_keys=True, ensure_ascii=False)
+                replay_ttl = DUPLICATE_CALL_TTL
+            else:
+                # Turnless: identity is the bare call, honoured only for a few
+                # seconds (see TURNLESS_REPLAY_TTL) so a re-render replay is not
+                # turned into a second real execution.
+                sig = json.dumps({"n": name, "a": arguments}, sort_keys=True, ensure_ascii=False)
+                replay_ttl = TURNLESS_REPLAY_TTL
+        except (TypeError, ValueError):
+            sig = None
+            replay_ttl = DUPLICATE_CALL_TTL
+        client_key = self._client_token(websocket)
+        now = time.time()
+        for stale_key in [k for k, v in self._last_calls.items() if now - v.get("at", 0) > DUPLICATE_CALL_TTL]:
+            self._last_calls.pop(stale_key, None)
+        last = self._last_calls.get(client_key)
+        if (
+            request.get("force") is not True
+            and sig
+            and last
+            and last.get("sig") == sig
+            and now - last.get("at", 0) <= replay_ttl
+        ):
+            cached = dict(last.get("response") or {})
+            if cached:
+                cached["id"] = request_id
+                cached["duplicate"] = True
+                await self._send_client(websocket, cached)
+                log(f"<- {name} (repeated identical call - answered from the previous result)")
+                return
+        # Any different call breaks the chain, so an ordinary repeat after real work
+        # still runs for real.
+        self._last_calls.pop(client_key, None)
         server, tool_name = self._resolve_tool(name)
         # Isolation: the extension states which server is selected. The bridge refuses to
         # run a tool that belongs to any other server (requests without the field keep
@@ -579,6 +949,16 @@ class Bridge:
                 },
             )
             return
+        call_id = request_id if request_id is not None else f"{tool_name}-{int(time.time() * 1000)}"
+        self.hub.begin(call_id, name, server=server.server_id)
+        # Every begun call must be finalised exactly once. A websocket drop cancels
+        # the pending request task, which surfaces here as CancelledError and is not
+        # an ordinary failure: without this `finally` the busy entry outlived its
+        # socket and /status kept reporting a tool that was no longer running.
+        # `hub.end` pops the entry, so one terminal `tool_end` is published per call
+        # no matter which way the work below ends.
+        end_ok = False
+        end_extra: Dict[str, Any] = {}
         try:
             result = await server.call_tool(tool_name, arguments, timeout_seconds)
             text_parts = []
@@ -605,13 +985,20 @@ class Bridge:
                     {"type": "tool_result", "id": request_id, "ok": False, "error": text or "MCP tool failed."},
                 )
             else:
-                await self._send_client(
-                    websocket,
-                    {"type": "tool_result", "id": request_id, "ok": True, "text": text, "images": images},
-                )
+                response = {"type": "tool_result", "id": request_id, "ok": True, "text": text, "images": images}
+                await self._send_client(websocket, response)
+                if sig:
+                    self._last_calls[client_key] = {
+                        "sig": sig,
+                        "at": time.time(),
+                        "response": {"type": "tool_result", "ok": True, "text": text, "images": images},
+                    }
+            end_ok = not result.get("isError")
+            end_extra = {"chars": len(text)}
             log(f"<- {name} ({text[:120].replace(chr(10), ' ')})")
         except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
             message = str(error)
+            end_extra = {"error": message[:200]}
             await self._send_client(
                 websocket,
                 {
@@ -623,6 +1010,29 @@ class Bridge:
                 },
             )
             log(f"<- {name} ERROR: {message[:MAX_LOG_CHARS]}")
+        except asyncio.CancelledError:
+            # The client went away mid-call, so there is nobody to answer, but the
+            # busy entry must not survive the socket. The `finally` below clears it;
+            # cancellation itself is re-raised (see handle_client).
+            end_extra = {"error": "cancelled"}
+            raise
+        except Exception as error:
+            # An unexpected bug in a provider must not leave the queue stuck either.
+            message = f"{type(error).__name__}: {error}"
+            end_extra = {"error": message[:200]}
+            await self._send_client(
+                websocket,
+                {
+                    "type": "tool_result",
+                    "id": request_id,
+                    "ok": False,
+                    "kind": "tool_error",
+                    "error": f"Bridge error: {message}",
+                },
+            )
+            log(f"<- {name} UNEXPECTED: {message[:MAX_LOG_CHARS]}")
+        finally:
+            self.hub.end(call_id, ok=end_ok, **end_extra)
 
     def _resolve_tool(self, name: str) -> Tuple[Optional[MCPServer], str]:
         if "/" in name:
@@ -745,6 +1155,98 @@ def subprocess_run(command: List[str], timeout: int) -> str:
     return result.stdout
 
 
+def _build_stream_app(hub: "EventHub") -> Any:
+    """Build the progress app without binding a port.
+
+    Kept apart from ``_start_stream_server`` so a test can inspect the route table
+    of the real app. The channel is deliberately read-only: no route accepts a
+    frame, so a web page open in the same browser cannot inject into the live
+    view through a plain POST that skips the CORS preflight.
+    """
+    from aiohttp import web
+
+    async def events(request: Any) -> Any:
+        try:
+            since = int(request.query.get("since", "0"))
+        except (TypeError, ValueError):
+            since = 0
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await response.prepare(request)
+        async with hub.subscribe(since) as queue:
+            await response.write(b": connected\n\n")
+            while True:
+                try:
+                    frame = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    await response.write(b": ping\n\n")
+                    continue
+                except asyncio.CancelledError:
+                    raise
+                body = json.dumps(frame, ensure_ascii=False)
+                chunk = f"id: {frame['seq']}\nevent: {frame['event']}\ndata: {body}\n\n"
+                await response.write(chunk.encode("utf-8"))
+        return response
+
+    async def status(request: Any) -> Any:
+        # CORS so the extension popup (chrome-extension:// origin) can poll it.
+        return web.json_response(
+            {"version": BRIDGE_VERSION, **hub.snapshot()},
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    async def index(request: Any) -> Any:
+        # One-page live view: no build step, no dependency, just what /status and
+        # /events already expose, so "agent working" can be watched in a browser
+        # tab instead of tailing JSON in a terminal.
+        return web.Response(text=INDEX_HTML, content_type="text/html")
+
+    app = web.Application()
+    app.router.add_get("/", index)
+    app.router.add_get("/events", events)
+    app.router.add_get("/stream", events)
+    app.router.add_get("/status", status)
+    return app
+
+
+async def _start_stream_server(hub: "EventHub") -> Any:
+    """Plain HTTP side channel so progress can be watched while a call is still running.
+
+    GET /events (SSE, also /stream) replays the recent backlog then streams live frames;
+    GET /status gives a one-shot snapshot; GET / serves the one-page live view. Every
+    write is advisory - a dead reader can never fail a tool call.
+    """
+    from aiohttp import web
+
+    runner = web.AppRunner(_build_stream_app(hub), access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, HOST, STREAM_PORT)
+    await site.start()
+    log(f"progress channel: http://{HOST}:{STREAM_PORT}/ (live view), /events (SSE), /status")
+    return runner
+
+
+async def _serve_bridge(bridge_instance: "Bridge", port: int = PORT) -> Any:
+    """Start the extension WebSocket server with the origin gate already attached."""
+    return await websockets.serve(
+        bridge_instance.handle_client,
+        HOST,
+        port,
+        process_request=_build_origin_gate(),
+        max_size=128 * 1024 * 1024,
+        max_queue=256,
+        ping_interval=20,
+        ping_timeout=90,
+    )
+
+
 async def run() -> None:
     if websockets is None:
         raise RuntimeError(
@@ -752,17 +1254,14 @@ async def run() -> None:
             f"'{sys.executable} -m pip install websockets'."
         )
     bridge = Bridge()
-    server = await websockets.serve(
-        bridge.handle_client,
-        HOST,
-        PORT,
-        max_size=128 * 1024 * 1024,
-        max_queue=256,
-        ping_interval=20,
-        ping_timeout=90,
-    )
+    server = await _serve_bridge(bridge)
     log(f"snapgent bridge v{BRIDGE_VERSION}")
     log(f"listening on ws://{HOST}:{PORT} - load the extension and open a supported AI chat")
+    stream_runner = None
+    try:
+        stream_runner = await _start_stream_server(bridge.hub)
+    except Exception as error:  # never let the side channel stop the bridge
+        log(f"progress channel disabled: {type(error).__name__}: {error}")
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     async def _startup_then_monitor() -> None:
@@ -785,6 +1284,8 @@ async def run() -> None:
     finally:
         monitor_task.cancel()
         await asyncio.gather(monitor_task, return_exceptions=True)
+        if stream_runner is not None:
+            await stream_runner.cleanup()
         server.close()
         await server.wait_closed()
         await bridge.stop_servers()

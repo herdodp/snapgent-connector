@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import importlib.util
 import json
 import sys
 import tempfile
@@ -179,6 +180,295 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                     await manager.stop_servers()
 
     @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_repeated_identical_call_is_answered_from_previous_result(self):
+        # Regression: when ChatGPT re-renders a turn it re-sends the very same tool
+        # call, so `list_dir` ran again every ~30 s. A back-to-back identical call
+        # must be answered from the result just produced, and a different call in
+        # between must break the chain so real work still runs.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "mock": {
+                                "command": sys.executable,
+                                "args": [str(mock_path)],
+                                "env": {},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    mock_server = manager.servers["mock"]
+                    calls = []
+                    original_call_tool = mock_server.call_tool
+
+                    async def counting_call_tool(tool_name, arguments, timeout):
+                        calls.append((tool_name, dict(arguments)))
+                        return await original_call_tool(tool_name, arguments, timeout)
+
+                    mock_server.call_tool = counting_call_tool
+                    async with bridge.websockets.serve(
+                        manager.handle_client, "127.0.0.1", 0
+                    ) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                            await client.recv()  # initial "connected" message
+                            payload = {
+                                "type": "call_tool",
+                                "name": "echo",
+                                "arguments": {"message": "same call"},
+                                "timeout": 2000,
+                                "turn": "convA|1",
+                            }
+
+                            await client.send(json.dumps({"id": 1, **payload}))
+                            first = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertTrue(first["ok"])
+                            self.assertEqual(first["text"], "same call")
+                            self.assertFalse(first.get("duplicate"))
+
+                            await client.send(json.dumps({"id": 2, **payload}))
+                            second = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertTrue(second["ok"])
+                            self.assertEqual(second["text"], "same call")
+                            self.assertTrue(second.get("duplicate"))
+                            self.assertEqual(second["id"], 2)
+                            # The real tool ran once; the repeat came from the cache.
+                            self.assertEqual(len(calls), 1)
+
+                            await client.send(
+                                json.dumps(
+                                    {
+                                        "id": 3,
+                                        **payload,
+                                        "arguments": {"message": "different call"},
+                                    }
+                                )
+                            )
+                            third = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertEqual(third["text"], "different call")
+                            self.assertFalse(third.get("duplicate"))
+                            self.assertEqual(len(calls), 2)
+
+                            # The chain was broken, so the old call runs again.
+                            await client.send(json.dumps({"id": 4, **payload}))
+                            fourth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertEqual(fourth["text"], "same call")
+                            self.assertFalse(fourth.get("duplicate"))
+                            self.assertEqual(len(calls), 3)
+
+                            # This one repeats the call just run, so it is answered
+                            # from the cache, and the next one asks for real work.
+                            await client.send(json.dumps({"id": 5, **payload}))
+                            fifth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertTrue(fifth.get("duplicate"))
+                            self.assertEqual(len(calls), 3)
+
+                            await client.send(json.dumps({"id": 6, **payload, "force": True}))
+                            sixth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertEqual(sixth["text"], "same call")
+                            self.assertFalse(sixth.get("duplicate"))
+                            self.assertEqual(len(calls), 4)
+
+                        # A second client must not be answered from the first one's
+                        # cached result: the replay guard is per connection.
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as other:
+                            await other.recv()  # initial "connected" message
+                            await other.send(json.dumps({"id": 7, **payload}))
+                            seventh = json.loads(await asyncio.wait_for(other.recv(), 5))
+                            self.assertEqual(seventh["text"], "same call")
+                            self.assertFalse(seventh.get("duplicate"))
+                            self.assertEqual(len(calls), 5)
+                finally:
+                    await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_a_repeated_call_in_a_new_turn_runs_again(self):
+        # Regression (review on d2c3bce): the replay cache keyed only on tool +
+        # arguments, so an identical call in a LATER turn was answered with the
+        # result from up to five minutes earlier. The turn is part of the key now:
+        # the same call inside one turn is a retry, in a new turn it is new work.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps({"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    mock_server = manager.servers["mock"]
+                    calls = []
+                    original_call_tool = mock_server.call_tool
+
+                    async def counting_call_tool(tool_name, arguments, timeout):
+                        calls.append((tool_name, dict(arguments)))
+                        return await original_call_tool(tool_name, arguments, timeout)
+
+                    mock_server.call_tool = counting_call_tool
+                    async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                            await client.recv()  # initial "connected" message
+                            payload = {
+                                "type": "call_tool",
+                                "name": "echo",
+                                "arguments": {"message": "same call"},
+                                "timeout": 2000,
+                                "turn": "convA|1",
+                            }
+                            await client.send(json.dumps({"id": 1, **payload}))
+                            first = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(first.get("duplicate"))
+
+                            # A retry inside the same turn is answered from the cache.
+                            await client.send(json.dumps({"id": 2, **payload}))
+                            second = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertTrue(second.get("duplicate"))
+                            self.assertEqual(len(calls), 1)
+
+                            # The next turn repeats the call on purpose: it must run.
+                            await client.send(json.dumps({"id": 3, **payload, "turn": "convA|2"}))
+                            third = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertEqual(third["text"], "same call")
+                            self.assertFalse(third.get("duplicate"))
+                            self.assertEqual(len(calls), 2)
+
+                            # A client that states no turn cannot use the long cache,
+                            # but an identical call right after itself is a re-render
+                            # replay and must not become a second real execution.
+                            no_turn = {k: v for k, v in payload.items() if k != "turn"}
+                            await client.send(json.dumps({"id": 4, **no_turn}))
+                            fourth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(fourth.get("duplicate"))
+                            await client.send(json.dumps({"id": 5, **no_turn}))
+                            fifth = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertTrue(fifth.get("duplicate"))
+                            self.assertEqual(len(calls), 3)
+                finally:
+                    await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_a_turnless_repeat_after_the_replay_window_runs_again(self):
+        # The turnless window is deliberately short: once it lapses, the same call
+        # is new work again (the bridge must not hide a genuine second request).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps({"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path), patch.object(
+                bridge, "TURNLESS_REPLAY_TTL", 0.05
+            ):
+                await manager.start_servers()
+                try:
+                    mock_server = manager.servers["mock"]
+                    calls = []
+                    original_call_tool = mock_server.call_tool
+
+                    async def counting_call_tool(tool_name, arguments, timeout):
+                        calls.append((tool_name, dict(arguments)))
+                        return await original_call_tool(tool_name, arguments, timeout)
+
+                    mock_server.call_tool = counting_call_tool
+                    async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                            await client.recv()  # initial "connected" message
+                            payload = {
+                                "type": "call_tool",
+                                "name": "echo",
+                                "arguments": {"message": "no turn here"},
+                                "timeout": 2000,
+                            }
+                            await client.send(json.dumps({"id": 1, **payload}))
+                            first = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(first.get("duplicate"))
+
+                            await asyncio.sleep(0.1)
+                            await client.send(json.dumps({"id": 2, **payload}))
+                            second = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(second.get("duplicate"))
+                            self.assertEqual(len(calls), 2)
+                finally:
+                    await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_a_disconnect_drops_the_cached_result(self):
+        # Regression (review on d2c3bce): per-connection entries were never removed,
+        # and CPython reuses object ids, so a later socket could inherit a stale
+        # result. State must die with the connection.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps({"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    mock_server = manager.servers["mock"]
+                    calls = []
+                    original_call_tool = mock_server.call_tool
+
+                    async def counting_call_tool(tool_name, arguments, timeout):
+                        calls.append((tool_name, dict(arguments)))
+                        return await original_call_tool(tool_name, arguments, timeout)
+
+                    mock_server.call_tool = counting_call_tool
+                    async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        payload = {
+                            "type": "call_tool",
+                            "name": "echo",
+                            "arguments": {"message": "same call"},
+                            "timeout": 2000,
+                            "turn": "convA|1",
+                        }
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                            await client.recv()
+                            await client.send(json.dumps({"id": 1, **payload}))
+                            first = json.loads(await asyncio.wait_for(client.recv(), 5))
+                            self.assertFalse(first.get("duplicate"))
+                        # The socket is closed: nothing may be left to answer from.
+                        await asyncio.sleep(0.2)
+                        self.assertEqual(manager._last_calls, {})
+                        self.assertEqual(manager._client_tokens, {})
+
+                        async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as other:
+                            await other.recv()
+                            await other.send(json.dumps({"id": 2, **payload}))
+                            second = json.loads(await asyncio.wait_for(other.recv(), 5))
+                            self.assertEqual(second["text"], "same call")
+                            self.assertFalse(second.get("duplicate"))
+                            self.assertEqual(len(calls), 2)
+                finally:
+                    await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
     async def test_slow_tool_call_does_not_block_ping(self):
         # Regression: requests used to be handled inline in the socket read loop,
         # so one slow tool call stopped the bridge from reading pings/pongs.
@@ -201,6 +491,80 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 second = json.loads(await asyncio.wait_for(client.recv(), 8))
                 self.assertTrue(second["ok"])
                 self.assertEqual(second["text"], "slow")
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_disconnect_finalises_a_running_tool_call(self):
+        # Regression: handle_client cancels pending request tasks when the socket
+        # drops. _call_tool() used to call hub.end() only on its normal path, so a
+        # cancelled call left its busy entry behind and /status kept reporting a
+        # tool that was no longer running. Every begun call must end exactly once.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_SLOW_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}
+                ),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    async with bridge.websockets.serve(
+                        manager.handle_client, "127.0.0.1", 0, max_size=None
+                    ) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        client = await bridge.websockets.connect(f"ws://127.0.0.1:{port}", max_size=None)
+                        try:
+                            await client.recv()  # initial "connected" message
+                            await client.send(
+                                json.dumps(
+                                    {
+                                        "id": 77,
+                                        "type": "call_tool",
+                                        "name": "echo",
+                                        "arguments": {"message": "blocked", "delay": 30},
+                                        "timeout": 60000,
+                                    }
+                                )
+                            )
+                            loop = asyncio.get_running_loop()
+                            deadline = loop.time() + 10
+                            while manager.hub.snapshot()["queue"] == 0:
+                                self.assertLess(loop.time(), deadline, "the tool call never started")
+                                await asyncio.sleep(0.02)
+                            self.assertEqual(
+                                [row["tool"] for row in manager.hub.snapshot()["busy"]], ["echo"]
+                            )
+                            # Dropping the socket is what makes handle_client cancel
+                            # the in-flight task - the path that used to leak.
+                            await client.close()
+                            deadline = loop.time() + 10
+                            while manager.hub.snapshot()["queue"]:
+                                self.assertLess(loop.time(), deadline, "busy entry was never cleared")
+                                await asyncio.sleep(0.02)
+                            ends = [
+                                frame
+                                for frame in manager.hub._recent
+                                if frame["event"] == "tool_end" and frame.get("id") == 77
+                            ]
+                            self.assertEqual(len(ends), 1, "exactly one terminal event per call")
+                            self.assertFalse(ends[0]["ok"])
+                            self.assertEqual(ends[0]["error"], "cancelled")
+                            starts = [
+                                frame
+                                for frame in manager.hub._recent
+                                if frame["event"] == "tool_start" and frame.get("id") == 77
+                            ]
+                            self.assertEqual(len(starts), 1)
+                        finally:
+                            # close() is idempotent: the normal path already closed it.
+                            await client.close()
+                finally:
+                    await manager.stop_servers()
 
     @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
     async def test_large_tool_result_over_websocket(self):
@@ -250,6 +614,114 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await server.stop()
 
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_stream_frame_is_relayed_without_a_reply(self):
+        # A progress frame is advisory: the bridge must publish it and stay silent.
+        # Replying would make the extension mistake a progress frame for a result.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            async with self._ws_client(root, MOCK_MCP) as client:
+                await client.send(json.dumps({
+                    "type": "stream",
+                    "frame": {"phase": "tool_loading", "tool": "echo", "id": "call-1"},
+                }))
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(client.recv(), timeout=0.5)
+
+    async def test_event_hub_publishes_start_and_end(self):
+        hub = bridge.EventHub()
+        # A bare advisory frame must not make the bridge look busy.
+        hub.publish("stream", phase="tool_loading", tool="echo")
+        self.assertEqual(hub.snapshot()["queue"], 0)
+        hub.begin("call-2", "echo", server="mock")
+        busy = hub.snapshot()
+        self.assertEqual(busy["queue"], 1)
+        self.assertEqual(busy["busy"][0]["tool"], "echo")
+        # The live view needs an age it can print without clock math of its own.
+        self.assertIn("elapsed_ms", busy["busy"][0])
+        self.assertGreaterEqual(busy["busy"][0]["elapsed_ms"], 0)
+        hub.end("call-2", ok=True, chars=4)
+        self.assertEqual(hub.snapshot()["queue"], 0)
+        events = [frame["event"] for frame in hub._recent]
+        self.assertIn("tool_start", events)
+        self.assertIn("tool_end", events)
+        end_frame = [f for f in hub._recent if f["event"] == "tool_end"][0]
+        self.assertGreaterEqual(end_frame["ms"], 0)
+        self.assertTrue(end_frame["ok"])
+        # chars/4 estimate so "how many tokens did this call get" is answerable
+        # from the event alone.
+        self.assertEqual(end_frame["tok"], 1)
+        # An explicit tok (from the page, which knows the streamed length) wins.
+        hub.begin("call-3", "echo")
+        hub.end("call-3", ok=True, chars=400, tok=140)
+        self.assertEqual([f for f in hub._recent if f.get("id") == "call-3"][-1]["tok"], 140)
+
+    def test_live_view_is_self_contained(self):
+        # The dashboard is served from the stream port, so it must not depend on
+        # any external asset or build step - only the endpoints this file exposes.
+        html = bridge.INDEX_HTML
+        self.assertIn("new EventSource('/events')", html)
+        self.assertIn("fetch('/status'", html)
+        self.assertIn("elapsed_ms", html)
+
+    @unittest.skipIf(importlib.util.find_spec("aiohttp") is None, "aiohttp package is not installed")
+    async def test_stream_channel_is_read_only(self):
+        # `/push` was new in the previous change and accepted any local POST, so a
+        # web page could inject frames into the live view without a CORS preflight.
+        # Nothing in the extension used it. Pin the behaviour on a real server:
+        # the old route answers 404 and nothing gets published.
+        from aiohttp import ClientSession, web
+
+        hub = bridge.EventHub()
+        runner = web.AppRunner(bridge._build_stream_app(hub), access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/push", json={"event": "tool_start", "tool": "echo"}
+                ) as response:
+                    self.assertEqual(response.status, 404)
+                async with session.get(f"http://127.0.0.1:{port}/status") as response:
+                    self.assertEqual(response.status, 200)
+                    snapshot = await response.json()
+            self.assertEqual(snapshot["version"], bridge.BRIDGE_VERSION)
+        finally:
+            await runner.cleanup()
+        # The rejected POST published nothing.
+        self.assertEqual(hub.snapshot()["queue"], 0)
+        self.assertEqual(list(hub._recent), [])
+
+    def test_bridge_version_matches_the_extension_manifest(self):
+        # The popup prints both numbers side by side, so a drifting bridge version
+        # makes the display meaningless. One number, two files.
+        manifest_path = Path(__file__).parent / "snapgent-extension" / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(bridge.BRIDGE_VERSION, manifest["version"])
+
+    def test_launchers_install_the_live_view_dependency(self):
+        # aiohttp is imported lazily: when it is missing the bridge only logs
+        # "progress channel disabled", so the live view and /status vanish silently.
+        # Pin the install *list*, not a bare mention - the warning text contains the
+        # word too, so a mention-only assertion would pass on a broken launcher.
+        for name in ("Linux_Start.sh", "MacOS_Start.command"):
+            text = (Path(__file__).parent / name).read_text(encoding="utf-8")
+            self.assertIn(
+                "for module in websockets aiohttp;",
+                text,
+                f"{name} does not include aiohttp in its dependency install list",
+            )
+
+    async def test_hub_subscriber_receives_frames_live(self):
+        hub = bridge.EventHub()
+        async with hub.subscribe() as queue:
+            hub.publish("tool_start", tool="echo")
+            frame = await asyncio.wait_for(queue.get(), timeout=1)
+            self.assertEqual(frame["event"], "tool_start")
+            self.assertEqual(frame["tool"], "echo")
+
     def test_duplicate_tool_names_are_server_qualified(self):
         first = bridge.MCPServer("roblox", {})
         second = bridge.MCPServer("effectcraft", {})
@@ -269,6 +741,102 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(manager._resolve_tool("effectcraft/get_state")[0], second)
         self.assertIsNone(manager._resolve_tool("get_state")[0])
+
+
+@unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+class OriginGuardTests(unittest.IsolatedAsyncioTestCase):
+    @contextlib.asynccontextmanager
+    async def _server(self, with_gate: bool = True):
+        manager = bridge.Bridge()
+        if with_gate:
+            server = await bridge._serve_bridge(manager, 0)
+            try:
+                yield server.sockets[0].getsockname()[1]
+            finally:
+                server.close()
+                await server.wait_closed()
+            return
+        async with bridge.websockets.serve(manager.handle_client, "127.0.0.1", 0) as server:
+            yield server.sockets[0].getsockname()[1]
+
+    def test_origin_allowlist(self):
+        allowed = [
+            None,
+            "",
+            "chrome-extension://abcdefghijklmnop",
+            "CHROME-EXTENSION://ABCDEFGHIJKLMNOP",
+            "moz-extension://0f0f0f0f-1111-2222-3333-444444444444",
+            "safari-web-extension://A1B2C3D4",
+        ]
+        rejected = [
+            "https://evil.example",
+            "http://127.0.0.1:17614",
+            "http://localhost:3000",
+            "null",
+            "file://",
+            "app://obsidian.md",
+            "chrome-extension://",
+            "chrome-extension:/missing-slashes",
+        ]
+        for origin in allowed:
+            self.assertTrue(bridge._origin_allowed(origin), origin)
+        for origin in rejected:
+            self.assertFalse(bridge._origin_allowed(origin), origin)
+
+    async def test_serve_bridge_rejects_a_page_origin_at_the_handshake(self):
+        async with self._server() as port:
+            with self.assertRaises(Exception) as caught:
+                async with bridge.websockets.connect(
+                    f"ws://127.0.0.1:{port}", origin="https://evil.example"
+                ):
+                    pass
+        status = getattr(getattr(caught.exception, "response", None), "status_code", None)
+        self.assertEqual(status, 403, f"{type(caught.exception).__name__}: {caught.exception}")
+
+    async def test_serve_bridge_accepts_an_extension_origin(self):
+        async with self._server() as port:
+            async with bridge.websockets.connect(
+                f"ws://127.0.0.1:{port}", origin="chrome-extension://abcdefghijklmnop"
+            ) as client:
+                connected = json.loads(await client.recv())
+        self.assertEqual(connected["type"], "connected")
+
+    async def test_serve_bridge_accepts_a_client_without_an_origin(self):
+        async with self._server() as port:
+            async with bridge.websockets.connect(f"ws://127.0.0.1:{port}") as client:
+                connected = json.loads(await client.recv())
+        self.assertEqual(connected["type"], "connected")
+
+    async def test_legacy_gate_returns_a_tuple_rejection(self):
+        # websockets <= 13 calls process_request(path, headers) and expects a response
+        # tuple; keep that path working for users who pin an older websockets.
+        class LegacyServe:
+            __module__ = "websockets.legacy.server"
+
+        with patch.object(bridge.websockets, "serve", LegacyServe), patch.object(bridge, "log"):
+            gate = bridge._build_origin_gate()
+            self.assertIsNone(await gate("/", {"Origin": "chrome-extension://abc"}))
+            self.assertIsNone(await gate("/", {}))
+            response = await gate("/", {"Origin": "https://evil.example"})
+        self.assertEqual(response, (403, [], b"Origin not allowed.\n"))
+
+    async def test_handler_still_closes_a_page_origin_without_the_gate(self):
+        # Defence in depth: a server started without process_request (an older bridge or
+        # a third-party wrapper) must not process a single frame from a page origin.
+        async with self._server(with_gate=False) as port:
+            async with bridge.websockets.connect(
+                f"ws://127.0.0.1:{port}", origin="https://evil.example"
+            ) as client:
+                with self.assertRaises(Exception) as caught:
+                    await asyncio.wait_for(client.recv(), 5)
+        close_code = getattr(getattr(caught.exception, "rcvd", None), "code", None)
+        if close_code is None:
+            close_code = getattr(caught.exception, "code", None)
+        self.assertEqual(
+            close_code,
+            1008,
+            f"{type(caught.exception).__name__}: {caught.exception}",
+        )
 
 
 if __name__ == "__main__":

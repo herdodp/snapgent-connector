@@ -91,4 +91,134 @@
   const tick = () => { try { syncAll(); } catch {} };
   setInterval(tick, 1000);
   tick();
+
+  // ── Typing bridge (MAIN world) ────────────────────────────────────────────
+  // WHY: the isolated world prints the FIRST message and then loses the ability
+  // to type into the ProseMirror composer - execCommand("insertText") returns
+  // FALSE forever after while the attribute still reads contenteditable="true"
+  // (measured live 2026-11-18: CONTEXT landed 2211/2211, every later send
+  // reported len:0/want:2826). The SAME call from the page's own world succeeds
+  // on a quiet page, but during a run ChatGPT keeps the edit commands disabled
+  // in BOTH worlds, so execCommand is not a dependable transport at all.
+  //
+  // What IS dependable: ProseMirror's DOMObserver. Replacing the contentDOM with
+  // paragraphs makes PM parse the change into a real transaction - measured live
+  // 2026-11-18 19:0x: clearing the editor set state to "" and writing two <p>
+  // nodes produced state "LINE-ONE\nLINE-TWO". No execCommand, no editing host
+  // state, and nothing that ChatGPT can later rewrite as a pasted attachment.
+  //
+  // Protocol: "zs-type" (detail = JSON string) in, "zs-type-done" (detail = JSON
+  // string) out, dispatched asynchronously because the DOM parse lands on the
+  // next observer turn.
+  // Which node the composer selector actually means. ChatGPT remounts the
+  // ProseMirror composer on every turn and leaves the previous node in the DOM at
+  // 0x0, so the selector matches BOTH: measured live 2026-11-20, the first match
+  // was the stale hidden node (0x0) and the second the live composer (512x36).
+  // Resolving with document.querySelector typed into the invisible one: the
+  // content script's read-back saw an empty composer (send.typed len:0/want:2826),
+  // every retry failed and the bar stuck on "Starting…". Prefer the node the
+  // content script named by index when it is visible, otherwise the first VISIBLE
+  // match, and only then fall back to the raw index/first (a textarea composer,
+  // or a provider whose composer is not laid out yet).
+  function pickEditor(sel, idx) {
+    let list = [];
+    try { list = [...document.querySelectorAll(sel)]; } catch { list = []; }
+    if (!list.length) return null;
+    const visible = (e) => {
+      try { return e.isConnected !== false && e.getClientRects().length > 0; } catch { return false; }
+    };
+    const want = Number.isInteger(idx) && idx >= 0 && idx < list.length ? list[idx] : null;
+    if (want && visible(want)) return want;
+    const firstVisible = list.find(visible);
+    if (firstVisible) return firstVisible;
+    return want || list[0];
+  }
+
+  document.addEventListener("zs-type", (ev) => {
+    let req = null;
+    try { req = JSON.parse(ev.detail || "{}"); } catch { return; }
+    const id = req.id;
+    const text = String(req.text == null ? "" : req.text);
+    const done = (out) => {
+      try {
+        document.dispatchEvent(new CustomEvent("zs-type-done", { detail: JSON.stringify(out) }));
+      } catch {}
+    };
+    const ed = req.sel ? pickEditor(req.sel, req.idx) : null;
+    if (!ed) { done({ id, ok: false, len: 0, want: text.length, err: "no editor", path: "main" }); return; }
+    // PM keeps the authoritative doc on the view desc; innerText is the fallback.
+    const read = () => {
+      try {
+        const d = ed.pmViewDesc;
+        if (d && d.node) return d.node.textBetween(0, d.node.content.size, "\n");
+      } catch {}
+      return ed.innerText || "";
+    };
+
+    // Success means the editor holds the text we asked for - not merely that it
+    // holds something. A partial parse (one paragraph of ten) used to be reported
+    // as ok and the caller sent a truncated message.
+    const norm = (s) => String(s == null ? "" : s).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    const wantText = norm(text);
+    const matches = () => norm(read()) === wantText;
+
+    const finish = (path) => {
+      const got = read();
+      if (norm(got) === wantText) {
+        done({ id, ok: true, len: got.length, want: text.length, err: null, path });
+        return;
+      }
+      // Last resort once the DOM route is proven empty: the old execCommand path.
+      let okc = true, errc = null;
+      try {
+        try { ed.focus(); } catch {}
+        const rng = document.createRange();
+        rng.selectNodeContents(ed);
+        const sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); sel.addRange(rng); try { document.execCommand("delete"); } catch {} rng.collapse(false); sel.removeAllRanges(); sel.addRange(rng); }
+        const lines = text.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i] && !document.execCommand("insertText", false, lines[i])) { okc = false; errc = "insertRejected@" + i; break; }
+          if (i < lines.length - 1 && !document.execCommand("insertLineBreak")) { okc = false; errc = "lineBreakRejected@" + i; break; }
+        }
+      } catch (e) { okc = false; errc = String(e && e.message ? e.message : e).slice(0, 120); }
+      const got2 = read();
+      const landed = norm(got2) === wantText;
+      done({
+        id,
+        ok: okc && landed,
+        len: got2.length,
+        want: text.length,
+        err: errc || (landed ? null : "mismatch"),
+        path: path + "+exec",
+      });
+    };
+
+    // Route 1: DOM parse by ProseMirror.
+    try {
+      const frag = document.createDocumentFragment();
+      for (const line of text.split("\n")) {
+        const p = document.createElement("p");
+        if (line) p.textContent = line;
+        else p.appendChild(document.createElement("br"));
+        frag.appendChild(p);
+      }
+      while (ed.firstChild) ed.removeChild(ed.firstChild);
+      ed.appendChild(frag);
+    } catch (e) {
+      done({ id, ok: false, len: read().length, want: text.length, err: "domWriteFailed: " + String(e && e.message ? e.message : e).slice(0, 80), path: "main" });
+      return;
+    }
+    // The observer parses on its own turn, which is not a fixed delay: on a busy
+    // tab it can land after a frame or two. Poll until the read-back matches, and
+    // only fall back to execCommand once the deadline passes - that fallback clears
+    // the editor first, so running it early can strand an empty composer.
+    const deadline = Date.now() + 500;
+    const bump = () => {
+      if (matches()) return finish("dom");
+      if (Date.now() >= deadline) return finish("dom");
+      setTimeout(bump, 50);
+    };
+    bump();
+  }, true);
 })();

@@ -14,6 +14,10 @@
 // walks. No jsdom, no npm install: the repo has no dependencies and this test
 // keeps it that way.
 const fs = require("fs");
+// A checkout with core.autocrlf=true (the Windows default) hands the test a \r\n
+// working tree, while the source pins below match exact "\n" text. Normalise at
+// read time so the assertions test the code, not the checkout's line endings.
+const readSource = (rel) => fs.readFileSync(__dirname + rel, "utf8").replace(/\r\n/g, "\n");
 const ZSParse = new Function(
   fs.readFileSync(__dirname + "/core/parser.js", "utf8") + "; return ZSParse;"
 )();
@@ -43,12 +47,21 @@ function el(tag, opts, children) {
       if (s.startsWith(".") && !s.startsWith("[") && classes.includes(s.slice(1))) return true;
       const classMatch = /^\[class\*=["']([^"']+)["']\]$/.exec(s);
       if (classMatch && classes.some((c) => c.includes(classMatch[1]))) return true;
+      // [attr="value"] variants matter for the 2026-11-17 markup, whose only
+      // assistant marker is data-markdown-text-style="assistant-message".
+      const attrVal = /^\[([-\w]+)=["']?([^"'\]]+)["']?\]$/.exec(s);
+      if (attrVal) return attrs[attrVal[1]] === attrVal[2];
       const attrMatch = /^\[([-\w]+)\]$/.exec(s);
       // Attribute NAMES may contain hyphens (data-turn-key), so look the raw
       // string up rather than only strlen-safe identifiers.
       return !!attrMatch && attrMatch[1] in attrs;
     }),
   };
+  // children: the provider walks a node's ELEMENT children to tell the user
+  // block apart from the reply block in the 2026-11 sibling layout, so the stub
+  // must expose it the way the DOM does.
+  node.children = node.childNodes.filter((c) => c && c.nodeType === 1);
+  for (const c of node.childNodes) if (c && c.nodeType === 1) c.parentElement = node;
   node.querySelector = (sel) => {
     const hit = (n) => {
       if (n.nodeType !== 1) return null;
@@ -93,6 +106,10 @@ function el(tag, opts, children) {
   // stub must provide it. Concatenate the subtree's text nodes, the way a real
   // one renders them (a text node's `nodeValue`).
   Object.defineProperty(node, "innerText", {
+    // configurable so a test can reproduce the 2026-11-17 variant, where a code
+    // block renders with contain-intrinsic-block-size and innerText is empty
+    // while textContent still holds the payload.
+    configurable: true,
     get() {
       const out = [];
       const walk = (n) => {
@@ -447,4 +464,398 @@ ok("mobile textarea text can be read", P.editorText() === "");
   withChat([a, out]);
   ok("the trailing turn is not settled even when an earlier one is",
     P.__test.turnSettled(out) === false);
+}
+
+// ── Dual-side turn: mask the injected bubble, never the model's answer ─────
+// ChatGPT 2026-11 groups one user message and the reply it produced inside a
+// single [data-turn-key]. Hiding that container erased the answer too, so a run
+// of tool results rendered as bare result chips with no text between them.
+// The provider must point the core at the bubble subtree only.
+{
+  const bubble = el("div", { class: "group/user-message" }, ["Output of 'read_file': ok"]);
+  const bubbleWrap = el("div", { class: "flex w-full" }, [bubble]);
+  const reply = el("div", { class: "markdown" }, ["Here is what the file says."]);
+  const turn = el("div", { attrs: { "data-turn-key": "t-dual" } }, [bubbleWrap, reply]);
+
+  const masked = P.injectedHideNode(turn);
+  ok("dual-side turn masks only the bubble wrapper", masked === bubbleWrap);
+  ok("dual-side turn never masks the whole turn", masked !== turn);
+  ok("the answer node is outside the masked wrapper", !masked || masked.querySelector(".markdown") === null);
+
+  const direct = el("div", { attrs: { "data-turn-key": "t-direct" } }, [bubble, reply]);
+  ok("a bubble that is a direct child is masked itself", P.injectedHideNode(direct) === bubble);
+
+  ok("legacy bare user message falls back to whole-item masking",
+    P.injectedHideNode(bubble) === null);
+  ok("an assistant-only turn has nothing to mask",
+    P.injectedHideNode(el("div", { attrs: { "data-turn-key": "t-a" } },
+      [el("div", { class: "markdown" }, ["plain answer"])])) === null);
+
+  // Measured live 2026-11-17: the two sides are SIBLINGS under one stack, so
+  // climbing to the turn's direct child masked the answer as well - every
+  // injected turn collapsed to a 36px chip (masked subtree held 2043 chars
+  // including "ChatGPT said:"). The masked node must be the user block only.
+  const youH4 = el("h4", { class: "sr-only m-0" }, ["You said:You"]);
+  const userBubble = el("div", { class: "group/user-message flex flex-col items-end gap-2" },
+    ["Output of 'run_command': ok"]);
+  const userBlock = el("div", { class: "block-BQZwFn" }, [youH4, userBubble]);
+  const gptH4 = el("h4", { class: "sr-only m-0" }, ["ChatGPT said:ChatGPT"]);
+  const replyBlock = el("div", { class: "block-BQZwFn" },
+    [gptH4, el("div", { class: "markdown" }, ["Saya periksa status proses."])]);
+  const stack = el("div", { class: "flex flex-col stack-eQ550z" }, [userBlock, replyBlock]);
+  const sided = el("div", { class: "flex flex-col gap-1.5" }, [stack]);
+  const sidedTurn = el("div", { attrs: { "data-turn-key": "t-sib" } }, [sided]);
+  const maskedSib = P.injectedHideNode(sidedTurn);
+
+  ok("sibling layout masks the user block, not the shared stack", maskedSib === userBlock);
+  ok("sibling layout keeps the reply block visible",
+    !maskedSib || maskedSib.querySelector(".markdown") === null);
+  ok("sibling layout never returns the wrapper or the turn",
+    maskedSib !== sided && maskedSib !== sidedTurn);
+
+  // Measured live 2026-11-17: a third desktop variant replaced .markdown with
+  // [data-markdown-text-style="assistant-message"] whose code blocks carry
+  // contain-intrinsic-block-size - innerText reports "" while textContent still
+  // holds the envelope. Reading .markdown alone returned 0 chars, the watcher
+  // stalled, and a perfectly valid {"command":"read_file"} sat on screen with no
+  // chip and no bridge call. Both readers must survive an empty innerText.
+  const jsonEnvelope = '{"command":"read_file","params":{"path":"a/b.html"}}';
+  const code = el("code", { class: "whitespace-pre" }, [jsonEnvelope]);
+  const pre = el("pre", {}, [code]);
+  Object.defineProperty(pre, "innerText", { get: () => "" }); // the variant
+  pre.textContent = jsonEnvelope;
+  const newReply = el("div", { attrs: { "data-markdown-text-style": "assistant-message" } }, [pre]);
+  const newTurn = el("div", { attrs: { "data-turn-key": "t-mdroot" } },
+    [el("div", { class: "group/user-message" }, ["go"]), newReply]);
+  ok("2026-11-17 markdown root is found by the reply selector",
+    P.itemText(newTurn).includes('"command":"read_file"'));
+
+  const plain = el("div", { class: "wrap-x" }, [jsonEnvelope]);
+  Object.defineProperty(plain, "innerText", { get: () => "" });
+  plain.textContent = jsonEnvelope;
+  const plainTurn = el("div", { attrs: { "data-turn-key": "t-plain" } },
+    [el("div", { class: "group/user-message" }, ["go"]), plain]);
+  ok("shape-B fallback reads textContent when innerText is empty",
+    P.itemText(plainTurn).includes('"command":"read_file"'));
+}
+
+// ── A mixed turn that carries a command IS the assistant surface ──────────
+// Measured live 2026-11-17: the reply to a user message lives INSIDE the same
+// [data-turn-key] as that message. isAssistantItem() required "no user bubble",
+// so assistantItems() came back EMPTY, lastAssistant() stayed pinned on an older
+// 731-char turn, and the fresh {"command":…} reply was invisible: the resume
+// watchdog re-fired that historical command ~60 times instead of running the new
+// one. The turn must count as assistant when it holds a command block, and a
+// mixed turn carrying only narration must still NOT (masking keys off this).
+{
+  const env = '{"command":"read_file","params":{"path":"immersed-tube-tunnel/anim.html"}}';
+  const codeBlock = el("div", { attrs: { "data-markdown-text-style": "assistant-message" } },
+    [el("pre", {}, [el("code", {}, [env])])]);
+  const cmdTurn = el("div", { attrs: { "data-turn-key": "t-cmd" } },
+    [el("div", { class: "group/user-message" }, ["lanjut"]), codeBlock]);
+  ok("a dual-side turn carrying a command is an assistant item",
+    P.isAssistantItem(cmdTurn) === true);
+  ok("that turn still reports as a user turn too (both sides present)",
+    P.isUserItem(cmdTurn) === true);
+  ok("itemText of the mixed turn is the command payload",
+    P.itemText(cmdTurn).includes('"command":"read_file"'));
+
+  const proseTurn = el("div", { attrs: { "data-turn-key": "t-prose" } },
+    [el("div", { class: "group/user-message" }, ["hi"]),
+     el("div", { class: "markdown" }, ["Ini penjelasan biasa, tanpa perintah."])]);
+  ok("a dual-side turn with only narration is NOT the assistant surface",
+    P.isAssistantItem(proseTurn) === false);
+
+  messageNodes = [proseTurn, cmdTurn];
+  ok("lastAssistant picks the newest command turn", P.lastAssistant() === cmdTurn);
+}
+
+// ── 2026-11-18 desktop markup: bare send control + NESTED turn wrappers ────
+// Measured live (Chrome 157, 18 Nov 2026): the submit control is a bare
+// `button[aria-label="Send"]` (no id, no data-testid), and the turn wrappers are
+// NESTED - an outer [data-turn-key] holds an inner [data-talvt-turn-state] around
+// the same message pair. Without the aria-label selector the click guard found no
+// button and every injection sat in the composer ("ga ngepaste output"); without
+// the dedupe one real exchange counted as 2 users + 3 assistant turns.
+{
+  ok("submit selector accepts the bare aria-label Send control",
+    /button\[aria-label='Send'\]/.test(P.submitSel));
+  ok("submit selector still accepts the legacy testid/stop controls",
+    /composer-submit-button/.test(P.submitSel) && /stop-button/.test(P.submitSel));
+  // data-talvt-turn-state is NOT in S.msg directly? It must be, or allItems() is
+  // empty on this layout and every reply reads as "never read".
+  ok("turn wrapper selector covers data-talvt-turn-state",
+    P.msgSel.includes("[data-talvt-turn-state]"));
+
+  const inner = el("div", { class: "group flex flex-col", attrs: { "data-talvt-turn-state": "complete" } }, [
+    el("div", { class: "group/user-message" }, ["halo"]),
+    el("h4", { attrs: { "data-conversation-role": "assistant" } }, ["ChatGPT said:"]),
+    el("div", { attrs: { "data-markdown-text-style": "assistant-message" } }, ["pong"]),
+  ]);
+  const outer = el("div", { attrs: { "data-turn-key": "turn-uuid" } }, [inner]);
+  messageNodes = [outer, inner];
+  ok("nested turn wrappers collapse to ONE item", P.allItems().length === 1);
+  ok("the surviving item is the outer turn", P.allItems()[0] === outer);
+  ok("one exchange counts as ONE user turn", P.userCount() === 1);
+  ok("one exchange counts as ONE assistant turn", P.assistantCount() === 1);
+
+  // Legacy role-bearing items must never be dropped by the dedupe.
+  const roleUser = el("div", { attrs: { "data-message-author-role": "user" } }, ["halo"]);
+  const roleAsst = el("div", { attrs: { "data-message-author-role": "assistant" } }, ["pong"]);
+  messageNodes = [roleUser, roleAsst];
+  ok("legacy role items survive the dedupe", P.allItems().length === 2);
+}
+
+// ── React REMOUNTS the composer; a stale editor handle made every post-reply
+// send a silent no-op. Live proof 2026-11-18 11:27: the CONTEXT send typed
+// 2211/2211, then the 82-line tool output logged send.insertDone and
+// send.typed {len:0, want:2826} - no turn appeared, and because an empty
+// composer was the core's "sent" signal, Start sat on "Starting…" forever.
+{
+  const prov = readSource("/providers/chatgpt.js");
+  const cm = readSource("/providers/chatgpt-cm.js");
+  const core = readSource("/core/main.js");
+  ok("typeAndSend re-acquires and re-types on a fresh editor",
+    /let got = 0;[\s\S]{0,600}for \(let attempt = 0; attempt < 6 && !got; attempt\+\+\)[\s\S]{0,700}ed = ready;/.test(prov));
+  ok("typeAndSend verifies the text really landed in the composer",
+    /const accepted = await setEditorText\(ed, text\);[\s\S]{0,120}got = editorText\(\)\.length;/.test(prov));
+  ok("a refused typing attempt is logged before the read-back",
+    /if \(!accepted\) diag\("send\.refused"/.test(prov));
+  ok("typeAndSend returns false instead of clicking an empty composer",
+    /if \(!got\) \{\s*\n\s*diag\("send\.typedFailed"[\s\S]{0,140}return false;/.test(prov));
+  ok("successful send paths report true",
+    /if \(btn\) \{ btn\.click\(\); return true; \}/.test(prov));
+  ok("core retries the send when the provider could not type",
+    /const typed = await P\.typeAndSend\(text, images\);[\s\S]{0,900}if \(typed === false\) \{[\s\S]{0,400}continue;/.test(core));
+}
+
+// ── ChatGPT DISABLES the composer: contenteditable flips to "false" while a
+// reply streams and during plain re-renders (measured 2026-11-18 on an idle tab:
+// ce read "false" 6.3s and 8.4s after reload, nothing generating). In that
+// window execCommand("insertText") returns FALSE and types nothing, silently -
+// so a "typed" report with len 0 was indistinguishable from a real send.
+{
+  const prov = readSource("/providers/chatgpt.js");
+  const cm = readSource("/providers/chatgpt-cm.js");
+  const main = readSource("/core/main.js");
+  ok("there is a composer readiness gate",
+    /function editorReady\(ed\)/.test(prov) && /function waitEditorReady\(timeout\)/.test(prov));
+  ok("readiness requires contenteditable true",
+    /return ed\.getAttribute\("contenteditable"\) === "true";/.test(prov));
+  const readyFn = (prov.match(/function editorReady\(ed\) \{[\s\S]*?\n  \}/) || [""])[0]
+    .replace(/\/\/[^\n]*/g, "");
+  ok("readiness never blocks on queryCommandEnabled (false in an unfocused window)",
+    readyFn.length > 0 && !/queryCommandEnabled/.test(readyFn));
+  ok("a refused execCommand aborts the typing instead of reporting success",
+    /ok = document\.execCommand\("insertText", false, lines\[i\]\)[\s\S]{0,500}if \(!ok\) \{[\s\S]{0,200}return false;/.test(prov));
+  ok("a refusal takes one recovery step before giving up",
+    /diag\("send\.recover"/.test(prov) && /const kick = \(\) =>/.test(prov));
+  ok("input lock never writes contenteditable on the ProseMirror composer",
+    /if \(on\) ed\.setAttribute\("data-zs-locked", "1"\);/.test(prov) &&
+    !/ed\.setAttribute\("contenteditable", on \? "false" : "true"\)/.test(prov));
+  ok("typeAndSend only clears readonly on a textarea composer",
+    /if \(relock && ed instanceof HTMLTextAreaElement\) setEditable\(true\);/.test(prov));
+  ok("a ProseMirror composer is never locked by writing contenteditable",
+    !/setEditable\(false\)[\s\S]{0,40}setAttribute\("contenteditable"/.test(prov) &&
+    !/ed\.setAttribute\("contenteditable", editable \? "true" : "false"\)/.test(prov));
+  ok("the user is blocked while the agent runs by a keydown lock",
+    /function installLockKeydown\(\)/.test(prov) && /e\.stopImmediatePropagation\(\);/.test(prov));
+  ok("waitEditorReady never writes contenteditable on a ProseMirror composer",
+    !/setAttribute\("contenteditable", "true"\); healed = true;/.test(prov) &&
+    /if \(editorReady\(ed\)\) \{/.test(prov));
+  ok("typing goes through the MAIN-world bridge before the local ladder",
+    /const viaMain = await typeViaMain\(ed, text\);/.test(prov) &&
+    /if \(viaMain\.ok\) return true;/.test(prov));
+  ok("a partial MAIN-world write is not accepted as typed",
+    /function composerHolds\(ed, text\)/.test(prov) &&
+    /const have = String\(got\)/.test(prov) &&
+    /if \(!composerHolds\(ed, text\)\) \{/.test(prov) &&
+    /send\.typedPartial/.test(prov));
+  // Multi-line regression (found live 2026-11-18): the isolated world reads
+  // textContent, which drops the newlines between ProseMirror block nodes, so a
+  // correct 2211-char write read as 2194 and every multi-line send retried until
+  // it failed. Whitespace-only differences must not count as a failed write.
+  ok("a multi-line write whose block newlines vanished still counts as typed",
+    /const squeeze = \(s\) => s\.replace\(\/\\s\+\/g, ""\);/.test(prov) &&
+    /return squeeze\(have\) === squeeze\(want\);/.test(prov) &&
+    !/have\.replace\(\/\\s\+\/g, " "\)/.test(prov));
+  // Behaviour, not just shape: run the real function against the two reads the
+  // browser actually produces. textContent in the isolated world has no block
+  // newlines; a truncated write loses characters.
+  const holdsSrc = (prov.match(/function composerHolds\(ed, text\) \{[\s\S]*?\n  \}/) || [""])[0];
+  let holds = null;
+  try { holds = holdsSrc ? eval("(" + holdsSrc + ")") : null; } catch { holds = null; }
+  const fakeEd = (txt) => ({ textContent: txt });
+  ok("composerHolds accepts the newline-less read of a correct multi-line write",
+    !!holds && holds(fakeEd("line1line2"), "line1\nline2") === true &&
+    holds(fakeEd("aaabbb"), "aaa\n\nbbb") === true);
+  ok("composerHolds still rejects a truncated write",
+    !!holds && holds(fakeEd("line1"), "line1\nline2") === false &&
+    holds(fakeEd("Tugas pertama"), "Tugas pertama: pakai tool list_dir") === false);
+  ok("the MAIN-world bridge exists and is reachable from this provider",
+    /document\.addEventListener\("zs-type",/.test(cm) &&
+    /new CustomEvent\("zs-type-done"/.test(cm) &&
+    /pmViewDesc/.test(cm));
+  ok("the bridge writes the doc as DOM so ProseMirror parses it (no execCommand)",
+    /for \(const line of text\.split\("\\n"\)\)/.test(cm) &&
+    /while \(ed\.firstChild\) ed\.removeChild\(ed\.firstChild\);/.test(cm) &&
+    /const bump = \(\) => \{/.test(cm));
+  ok("the bridge verifies the read-back against the requested text",
+    /const norm = \(s\) =>/.test(cm) &&
+    /const wantText = norm\(text\);/.test(cm) &&
+    /const matches = \(\) => norm\(read\(\)\) === wantText;/.test(cm) &&
+    /err: errc \|\| \(landed \? null : "mismatch"\)/.test(cm));
+  ok("the bridge polls the parse instead of reading once at a fixed delay",
+    /const deadline = Date\.now\(\) \+ 500;/.test(cm) &&
+    /if \(Date\.now\(\) >= deadline\) return finish\("dom"\);/.test(cm));
+  ok("the remote-command watcher is gated on its opt-in",
+    /const check = async \(\) => \{\n      \/\/ Nothing to do while the opt-in is off/.test(main) &&
+    /if \(!remoteCommands\) return;/.test(main) &&
+    /remoteCommandListeners\.push\(setPolling\);/.test(main) &&
+    /setPolling\(remoteCommands\);/.test(main));
+  ok("every tool call states which turn it belongs to, so the bridge can dedupe it",
+    (main.match(/turn: turnKeyForCache/g) || []).length === 2 &&
+    /const turnKeyForCache = typeof turn === "string" && turn \? turn : undefined;/.test(main) &&
+    /runTool\(call, `\$\{P\.conversationKey\(\)\}\|\$\{turnKey\(res\.item\)\}`\)/.test(main));
+  ok("the bridge still falls back to execCommand when the DOM parse lands empty",
+    /path \+ "\+exec"/.test(cm) &&
+    /insertRejected@/ .test(cm));
+  ok("typing reports success only after the whole text was accepted",
+    /if \(lines\.length > INSERT_CHUNK_LINES\) diag\("send\.insertDone"[\s\S]{0,120}return true;/.test(prov));
+  ok("setEditorText propagates the acceptance result",
+    /return await typeEditorText\(ed, text\);/.test(prov));
+  ok("typeAndSend waits for readiness before each typing attempt",
+    /const ready = await waitEditorReady\(attempt \? 1200 : 4000\);/.test(prov));
+  ok("typeAndSend logs when the composer never became ready",
+    /diag\("send\.notReady"/.test(prov));
+}
+
+// ── The composer selector matches MORE than the live composer. ChatGPT leaves the
+// previous ProseMirror node in the DOM at 0x0 on every remount, so the list holds
+// a stale hidden node AND the visible one. The MAIN-world tap resolved req.sel with
+// document.querySelector - the FIRST match - and typed into the hidden node, so the
+// content script read the visible composer as empty (send.typed len:0/want:2826),
+// burned all four retries and left the bar on "Starting…". Measured live 2026-11-20
+// on chatgpt.com (Chrome 157): two matches, first 0x0 with 2745 chars, second
+// 512x36 and empty. Both worlds must agree on the node, and a superseded command
+// must not be labelled "not run" when the loop deliberately ran a later block.
+{
+  const prov = readSource("/providers/chatgpt.js");
+  const cm = readSource("/providers/chatgpt-cm.js");
+  const core = readSource("/core/main.js");
+
+  ok("the content script reports which editor it picked, not just the selector",
+    /detail: JSON\.stringify\(\{ id, text: String\(text\), sel: S\.editor, idx \}\)/.test(prov) &&
+    /\[\.\.\.document\.querySelectorAll\(S\.editor\)\]\.indexOf\(ed\)/.test(prov));
+  ok("the main world no longer resolves the selector to the first match",
+    /function pickEditor\(sel, idx\)/.test(cm) &&
+    !/document\.querySelector\(req\.sel\)/.test(cm) &&
+    /const ed = req\.sel \? pickEditor\(req\.sel, req\.idx\) : null;/.test(cm));
+
+  // Behaviour: run the real picker against the node lists the browser produces.
+  const pickSrc = (cm.match(/function pickEditor\(sel, idx\) \{[\s\S]*?\n  \}/) || [""])[0];
+  const node = (visible, text) => ({
+    isConnected: true,
+    textContent: text || "",
+    getClientRects: () => (visible ? [{}] : []),
+  });
+  const hiddenStale = node(false, "Output of 'list_commands': ...");
+  const liveEd = node(true, "");
+  const pickWith = (list) => {
+    try { return new Function("document", "return (" + pickSrc + ");")({ querySelectorAll: () => list }); }
+    catch { return null; }
+  };
+  const p1 = pickWith([hiddenStale, liveEd]);
+  ok("a stale hidden composer is never the node that gets typed into",
+    !!p1 && p1("#ed", -1) === liveEd && p1("#ed", undefined) === liveEd);
+  ok("the index the content script sent wins when it is the visible editor",
+    !!p1 && p1("#ed", 1) === liveEd);
+  ok("an index pointing at the hidden node still lands on the visible editor",
+    !!p1 && p1("#ed", 0) === liveEd);
+  const p2 = pickWith([hiddenStale, node(false, "")]);
+  ok("with no visible editor the index (then first match) is used",
+    !!p2 && p2("#ed", 1) !== hiddenStale && p2("#ed", 99) === hiddenStale);
+  ok("no editor at all stays a miss, so the caller keeps its `no editor` error",
+    !!p1 && p1("#ed", 0) !== null && pickWith([])("#ed", 0) === null);
+
+  ok("a superseded command is labelled skipped, not not-run",
+    /let detail = stopped \? "stopped"\s*\n\s*: \(staleLastOrphan \? "not run" : \(supersededOrphan \? "skipped" : ""\)\);/.test(core));
+}
+
+// ── The submit control lives in TWO forms. ChatGPT keeps a zero-size copy of the
+// composer form whose submit button ("Stop", matched by S.submitBtn) has a
+// non-null offsetParent, and querySelector returned it first - so sendButton() was
+// ALWAYS null, every send fell back to a synthetic Enter that ProseMirror ignores
+// without document focus, and the tool result stayed in the composer: send.typed
+// 2745/2826 (whitespace-only difference, so composerHolds passed), four retries,
+// send.failed, bar stuck on "Starting…". Measured live 2026-11-20 on Chrome 157:
+// the real control carries aria-label="Send" only while the composer holds text.
+{
+  const prov = readSource("/providers/chatgpt.js");
+  ok("the submit lookup no longer takes the first match in the document",
+    /function pickSubmit\(list, ed\)/.test(prov) &&
+    /const submitButton = \(\) => pickSubmit\(document\.querySelectorAll\(S\.submitBtn\), getEditor\(\)\);/.test(prov) &&
+    !/const b = document\.querySelector\(S\.submitBtn\);/.test(prov));
+
+  const pickSrc = (prov.match(/function pickSubmit\(list, ed\) \{[\s\S]*?\n  \}/) || [""])[0];
+  const btn = (aria, visible) => ({
+    aria,
+    getClientRects: () => (visible ? [{}] : []),
+    getAttribute: (n) => (n === "aria-label" ? aria : null),
+  });
+  const ghostStop = btn("Stop", false);
+  const liveSend = btn("Send", true);
+  const liveStop = btn("Stop", true);
+  const formOf = (members) => ({ contains: (b) => members.includes(b) });
+  const liveForm = formOf([liveSend, liveStop]);
+  const ed = { closest: (s) => (s === "form" ? liveForm : null) };
+  const pickWith = (list) => {
+    try { return new Function("return (" + pickSrc + ");")(); }
+    catch { return null; }
+  };
+  const pick = pickWith();
+  ok("a control that is not laid out never wins, even though its offsetParent is not null",
+    !!pick && pick([ghostStop, liveSend], ed) === liveSend);
+  const otherFormSend = btn("Send message", true);
+  ok("the visible composer's own form is preferred over another laid-out form",
+    !!pick && pick([otherFormSend, liveSend], ed) === liveSend);
+  ok("an empty composer exposes no submit control, so the ghost is still not used",
+    !!pick && pick([ghostStop], ed) === null);
+  ok("while generating, the visible Stop is what the widget reports",
+    !!pick && pick([ghostStop, liveStop], ed) === liveStop);
+}
+
+// ── Reopening an adopted conversation must still count as a snapgentV3 session.
+// Measured live 2026-11-20 (Chrome 157, chatgpt.com): ChatGPT's turn container
+// glues its chip label into the same textContent, so the caption arrives as
+// "list_commands · resultOutput of 'list_commands': …". domHasZsSignal() matched
+// the caption only at a line start, so every OLD snapgent chat read as
+// "No agent. Open a new chat." and the bar offered no way back in - while the
+// very same chat was startable again only by opening a fresh one and losing it.
+{
+  const core = readSource("/core/main.js");
+  ok("session-signal matching is a testable pure function",
+    /function isZsSignalText\(txt\) \{/.test(core) &&
+    /if \(isZsSignalText\(it\.textContent \|\| ""\)\) return true;/.test(core));
+  const fnSrc = (core.match(/function isZsSignalText\(txt\) \{[\s\S]*?\n  \}/) || [""])[0];
+  const ZS = { SYS_MARKER: "⟦ZS-SYS⟧" };
+  let sig = null;
+  try { sig = new Function("return (" + fnSrc + ");").call(null); } catch (e) { sig = null; }
+  // The extracted body references ZS from its closure; bind it explicitly.
+  const call = (t) => {
+    try { return new Function("ZS", "return (" + fnSrc + ");")(ZS)(t); } catch (e) { return null; }
+  };
+  ok("the chip label glued to the caption still marks a session",
+    call("list_commands · resultOutput of 'list_commands': vscode commands (28):") === true);
+  ok("the classic line-start caption still marks a session",
+    call("Output of 'run_command': ok") === true);
+  ok("the system-prompt marker still marks a session",
+    call(ZS.SYS_MARKER + "\noperating instructions") === true);
+  ok("the restated system note still marks a session",
+    call("(System note from snapgentV3 - an automatic re-statement)") === true);
+  ok("plain prose in a never-started chat is NOT a session",
+    call("Hitung 3 + 4, hasilnya 7.") === false);
+  ok("a quoted command shape alone is NOT a session",
+    call('Explain this format: {"command":"list_commands","params":{}}') === false);
+  ok("an empty turn is NOT a session", call("") === false);
 }
