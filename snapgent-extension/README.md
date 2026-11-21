@@ -2,18 +2,25 @@
 
 Control Roblox Studio with AI, for free. snapgentV3 turns a normal AI chat (ChatGPT, Claude, DeepSeek, Google Gemini, Grok, Kimi, GLM, Qwen, Qwen Coder, Arena, Meta AI, or Ptero) into an agent that builds and scripts your Roblox game for you: just describe what you want, and it reads/edits scripts, runs Luau, inspects the game tree, and generates assets directly in Roblox Studio. No API key, no terminal, no coding required.
 
-It's a Chrome/Edge browser extension plus a small local bridge that connects the chat to Roblox Studio or VS Code through MCP. **DeepSeek is the recommended provider.** ChatGPT, Claude, Gemini, Grok, Kimi, GLM, Qwen, Qwen Coder, Arena, Meta AI and Ptero also work. Qwen Chat and Qwen Coder are separate providers. Grok requires signing in to xAI. On ChatGPT and Claude, screenshots and image input are disabled in this integration. ChatGPT also summarises its own context in long sessions, so snapgentV3 re-states its operating instructions periodically (shown as a "Reminder" chip) to stop it forgetting it can run commands. Gemini and Kimi can be less stable: Gemini tends to stop using the Roblox tools in long sessions, and Kimi sometimes reaches for its own native tools instead of the Roblox commands. On Arena, keep the mode dropdown on **Direct** (snapgentV3 only supports Direct mode).
+It's a browser extension (Chrome, Edge, Firefox, Brave, and other Chromium browsers) plus a small local bridge that connects the chat to Roblox Studio or VS Code through MCP. **DeepSeek is the recommended provider.** ChatGPT, Claude, Gemini, Grok, Kimi, GLM, Qwen, Qwen Coder, Arena, Meta AI and Ptero also work. Qwen Chat and Qwen Coder are separate providers. Grok requires signing in to xAI. On ChatGPT and Claude, screenshots and image input are disabled in this integration. ChatGPT also summarises its own context in long sessions, so snapgentV3 re-states its operating instructions periodically (shown as a "Reminder" chip) to stop it forgetting it can run commands. Gemini and Kimi can be less stable: Gemini tends to stop using the Roblox tools in long sessions, and Kimi sometimes reaches for its own native tools instead of the Roblox commands. On Arena, keep the mode dropdown on **Direct** (snapgentV3 only supports Direct mode).
 
 The initial **MCP target** is **None**. Choose a target in the chat bar before clicking **Start**; existing saved target preferences are preserved. For VS Code, open the intended project folder first. You can choose Roblox Studio when its MCP server is enabled. The AI selector beside the target opens the supported chat providers.
 
 ## Setup
 
-**Load the extension manually (Edge or Chrome):**
-1. Go to `edge://extensions` (Edge) or `chrome://extensions` (Chrome)
-2. Enable **Developer mode** (top right toggle)
-3. Click **Load unpacked**
-4. Select the `snapgent-extension` folder
-5. The extension is now active
+**Load the extension manually:**
+
+* **For Chrome / Edge / Brave / Chromium:**
+  1. Go to `chrome://extensions` (Chrome/Brave) or `edge://extensions` (Edge)
+  2. Enable **Developer mode** (top right toggle)
+  3. Click **Load unpacked** and select the `snapgent-extension` folder
+  4. The extension is now active
+
+* **For Mozilla Firefox:**
+  1. Open a new tab and go to `about:debugging#/runtime/this-firefox`
+  2. Under **Temporary Extensions**, click **Load Temporary Add-on...**
+  3. Navigate into the `snapgent-extension` folder and select the `manifest.json` file
+  4. The extension is now active
 
 **Then set up the Bridge:**
 1. **Download the Bridge** from the [SnapgentV3 release](https://github.com/herdodp/snapgent-connector/releases/tag/V3)

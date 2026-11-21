@@ -3,6 +3,12 @@
   "name": "snapgentV3",
   "version": "3.9.13",
   "description": "Turn ChatGPT, Claude, DeepSeek, Gemini, Grok, Kimi, GLM, Qwen, Qwen Coder, Arena, Meta AI, Ptero or Mistral into a VS Code agent through a local bridge.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "snapgent@connector.local",
+      "strict_min_version": "128.0"
+    }
+  },
   "permissions": ["storage"],
   "host_permissions": [
     "https://chat.deepseek.com/*",
@@ -23,10 +29,14 @@
     "https://grok.com/*",
     "https://chat.mistral.ai/*",
     "http://127.0.0.1/*",
-    "ws://127.0.0.1/*"
+    "http://localhost/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; connect-src 'self' ws://127.0.0.1:17613 http://127.0.0.1:17613 ws://localhost:17613 http://localhost:17613;"
+  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["core/guard.js", "background.js"]
   },
   "icons": {
     "16": "icon.png",

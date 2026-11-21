@@ -80,6 +80,25 @@ class VscodeMcpTests(unittest.TestCase):
         self.assertEqual(paths[0], Path("/tmp/vscode-config/Code/User/globalStorage/storage.json"))
         self.assertTrue(any("VSCodium" in str(path) for path in paths))
 
+    def test_vscode_active_folder_windows_handles_process_checks(self):
+        with patch.object(vscode_mcp.sys, "platform", "win32"), patch.dict("os.environ", {}, clear=True):
+            # 1. tasklist command fails (non-zero return code) -> returns None
+            with patch("subprocess.run", return_value=type("SubResult", (), {"returncode": 1, "stdout": ""})()):
+                self.assertIsNone(vscode_mcp._vscode_active_folder())
+
+            # 2. tasklist raises OSError -> returns None
+            with patch("subprocess.run", side_effect=OSError("command not found")):
+                self.assertIsNone(vscode_mcp._vscode_active_folder())
+
+            # 3. tasklist has no matching VS Code/Codium/Insiders process -> returns None
+            with patch("subprocess.run", return_value=type("SubResult", (), {"returncode": 0, "stdout": "notepad.exe\nexplorer.exe"})):
+                self.assertIsNone(vscode_mcp._vscode_active_folder())
+
+            # 4. tasklist recognizes Code - Insiders.exe
+            with patch("subprocess.run", return_value=type("SubResult", (), {"returncode": 0, "stdout": "Code - Insiders.exe 1234"})):
+                with patch.object(vscode_mcp, "_vscode_storage_paths", return_value=[]):
+                    self.assertIsNone(vscode_mcp._vscode_active_folder())
+
     def test_file_operations_stay_in_workspace(self):
         vscode_mcp.create_file("src/app.js", "export function start() {}\n")
         vscode_mcp.create_file(".github/workflows/check.yml", "name: check\n")

@@ -26,28 +26,47 @@ SAFE_PROJECT_SCRIPTS = {"build", "check", "format", "lint", "test", "typecheck"}
 
 
 def _vscode_active_folder() -> Optional[Path]:
+    env_dir = os.environ.get("ZS_WORKSPACE") or os.environ.get("VSCODE_WORKSPACE")
+    if env_dir:
+        cand = Path(env_dir).resolve()
+        if cand.is_dir():
+            return cand
+
     if sys.platform == "win32":
-        result = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq Code.exe", "/NH"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError("Could not check whether VS Code is running.")
-        if "Code.exe" not in result.stdout:
+        try:
+            result = subprocess.run(
+                ["tasklist", "/NH"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+            if result.returncode != 0:
+                return None
+            valid_procs = ("Code.exe", "Code - Insiders.exe", "VSCodium.exe")
+            if not any(proc in result.stdout for proc in valid_procs):
+                return None
+        except (subprocess.SubprocessError, OSError):
             return None
 
-    for storage_path in _vscode_storage_paths():
+    all_paths = list(_vscode_storage_paths())
+    if sys.platform == "linux":
+        config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        all_paths.append(config / "codium" / "User" / "globalStorage" / "storage.json")
+        all_paths.append(config / "Code - OSS" / "User" / "globalStorage" / "storage.json")
+        home = Path.home()
+        all_paths.append(home / ".var/app/com.vscodium.codium/config/VSCodium/User/globalStorage/storage.json")
+        all_paths.append(home / "snap/codium/current/.config/VSCodium/User/globalStorage/storage.json")
+
+    for storage_path in all_paths:
         if not storage_path.is_file():
             continue
         try:
             data = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"Could not read VS Code workspace state: {error}") from error
+        except (OSError, json.JSONDecodeError):
+            continue
 
         windows_state = data.get("windowsState") or {}
         uris = []
@@ -79,7 +98,10 @@ def _vscode_storage_paths() -> List[Path]:
         appdata = os.environ.get("APPDATA")
         if not appdata:
             return []
-        return [Path(appdata) / "Code" / "User" / "globalStorage" / "storage.json"]
+        return [
+            Path(appdata) / product / "User" / "globalStorage" / "storage.json"
+            for product in ("Code", "Code - Insiders", "VSCodium")
+        ]
 
     if sys.platform == "linux":
         config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
