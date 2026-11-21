@@ -615,18 +615,20 @@ const ZSProvider = (() => {
       userCount() > usersBeforeSend ||
       !!stopButton();
 
-    let submitted = false;
+    let clickSucceeded = false;
     const b = sendButton();
 
     // Primary submission path: click the send button once
     if (b) {
       if (typeof b.focus === "function") b.focus();
-      try { b.click(); } catch {}
-      submitted = await waitFor(isSubmitted, 1500);
+      try {
+        b.click();
+        clickSucceeded = true;
+      } catch {}
     }
 
-    // Fallback path: if button click did not trigger submit, dispatch Enter on the editor
-    if (!submitted) {
+    // Fallback path: only if clicking the send button is known to have failed (e.g. absent or threw)
+    if (!clickSucceeded) {
       const edTarget = visEd || targetEditor;
       if (edTarget) {
         if (typeof edTarget.focus === "function") edTarget.focus();

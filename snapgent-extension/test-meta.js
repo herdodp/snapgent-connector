@@ -109,12 +109,42 @@ const provider = new Function(
   assert.strictEqual(enterDispatches, 0, "fallback Enter was not triggered when send button succeeded");
   provider.setInputLock(false);
 
-  // Test fallback: button click fails to trigger submission, so fallback Enter is used
+  // Regression test: click succeeds but confirmation is delayed beyond 1.5 seconds.
+  // Prompt must be sent only once (no duplicate Enter dispatch during the wait).
   sendClicks = 0;
   enterDispatches = 0;
   stopButton = null;
   sendButton.offsetParent = {};
-  sendButton.click = () => { sendClicks++; /* fails to start generation or clear */ };
+  sendButton.click = () => {
+    sendClicks++;
+    // Confirmation arrives after 1800ms (beyond the earlier 1.5s window)
+    setTimeout(() => {
+      sendButton.offsetParent = null;
+      stopButton = {
+        tagName: "BUTTON",
+        attrs: { "aria-label": "Stop generating" },
+        offsetParent: {},
+        getAttribute(name) { return this.attrs[name] ?? null; },
+        getClientRects() { return [{ width: 30, height: 30 }]; },
+        click() {},
+      };
+    }, 1800);
+  };
+  visibleEditor.textContent = "delayed prompt";
+  await provider.typeAndSend("delayed prompt");
+  assert.strictEqual(sendClicks, 1, "send button clicked exactly once for delayed confirmation");
+  assert.strictEqual(enterDispatches, 0, "fallback Enter was not triggered while waiting for delayed confirmation");
+  assert.ok(stopButton, "delayed submission succeeded");
+
+  // Test fallback: button click is known to have failed (throws an error), so fallback Enter is used
+  sendClicks = 0;
+  enterDispatches = 0;
+  stopButton = null;
+  sendButton.offsetParent = {};
+  sendButton.click = () => {
+    sendClicks++;
+    throw new Error("send button click failed in DOM");
+  };
   visibleEditor.textContent = "fallback prompt";
   visibleEditor.dispatchEvent = (ev) => {
     if (ev && ev.type === "keydown" && ev.key === "Enter") {
@@ -131,8 +161,8 @@ const provider = new Function(
     }
   };
   await provider.typeAndSend("fallback prompt");
-  assert.strictEqual(sendClicks, 1, "send button was attempted first");
-  assert.strictEqual(enterDispatches, 1, "fallback Enter was triggered exactly once after primary failed");
+  assert.strictEqual(sendClicks, 1, "send button was attempted first and threw");
+  assert.strictEqual(enterDispatches, 1, "fallback Enter was triggered exactly once after click failed");
   assert.ok(stopButton, "fallback submission succeeded");
 
   // Restore sendButton.click
@@ -181,7 +211,8 @@ const provider = new Function(
   provider.setInputLock(false);
 
   console.log("PASS Meta send is accepted when generation starts before the mirror textarea clears");
-  console.log("PASS single submission path is used with fallback only on failure");
+  console.log("PASS single submission path is used with fallback only when click fails");
+  console.log("PASS delayed confirmation beyond 1.5s does not dispatch duplicate Enter");
   console.log("PASS current Meta AI input and aria-labelled Send/Stop controls are supported");
 })().catch((error) => {
   console.error(error);
