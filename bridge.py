@@ -951,6 +951,14 @@ class Bridge:
             return
         call_id = request_id if request_id is not None else f"{tool_name}-{int(time.time() * 1000)}"
         self.hub.begin(call_id, name, server=server.server_id)
+        # Every begun call must be finalised exactly once. A websocket drop cancels
+        # the pending request task, which surfaces here as CancelledError and is not
+        # an ordinary failure: without this `finally` the busy entry outlived its
+        # socket and /status kept reporting a tool that was no longer running.
+        # `hub.end` pops the entry, so one terminal `tool_end` is published per call
+        # no matter which way the work below ends.
+        end_ok = False
+        end_extra: Dict[str, Any] = {}
         try:
             result = await server.call_tool(tool_name, arguments, timeout_seconds)
             text_parts = []
@@ -985,11 +993,12 @@ class Bridge:
                         "at": time.time(),
                         "response": {"type": "tool_result", "ok": True, "text": text, "images": images},
                     }
-            self.hub.end(call_id, ok=not result.get("isError"), chars=len(text))
+            end_ok = not result.get("isError")
+            end_extra = {"chars": len(text)}
             log(f"<- {name} ({text[:120].replace(chr(10), ' ')})")
         except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
             message = str(error)
-            self.hub.end(call_id, ok=False, error=message[:200])
+            end_extra = {"error": message[:200]}
             await self._send_client(
                 websocket,
                 {
@@ -1001,6 +1010,29 @@ class Bridge:
                 },
             )
             log(f"<- {name} ERROR: {message[:MAX_LOG_CHARS]}")
+        except asyncio.CancelledError:
+            # The client went away mid-call, so there is nobody to answer, but the
+            # busy entry must not survive the socket. The `finally` below clears it;
+            # cancellation itself is re-raised (see handle_client).
+            end_extra = {"error": "cancelled"}
+            raise
+        except Exception as error:
+            # An unexpected bug in a provider must not leave the queue stuck either.
+            message = f"{type(error).__name__}: {error}"
+            end_extra = {"error": message[:200]}
+            await self._send_client(
+                websocket,
+                {
+                    "type": "tool_result",
+                    "id": request_id,
+                    "ok": False,
+                    "kind": "tool_error",
+                    "error": f"Bridge error: {message}",
+                },
+            )
+            log(f"<- {name} UNEXPECTED: {message[:MAX_LOG_CHARS]}")
+        finally:
+            self.hub.end(call_id, ok=end_ok, **end_extra)
 
     def _resolve_tool(self, name: str) -> Tuple[Optional[MCPServer], str]:
         if "/" in name:

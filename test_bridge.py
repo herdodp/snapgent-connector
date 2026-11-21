@@ -493,6 +493,80 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(second["text"], "slow")
 
     @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_disconnect_finalises_a_running_tool_call(self):
+        # Regression: handle_client cancels pending request tasks when the socket
+        # drops. _call_tool() used to call hub.end() only on its normal path, so a
+        # cancelled call left its busy entry behind and /status kept reporting a
+        # tool that was no longer running. Every begun call must end exactly once.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_mcp.py"
+            mock_path.write_text(MOCK_SLOW_MCP, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}
+                ),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    async with bridge.websockets.serve(
+                        manager.handle_client, "127.0.0.1", 0, max_size=None
+                    ) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        client = await bridge.websockets.connect(f"ws://127.0.0.1:{port}", max_size=None)
+                        try:
+                            await client.recv()  # initial "connected" message
+                            await client.send(
+                                json.dumps(
+                                    {
+                                        "id": 77,
+                                        "type": "call_tool",
+                                        "name": "echo",
+                                        "arguments": {"message": "blocked", "delay": 30},
+                                        "timeout": 60000,
+                                    }
+                                )
+                            )
+                            loop = asyncio.get_running_loop()
+                            deadline = loop.time() + 10
+                            while manager.hub.snapshot()["queue"] == 0:
+                                self.assertLess(loop.time(), deadline, "the tool call never started")
+                                await asyncio.sleep(0.02)
+                            self.assertEqual(
+                                [row["tool"] for row in manager.hub.snapshot()["busy"]], ["echo"]
+                            )
+                            # Dropping the socket is what makes handle_client cancel
+                            # the in-flight task - the path that used to leak.
+                            await client.close()
+                            deadline = loop.time() + 10
+                            while manager.hub.snapshot()["queue"]:
+                                self.assertLess(loop.time(), deadline, "busy entry was never cleared")
+                                await asyncio.sleep(0.02)
+                            ends = [
+                                frame
+                                for frame in manager.hub._recent
+                                if frame["event"] == "tool_end" and frame.get("id") == 77
+                            ]
+                            self.assertEqual(len(ends), 1, "exactly one terminal event per call")
+                            self.assertFalse(ends[0]["ok"])
+                            self.assertEqual(ends[0]["error"], "cancelled")
+                            starts = [
+                                frame
+                                for frame in manager.hub._recent
+                                if frame["event"] == "tool_start" and frame.get("id") == 77
+                            ]
+                            self.assertEqual(len(starts), 1)
+                        finally:
+                            # close() is idempotent: the normal path already closed it.
+                            await client.close()
+                finally:
+                    await manager.stop_servers()
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
     async def test_large_tool_result_over_websocket(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             async with self._ws_client(Path(temp_dir), MOCK_MCP) as client:
