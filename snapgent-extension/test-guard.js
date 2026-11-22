@@ -23,6 +23,41 @@ const G = new Function(
   ok("a timeout is not a retryable disconnect", G.mayRetryAfterDisconnect({ kind: "timeout", sent: false }) === false);
   ok("a success is not a retryable disconnect", G.mayRetryAfterDisconnect({ ok: true }) === false);
 
+  // ── 1b. Per-call execution memory (replay of one identical command) ──────
+  // Live bug: one identical `list_dir` was dispatched every 30 s for 20+
+  // minutes. The turn-level memory keys on reply TEXT, and the site re-renders
+  // that text once a result lands - so startsWith() stopped matching and the
+  // call looked fresh forever. This memory keys on the CALL itself.
+  {
+    const mem = G.createCallMemory({ limit: 4 });
+    const dir = { tool: "list_dir", arguments: { path: "immersed-tube-tunnel" } };
+    mem.remember("kA", dir);
+    ok("a call that already ran is refused", mem.has("kA", dir) === true);
+    // The replayed payload from the live log, re-serialised with another key
+    // order: the same call, therefore still refused.
+    const reordered = { tool: "list_dir", arguments: { path: "immersed-tube-tunnel" } };
+    ok("reordered arguments are the same call", mem.has("kA", reordered) === true);
+    ok("same call in ANOTHER turn is allowed", mem.has("kB", dir) === false);
+    ok("different arguments are allowed", mem.has("kA", { tool: "list_dir", arguments: { path: "other" } }) === false);
+    ok("different tool is allowed", mem.has("kA", { tool: "read_file", arguments: dir.arguments }) === false);
+    // The model's own schema: command/params instead of tool/arguments.
+    const cmd = { command: "read_file", params: { path: "a.html" } };
+    mem.remember("kA", cmd);
+    ok("command/params shape is remembered too", mem.has("kA", { command: "read_file", params: { path: "a.html" } }) === true);
+    // A raw JSON string body and the parsed object are the SAME call - that is
+    // the point: a retry that re-sends text instead of an object must not run
+    // the command a second time.
+    mem.remember("kA", { tool: "x", arguments: "{}" });
+    ok("a JSON-string body equals the parsed object body", mem.has("kA", { tool: "x", arguments: {} }) === true);
+    // Cap: adding a NEW turn past the cap evicts the oldest one instead of
+    // growing without bound.
+    mem.remember("kC", dir); mem.remember("kD", dir); mem.remember("kE", dir);
+    ok("the memory stays at the cap", mem.size() <= 4);
+    mem.remember("kF", dir); // one new turn past the cap
+    ok("the oldest turn is evicted at the cap", mem.has("kA", dir) === false);
+    ok("the newest turn is still remembered", mem.has("kF", dir) === true);
+  }
+
   // The failure text must warn instead of inviting a blind repeat.
   const msg = G.inFlightFailure("write_file");
   ok("in-flight failure names the tool", msg.includes("write_file"));
@@ -142,6 +177,77 @@ const G = new Function(
 }
 
 // ── The worker uses the shared rule, not a copy ───────────────────────────
+  // ── 1c. Adopting a command written on another device (opt-in) ────────────
+  // Live gap measured 2026-11-18: a reply typed in the ChatGPT mobile app
+  // synced into the web tab with a valid {"command":"list_dir"} block, but the
+  // loop read it as plain text and ended (resume answered "no-command").
+  {
+    const ad = G.createRemoteCommandAdopter({ limit: 4 });
+    const base = { enabled: true, started: true, busy: false, generating: false, hasSignature: true, callCount: 1, allExecuted: false };
+    ok("first sighting becomes the baseline, never adopted", ad.decide({ ...base, key: "k1" }) === "baseline");
+    ok("the reply already on screen is not new", ad.decide({ ...base, key: "k1" }) === "not-new");
+    ok("a reply written elsewhere is adopted", ad.decide({ ...base, key: "k2" }) === "adopt");
+    ok("one turn is adopted only once", ad.decide({ ...base, key: "k2" }) === "seen");
+    ok("a reply without a command is left alone", ad.decide({ ...base, key: "k3", hasSignature: false, callCount: 0 }) === "no-command");
+    ok("a command that already ran is not adopted", ad.decide({ ...base, key: "k3", allExecuted: true }) === "already-call");
+    ok("that settled turn stays settled", ad.decide({ ...base, key: "k3", allExecuted: true }) === "seen");
+    ok("opted out adopts nothing", ad.decide({ ...base, key: "k4", enabled: false }) === "disabled");
+    ok("no started session adopts nothing", ad.decide({ ...base, key: "k4", started: false }) === "not-started");
+    ok("a busy loop owns the turn", ad.decide({ ...base, key: "k4", busy: true }) === "busy");
+    ok("generation in flight is left alone", ad.decide({ ...base, key: "k4", generating: true }) === "generating");
+    ok("no assistant turn yet", ad.decide({ ...base, key: null }) === "no-turn");
+  }
+  {
+    // Bounded memory + re-anchoring when the user flips the toggle on: turning
+    // it on must not fire the command that was already sitting on screen.
+    const ad = G.createRemoteCommandAdopter({ limit: 2 });
+    ad.setBaseline("k0");
+    for (const key of ["a", "b", "c"]) {
+      ad.decide({ enabled: true, started: true, key, hasSignature: true, callCount: 1 });
+    }
+    ok("the seen list stays bounded", ad.size() <= 2);
+    ad.setBaseline("later");
+    ok("re-anchoring makes the visible reply the baseline", ad.decide({ enabled: true, started: true, key: "later", hasSignature: true, callCount: 1 }) === "not-new");
+  }
+  // ── Run stats on the chip / "Agent is working" cover ─────────────────────
+  // The user asked for "command, tokens, detik" on every run. The formatter is
+  // pure text so it is tested here, but a formatter that main.js never calls is
+  // exactly the dead-code bug this file exists to catch (see the wiring block).
+  {
+    const s = G.formatRunStats({ arg: "list_dir immersed", chars: 4812, ms: 1340 });
+    ok("run stats name the command and its argument", s.startsWith("list_dir immersed"));
+    ok("run stats show the result token estimate", s.includes("out ~1.2k tok"));
+    ok("run stats show the elapsed time in seconds", s.endsWith("1.3s"));
+    ok("a sub-second call is reported in ms", G.formatRunStats({ ms: 42 }).endsWith("42ms"));
+    ok("the streamed command is reported as input tokens", G.formatRunStats({ tokIn: 140, chars: 800, ms: 900 }).includes("in ~140 tok"));
+    // Anti-false-positive: nothing truthful to say must not print "~ tok · 0ms".
+    ok("empty input formats to an empty string", G.formatRunStats({}) === "");
+    ok("missing chars never becomes a token estimate", G.tokensFromChars(undefined) === 0 && G.tokensFromChars(-5) === 0);
+    ok("zero ms is omitted instead of printed as 0ms", G.formatRunStats({ chars: 400, ms: 0 }) === "out ~100 tok");
+    // A runaway argument must not push the tokens/time off the chip.
+    const long = G.formatRunStats({ arg: "x".repeat(200), chars: 400, ms: 2000 });
+    ok("a long argument is truncated, not dropped", long.includes("…") && long.includes("out ~100 tok"));
+    ok("compactCount keeps counts narrow", G.compactCount(999) === "999" && G.compactCount(1000) === "1k" && G.compactCount(1200) === "1.2k");
+  }
+  {
+    // Wiring: the chip and the working cover must really consume the formatter.
+    const main = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+    ok("the tool chip detail uses the run stats", /ZSGuard\.formatRunStats\(/.test(main));
+    ok("the settled chip keeps its stats for a re-own", /toolSettle\s*=\s*\{[^}]*detail:\s*doneDetail/s.test(main));
+  }
+
+  // Wiring: a tested helper the running code never calls is the bug this file
+  // exists to catch, so the listener and its toggle must really be in main.js.
+  {
+    const fs = require("fs");
+    const main = fs.readFileSync(__dirname + "/core/main.js", "utf8");
+    ok("main.js creates the remote-command adopter", /ZSGuard\.createRemoteCommandAdopter\s*\(/.test(main));
+    ok("main.js observes the conversation for new replies", /new MutationObserver\(schedule\)/.test(main));
+    ok("main.js adopts through resumePending", /remoteAdopter\.decide\(/.test(main) && /remote\.resume/.test(main));
+    ok("the panel exposes the Remote commands toggle", /id="zs-remote-commands"/.test(main) && /setRemoteCommands\(remoteBox\.checked\)/.test(main));
+    ok("the setting is persisted", /zsRemoteCommands/.test(main));
+  }
+
 // Guards the exact regression the reviewer found in runTool: a helper that the
 // tests cover but the running code never calls. background.js must load
 // core/guard.js via importScripts and consult ZSGuard.heartbeatDecision.

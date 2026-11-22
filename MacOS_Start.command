@@ -76,30 +76,46 @@ PY_VER="$("$PY" --version 2>&1)"
 echo "        Found: $PY ($PY_VER)"
 log "Python found: $PY ($PY_VER)"
 
-# --- 2. Ensure the websockets library is installed --------------------------
-echo "  [2/4] Checking websockets library..."
-if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
-    echo "        Installing websockets - first time only..."
-    log "websockets missing, installing via pip --user."
-    if ! "$PY" -m pip install --user websockets >/dev/null 2>&1; then
+# --- 2. Ensure the bridge dependencies are installed ------------------------
+# websockets carries every tool call; aiohttp only powers the optional live view
+# (http://127.0.0.1:17614/) and /status. Install both so the live view is not
+# silently missing on a fresh setup.
+echo "  [2/4] Checking bridge dependencies..."
+MISSING=""
+for module in websockets aiohttp; do
+    if ! "$PY" -c "import $module" >/dev/null 2>&1; then
+        MISSING="$MISSING $module"
+    fi
+done
+if [ -n "$MISSING" ]; then
+    echo "        Installing missing dependencies:$MISSING - first time only..."
+    log "bridge dependencies missing:$MISSING, installing via pip --user."
+    # $MISSING is a space-separated module list built above, so word splitting is intended.
+    if ! "$PY" -m pip install --user $MISSING >/dev/null 2>&1; then
         # Newer macOS Pythons (Homebrew / python.org) mark the environment as
         # externally managed (PEP 668) and refuse --user. Retry allowing it,
-        # since this is the user's own machine and a single small pure-Python
-        # dependency, not a system package.
+        # since this is the user's own machine and these are small pure-Python
+        # dependencies, not system packages.
         log "pip --user failed; retrying with --break-system-packages."
-        "$PY" -m pip install --user --break-system-packages websockets >/dev/null 2>&1 || true
+        "$PY" -m pip install --user --break-system-packages $MISSING >/dev/null 2>&1 || true
     fi
-    if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
-        echo
-        echo "  ERROR: could not install the 'websockets' library automatically."
-        echo "  Install it yourself, then run this again:"
-        echo "      $PY -m pip install --user websockets"
-        log "FATAL: websockets install failed."
-        pause_and_exit 1
-    fi
+fi
+if ! "$PY" -c "import websockets" >/dev/null 2>&1; then
+    echo
+    echo "  ERROR: could not install the 'websockets' library automatically."
+    echo "  Install it yourself, then run this again:"
+    echo "      $PY -m pip install --user websockets"
+    log "FATAL: websockets install failed."
+    pause_and_exit 1
 fi
 echo "        OK"
 log "websockets library OK."
+if ! "$PY" -c "import aiohttp" >/dev/null 2>&1; then
+    echo "  WARNING: aiohttp is not available; the live view and /status will be disabled."
+    echo "           Tool calls still work. Install it later with:"
+    echo "               $PY -m pip install --user aiohttp"
+    log "WARN: aiohttp missing; live view and /status disabled."
+fi
 
 # --- 3. Configure MCP servers -----------------------------------------------
 if [ -f "./setup-config.py" ]; then

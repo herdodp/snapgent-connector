@@ -139,8 +139,178 @@ const ZSGuard = (() => {
     return { shouldProbe: true, close: !o.pongAnswered };
   }
 
+  // ── Per-call execution memory ───────────────────────────────────────────
+  // The turn-level `executed` map keys on a TEXT PREFIX of the reply, so it
+  // misses a replayed call whose text changed: the site re-renders the answer
+  // once a tool result lands below it, startsWith() no longer holds, and the
+  // watchdog (or a stale tab) dispatches the SAME command again - measured live
+  // as one identical `list_dir` every 30 s for 20+ minutes while nothing else
+  // ran. It also cannot tell one call from another inside a reply that carries
+  // several commands.
+  //
+  // This memory keys on (turn key, tool name, canonical arguments): the same
+  // call in the same turn can only ever run once, no matter how the reply text
+  // is re-rendered. Different arguments, or the same call in another turn, are
+  // still allowed - that is ordinary agent behaviour.
+  function createCallMemory(opts) {
+    const o = opts || {};
+    const limit = o.limit > 0 ? o.limit : 64;
+    const map = new Map(); // turnKey -> Set(signature)
+    // Order-independent serialisation, so {"a":1,"b":2} and {"b":2,"a":1} are
+    // the same call (models reorder keys between retries of one command).
+    const canon = (v) => {
+      if (v === null || typeof v !== "object") {
+        try { return JSON.stringify(v); } catch { return String(v); }
+      }
+      if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+      const keys = Object.keys(v).sort();
+      return "{" + keys.map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+    };
+    const signature = (call) => {
+      if (!call || typeof call !== "object") return "";
+      const name = String(call.tool || call.command || "");
+      const raw = call.arguments != null ? call.arguments : call.params;
+      let body;
+      try {
+        body = typeof raw === "string" ? raw : canon(raw == null ? {} : raw);
+      } catch {
+        body = String(raw);
+      }
+      return (name || "?") + "|" + body;
+    };
+    return {
+      signature,
+      remember(turnKey, call) {
+        const sig = signature(call);
+        if (!turnKey || !sig) return;
+        let set = map.get(turnKey);
+        if (!set) {
+          if (map.size >= limit) map.delete(map.keys().next().value);
+          set = new Set();
+          map.set(turnKey, set);
+        }
+        set.add(sig);
+      },
+      has(turnKey, call) {
+        const set = map.get(turnKey);
+        return !!(set && set.has(signature(call)));
+      },
+      size() { return map.size; },
+      clear() { map.clear(); },
+    };
+  }
+
+  // A reply produced by the ChatGPT mobile app lands in the page through the
+  // server-side conversation sync and never passes through the loop's "wait for
+  // the reply I just sent" path. Measured 2026-11-18: such a reply sat in the DOM
+  // with a perfectly good {"command":"list_dir"} block and the loop read it as
+  // plain text, ended, and resume answered no-command.
+  // The decision lives here so it can be tested without a DOM: adopt at most one
+  // command per assistant turn, never the turn that was already on screen when
+  // adoption started (so enabling the toggle cannot fire an old command), and
+  // never a turn whose commands all ran already.
+  function createRemoteCommandAdopter(opts) {
+    const o = opts || {};
+    const limit = o.limit > 0 ? o.limit : 64;
+    const seen = new Set();
+    let baseline = null;
+    const remember = (key) => {
+      if (!key) return;
+      if (seen.size >= limit) seen.delete(seen.values().next().value);
+      seen.add(key);
+    };
+    return {
+      setBaseline(key) { baseline = key || null; },
+      baseline() { return baseline; },
+      seenBefore(key) { return !!key && seen.has(key); },
+      decide(input) {
+        const i = input || {};
+        if (!i.enabled) return "disabled";
+        if (!i.started) return "not-started";
+        if (i.busy) return "busy";
+        if (i.generating) return "generating";
+        if (!i.key) return "no-turn";
+        if (baseline === null) { baseline = i.key; return "baseline"; }
+        if (i.key === baseline) return "not-new";
+        if (seen.has(i.key)) return "seen";
+        if (!i.hasSignature) return "no-command";
+        if (!i.callCount) return "unparseable";
+        if (i.allExecuted) {
+          remember(i.key);
+          return "already-call";
+        }
+        remember(i.key);
+        return "adopt";
+      },
+      size() { return seen.size; },
+      clear() { seen.clear(); baseline = null; },
+    };
+  }
+
+  // ── Run stats on a tool chip / the "Agent is working" cover ──────────────
+  // The chip already showed the tool name and a spinner, but the question a user
+  // actually asks about a run is "what did it do, how many tokens did it get, and
+  // how long did it take". Both numbers are derivable from data we already have
+  // (result length ≈ chars/4, and a start timestamp), so this stays pure text
+  // formatting - no DOM, no extra bridge round-trip.
+
+  // Same compacting as the page's token meter: 0-999 as-is, then 1k/1.1k/99k/1M
+  // (one decimal below 10 of the unit, trailing ".0" dropped) so a live number
+  // cannot grow into a wide, jumpy string.
+  function compactCount(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v <= 0) return "";
+    if (v < 1000) return String(Math.round(v));
+    for (const [div, suf] of [[1e9, "B"], [1e6, "M"], [1e3, "k"]]) {
+      if (v >= div) {
+        const scaled = v / div;
+        const rounded = scaled < 10 ? Math.round(scaled * 10) / 10 : Math.round(scaled);
+        return rounded + suf;
+      }
+    }
+    return String(Math.round(v));
+  }
+
+  // Tokens are an ESTIMATE (no tokenizer in the extension), so they are shown
+  // with a leading "~" and must never be presented as billed usage.
+  function tokensFromChars(chars) {
+    const c = Number(chars);
+    if (!Number.isFinite(c) || c <= 0) return 0;
+    return Math.floor(c / 4);
+  }
+
+  // One detail line: "<what it did> · ~N tok · 1.4s".
+  //   arg   - the call's own arguments (already summarised by the caller)
+  //   inChars / tokIn   - the streamed command text (what the model sent)
+  //   chars   / tokOut  - the tool RESULT (what came back - the useful count)
+  //   ms                - measured wall time of the call
+  // Returns "" when there is nothing truthful to show, so callers can fall back
+  // to the plain summary instead of printing an empty " · · ".
+  function formatRunStats(input) {
+    const i = input || {};
+    const parts = [];
+    if (i.arg) {
+      const arg = String(i.arg).replace(/\s+/g, " ").trim();
+      if (arg) parts.push(arg.length > 60 ? arg.slice(0, 57) + "…" : arg);
+    }
+    const tokIn = Number(i.tokIn) > 0 ? Number(i.tokIn) : tokensFromChars(i.inChars);
+    if (tokIn > 0) parts.push(`in ~${compactCount(tokIn)} tok`);
+    const tokOut = Number(i.tokOut) > 0 ? Number(i.tokOut) : tokensFromChars(i.chars);
+    if (tokOut > 0) parts.push(`out ~${compactCount(tokOut)} tok`);
+    const ms = Number(i.ms);
+    if (Number.isFinite(ms) && ms > 0) {
+      parts.push(ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`);
+    }
+    return parts.join(" · ");
+  }
+
   return {
     mayRetryAfterDisconnect,
+    formatRunStats,
+    compactCount,
+    tokensFromChars,
+    createCallMemory,
+    createRemoteCommandAdopter,
     inFlightFailure,
     holdUntilScrollLapses,
     createScrollTracker,

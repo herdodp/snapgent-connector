@@ -24,8 +24,37 @@ All notable changes to snapgentV3 Free are documented here.
 - **Existing app sessions are left untouched.** If an app is already open without its control
   channel, Snapgent does not close or restart it. Start the app with its helper, then restart
   the bridge to connect.
-- Extension and Snapgent App versions bumped to **3.9.12**. The bridge is unchanged
-  (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+- Extension and Snapgent App versions bumped to **3.9.12**. The bridge source is unchanged in
+  version terms (still 3.9.7), so `bridge.exe` does not need to be rebuilt.
+- **The progress channel is read-only.** `POST /push` is removed. It was new in the
+  previous change, nothing in the extension used it (progress travels over the
+  WebSocket `stream` message), and any local page could POST a frame into the live view.
+- **Launchers install `aiohttp`.** `Linux_Start.sh` and `MacOS_Start.command` install
+  `websockets` and `aiohttp` together with the same pip/venv fallback. Without
+  `aiohttp` the bridge now prints a visible warning and disables the live view instead
+  of only writing a log line.
+- **`BRIDGE_VERSION` bumped to 3.9.12**, matching the extension manifest so the popup
+  version display is meaningful again.
+- README documents the live view, the stream port, and the **Remote commands** opt-in
+  together with its risk.
+
+### Security
+- **Foreign WebSocket origins are rejected during the handshake.** The server now passes
+  a `process_request` gate to `websockets.serve` that answers **403** for any `Origin`
+  that is not `chrome-extension://`, `moz-extension://` or
+  `safari-web-extension://`, so a page on any website can no longer open
+  `ws://127.0.0.1:17613` and run tools such as `run_command` or `write_file`.
+  `handle_client` repeats the check and closes the socket with code 1008 as a second
+  layer. Clients without an `Origin` header (CLI tools, tests, native apps) still work;
+  custom front ends can be listed in `ZS_BRIDGE_EXTRA_ORIGINS`.
+
+### Bridge vs. `bridge.exe`
+The bridge-side changes above (read-only progress channel, `aiohttp` live view, the
+`/status` route and `BRIDGE_VERSION` 3.9.12) live in `bridge.py`. The bundled
+`bridge.exe` was **not rebuilt** in this release, so Windows users who start it through
+`start.bat` keep the previous bridge code, including `POST /push`. Rebuilding it needs
+PyInstaller with `--hidden-import aiohttp`; until then those changes apply only when the
+bridge runs from source.
 
 ## [V3.9.11] - 2026-11-17
 
