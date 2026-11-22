@@ -674,11 +674,12 @@ ok("mobile textarea text can be read", P.editorText() === "");
   // Multi-line regression (found live 2026-11-18): the isolated world reads
   // textContent, which drops the newlines between ProseMirror block nodes, so a
   // correct 2211-char write read as 2194 and every multi-line send retried until
-  // it failed. Whitespace-only differences must not count as a failed write.
-  ok("a multi-line write whose block newlines vanished still counts as typed",
-    /const squeeze = \(s\) => s\.replace\(\/\\s\+\/g, ""\);/.test(prov) &&
-    /return squeeze\(have\) === squeeze\(want\);/.test(prov) &&
-    !/have\.replace\(\/\\s\+\/g, " "\)/.test(prov));
+  // it failed. Only those line breaks may vanish - a lost space is a lost
+  // character, not a normalisation (owner review 2026-11-22).
+  ok("block newlines may vanish, but spaces and tabs are still compared",
+    /const flat = \(s\) => s\.replace\(\/\\r\?\\n\/g, ""\);/.test(prov) &&
+    /return flat\(have\) === flat\(want\);/.test(prov) &&
+    !/replace\(\/\\s\+\/g, ""\)/.test(prov));
   // Behaviour, not just shape: run the real function against the two reads the
   // browser actually produces. textContent in the isolated world has no block
   // newlines; a truncated write loses characters.
@@ -688,7 +689,12 @@ ok("mobile textarea text can be read", P.editorText() === "");
   const fakeEd = (txt) => ({ textContent: txt });
   ok("composerHolds accepts the newline-less read of a correct multi-line write",
     !!holds && holds(fakeEd("line1line2"), "line1\nline2") === true &&
-    holds(fakeEd("aaabbb"), "aaa\n\nbbb") === true);
+    holds(fakeEd("aaabbb"), "aaa\n\nbbb") === true &&
+    holds(fakeEd("read fileline two"), "read file\nline two") === true);
+  ok("composerHolds rejects a write that lost a SPACE, not just a newline",
+    !!holds && holds(fakeEd("readfile"), "read file") === false &&
+    holds(fakeEd("read file"), "readfile") === false &&
+    holds(fakeEd("a b"), "a\tb") === false);
   ok("composerHolds still rejects a truncated write",
     !!holds && holds(fakeEd("line1"), "line1\nline2") === false &&
     holds(fakeEd("Tugas pertama"), "Tugas pertama: pakai tool list_dir") === false);

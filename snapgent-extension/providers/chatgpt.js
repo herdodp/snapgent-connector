@@ -985,13 +985,14 @@ const ZSProvider = (() => {
     // The isolated world cannot see ProseMirror's view desc (JS expandos on DOM
     // nodes are per-world), so textContent is the only read available here and it
     // drops every newline BETWEEN block nodes: 17 paragraphs come back 17 chars
-    // short and "line1line2" instead of "line1\nline2". Comparing with ALL
-    // whitespace removed keeps that correct read valid (measured live 2026-11-18:
-    // send.typedMain len 2211/want 2211, then this test saw 2194 and retried four
-    // times, failing every multi-line message), while a truncated write - which
-    // loses real characters, not just separators - still fails and is retried.
-    const squeeze = (s) => s.replace(/\s+/g, "");
-    return squeeze(have) === squeeze(want);
+    // short and "line1line2" instead of "line1\nline2". Line breaks are therefore
+    // allowed to vanish, and ONLY them: a space or tab is real content, so
+    // stripping all whitespace would make "read file" and "readfile" compare equal
+    // and a write that lost a space would be sent as if it were complete.
+    // (Measured live 2026-11-18: send.typedMain len 2211/want 2211, then this test
+    // saw 2194 and retried four times, failing every multi-line message.)
+    const flat = (s) => s.replace(/\r?\n/g, "");
+    return flat(have) === flat(want);
   }
 
   function editorReady(ed) {
