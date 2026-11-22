@@ -389,9 +389,10 @@ const ZSProvider = (() => {
   // Whitespace-insensitive fingerprint of a composer value. Quill turns every
   // insertLineBreak into a soft <br> (and a hard newline into a fresh <p>), and
   // neither contributes a "\n" to textContent - so a plain string compare can
-  // never confirm a multi-line insert. Comparing with all whitespace stripped
-  // still proves the actual characters landed, in order.
-  const settleText = (s) => String(s == null ? "" : s).replace(/\s+/g, "");
+  // never confirm a multi-line insert. Only line breaks may vanish: a space or
+  // tab is real content, and stripping it would make "read file" and "readfile"
+  // compare equal, accepting a write that lost characters.
+  const settleText = (s) => String(s == null ? "" : s).replace(/\r?\n/g, "");
   // Whether the text really landed must be MEASURED, not assumed: execCommand
   // returns true and silently does nothing when the editable does not own focus.
   // Validated live on Gemini's Start path: every insertText returned true while

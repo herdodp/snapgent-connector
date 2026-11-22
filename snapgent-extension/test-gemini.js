@@ -136,7 +136,10 @@ function makeEnv(opts) {
     if (doc.activeElement !== editor || !state.connected) return true; // silent no-op
     if (cmd === "insertText") {
       if (state.selectAllPending) { state.buffer = ""; state.selectAllPending = false; }
-      state.buffer += String(val);
+      // dropSpaces reproduces a write that silently loses its spaces: the
+      // characters are mostly there, so a whitespace-insensitive comparison
+      // would call it complete and send a mangled prompt.
+      state.buffer += o.dropSpaces ? String(val).replace(/ /g, "") : String(val);
     } else if (cmd === "insertLineBreak") {
       // Quill turns this into a soft <br>: a line break in the message, but no
       // "\n" in textContent.
@@ -238,6 +241,18 @@ async function main() {
     ok(env.state.buffer === "", "composer left empty", env.state.buffer);
     ok(env.diags.some((d) => d.name === "send.emptyComposer"),
       "failure is diagnosable", env.diags.map((d) => d.name));
+  }
+
+  // ── 6. a write that loses a SPACE is not "complete" ──────────────────────
+  // Quill glues soft breaks, so line breaks are normalized away; a space is
+  // content, and a comparison that strips all whitespace would call "readfile"
+  // equal to "read file" and send a mangled prompt (owner review 2026-11-22).
+  console.log("\n# write losing a space");
+  {
+    const env = makeEnv({ dropSpaces: true });
+    const ret = await env.ZS.typeAndSend("read file", []);
+    ok(ret === false, "typeAndSend returns strict false", ret);
+    ok(env.state.sent === 0, "nothing was sent", env.state.sent);
   }
 
   console.log(failures ? `\nFAILED (${failures})` : "\nall Gemini send checks passed");
