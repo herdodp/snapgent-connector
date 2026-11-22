@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import importlib.util
 import json
+import socket
 import sys
 import tempfile
 import unittest
@@ -694,6 +695,25 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hub.snapshot()["queue"], 0)
         self.assertEqual(list(hub._recent), [])
 
+    @unittest.skipIf(importlib.util.find_spec("aiohttp") is None, "aiohttp package is not installed")
+    async def test_stream_server_starts_and_serves_status(self):
+        from aiohttp import ClientSession
+
+        hub = bridge.EventHub()
+        with patch.object(bridge, "STREAM_PORT", 0):
+            runner = await bridge._start_stream_server(hub)
+        try:
+            site = next(iter(runner.sites))
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.get(f"http://127.0.0.1:{port}/status") as response:
+                    self.assertEqual(response.status, 200)
+                    status = await response.json()
+            self.assertEqual(status["version"], bridge.BRIDGE_VERSION)
+            self.assertEqual(status["queue"], 0)
+        finally:
+            await runner.cleanup()
+
     def test_bridge_version_matches_the_extension_manifest(self):
         # The popup prints both numbers side by side, so a drifting bridge version
         # makes the display meaningless. One number, two files.
@@ -751,7 +771,8 @@ class OriginGuardTests(unittest.IsolatedAsyncioTestCase):
         if with_gate:
             server = await bridge._serve_bridge(manager, 0)
             try:
-                yield server.sockets[0].getsockname()[1]
+                ipv4_socket = next(sock for sock in server.sockets if sock.family == socket.AF_INET)
+                yield ipv4_socket.getsockname()[1]
             finally:
                 server.close()
                 await server.wait_closed()

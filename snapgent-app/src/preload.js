@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 const EXT = path.join(__dirname, "..", "extension");
-const VERSION = "3.9.13";
+const VERSION = "3.9.14";
 
 // hostname -> provider file (mirrors manifest.json content_scripts)
 const PROVIDERS = {

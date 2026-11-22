@@ -29,6 +29,7 @@ else:
 CONFIG_PATH = ROOT / "config.json"
 LOG_PATH = ROOT / "logs" / "bridge_debug.log"
 HOSTS = ["127.0.0.1", "::1"]
+STREAM_HOST = "127.0.0.1"
 PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 # Live progress channel: GET /events (SSE) + GET /status on a plain HTTP port next to
 # the websocket, so any consumer (curl, browser, an API wrapper) can watch what the
@@ -170,7 +171,7 @@ es.onmessage=()=>{};
 poll(); setInterval(poll,1000);
 </script></body></html>"""
 MCP_PROTOCOL_VERSION = "2024-11-05"
-BRIDGE_VERSION = "3.9.13"
+BRIDGE_VERSION = "3.9.14"
 MAX_LOG_CHARS = 1000
 MAX_CONCURRENT_REQUESTS = 32
 BIG_PAYLOAD_THREAD_BYTES = 256 * 1024
@@ -1227,9 +1228,9 @@ async def _start_stream_server(hub: "EventHub") -> Any:
 
     runner = web.AppRunner(_build_stream_app(hub), access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, HOST, STREAM_PORT)
+    site = web.TCPSite(runner, STREAM_HOST, STREAM_PORT)
     await site.start()
-    log(f"progress channel: http://{HOST}:{STREAM_PORT}/ (live view), /events (SSE), /status")
+    log(f"progress channel: http://{STREAM_HOST}:{STREAM_PORT}/ (live view), /events (SSE), /status")
     return runner
 
 

@@ -2,6 +2,28 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.14] - 2026-11-22
+
+### Added
+- **Firefox and VSCodium support.** Firefox MV3 startup and connection handling are fixed,
+  and the bridge supports both IPv4 and IPv6 loopback. Linux workspace detection now covers
+  VSCodium, Code - OSS, Flatpak and Snap installations.
+- **ChatGPT live status and remote commands.** Tool progress can be watched from the local
+  bridge's live view. Remote commands are opt-in, and pending commands can be resumed after
+  a reload.
+
+### Fixed
+- **ChatGPT sends and reply reading.** Composer sends are verified against the requested
+  content, including spaces and tabs at the beginning and end. The reader handles current
+  ChatGPT turn layouts, and replayed tool calls are guarded against duplicate execution.
+- **Tool status cleanup.** A cancelled tool call now clears the bridge's busy state and
+  emits its terminal status event.
+
+### Changed
+- Extension, Python bridge and Snapgent App status version bumped to **3.9.14**.
+- The Windows `bridge.exe` is rebuilt with the bridge updates, including the live status
+  server and its `aiohttp` dependency.
+
 ## [V3.9.13] - 2026-11-21
 
 ### Added

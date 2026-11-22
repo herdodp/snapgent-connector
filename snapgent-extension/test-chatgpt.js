@@ -668,7 +668,7 @@ ok("mobile textarea text can be read", P.editorText() === "");
     /if \(viaMain\.ok\) return true;/.test(prov));
   ok("a partial MAIN-world write is not accepted as typed",
     /function composerHolds\(ed, text\)/.test(prov) &&
-    /const have = String\(got\)/.test(prov) &&
+    /const have = normalize\(got\);/.test(prov) &&
     /if \(!composerHolds\(ed, text\)\) \{/.test(prov) &&
     /send\.typedPartial/.test(prov));
   // Multi-line regression (found live 2026-11-18): the isolated world reads
@@ -677,7 +677,7 @@ ok("mobile textarea text can be read", P.editorText() === "");
   // it failed. Only those line breaks may vanish - a lost space is a lost
   // character, not a normalisation (owner review 2026-11-22).
   ok("block newlines may vanish, but spaces and tabs are still compared",
-    /const flat = \(s\) => s\.replace\(\/\\r\?\\n\/g, ""\);/.test(prov) &&
+    /const flat = \(s\) => s\.replace\(\/\\n\/g, ""\);/.test(prov) &&
     /return flat\(have\) === flat\(want\);/.test(prov) &&
     !/replace\(\/\\s\+\/g, ""\)/.test(prov));
   // Behaviour, not just shape: run the real function against the two reads the
@@ -695,6 +695,12 @@ ok("mobile textarea text can be read", P.editorText() === "");
     !!holds && holds(fakeEd("readfile"), "read file") === false &&
     holds(fakeEd("read file"), "readfile") === false &&
     holds(fakeEd("a b"), "a\tb") === false);
+  ok("composerHolds preserves spaces and tabs at the text boundaries",
+    !!holds &&
+    holds(fakeEd("read file"), " read file") === false &&
+    holds(fakeEd("read file"), "read file ") === false &&
+    holds(fakeEd("read file"), "\tread file") === false &&
+    holds(fakeEd("read file"), "read file\t") === false);
   ok("composerHolds still rejects a truncated write",
     !!holds && holds(fakeEd("line1"), "line1\nline2") === false &&
     holds(fakeEd("Tugas pertama"), "Tugas pertama: pakai tool list_dir") === false);

@@ -968,10 +968,13 @@ const ZSProvider = (() => {
   // send.cleared and the bar stuck on "Starting…").
   // Does the composer hold the message we asked it to hold? A truncated write
   // used to pass because the caller only checked "not empty", and the send then
-  // carried half a message. Whitespace-only differences are accepted (ProseMirror
-  // normalises newlines); a different body is a failure the caller must retry.
+  // carried half a message. Only line-break differences are accepted (the
+  // isolated-world textContent read drops block separators); spaces and tabs are
+  // message content, including at the edges.
   function composerHolds(ed, text) {
-    const want = String(text == null ? "" : text).replace(/\r\n?/g, "\n").trim();
+    const normalize = (s) =>
+      String(s == null ? "" : s).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    const want = normalize(text);
     if (!want) return true;
     let got = "";
     try {
@@ -980,7 +983,7 @@ const ZSProvider = (() => {
         ? d.node.textBetween(0, d.node.content.size, "\n")
         : (ed.textContent || ed.innerText || "");
     } catch { got = ""; }
-    const have = String(got).replace(/\r\n?/g, "\n").trim();
+    const have = normalize(got);
     if (have === want) return true;
     // The isolated world cannot see ProseMirror's view desc (JS expandos on DOM
     // nodes are per-world), so textContent is the only read available here and it
@@ -991,7 +994,7 @@ const ZSProvider = (() => {
     // and a write that lost a space would be sent as if it were complete.
     // (Measured live 2026-11-18: send.typedMain len 2211/want 2211, then this test
     // saw 2194 and retried four times, failing every multi-line message.)
-    const flat = (s) => s.replace(/\r?\n/g, "");
+    const flat = (s) => s.replace(/\n/g, "");
     return flat(have) === flat(want);
   }
 
