@@ -48,7 +48,7 @@ const ZSProvider = (() => {
     carousel: '[role="region"][aria-roledescription="carousel"]',
     slide: '[aria-roledescription="slide"]',
     codeWrap: "div.not-prose",     // fenced-code wrapper inside .prose
-    sendAria: /send message|envoyer/i,
+    sendAria: /send|envoyer/i,
     stopAria: /stop generation|arr[êe]ter/i,
     errorSurfaces:
       '[role="alert"],[class*="toast"],[class*="error"],[class*="alert"],[data-sonner-toast]',
@@ -229,8 +229,22 @@ const ZSProvider = (() => {
   // textarea (#zs-root) so the send hooks' "not on a chat page" guard holds on
   // login/OAuth pages that have no site composer.
   const getEditor = () => {
-    for (const e of document.querySelectorAll("form textarea")) {
-      if (!e.closest("#zs-root")) return e;
+    const sel = [
+      "form textarea",
+      "textarea",
+      '[contenteditable="true"]',
+      ".ProseMirror",
+      ".tiptap",
+      'input[type="text"]',
+      "input:not([type])",
+    ].join(",");
+    for (const e of document.querySelectorAll(sel)) {
+      if (e.closest("#zs-root")) continue;
+      if (e.getAttribute("aria-hidden") === "true") continue;
+      if (e.classList.contains("g-recaptcha-response")) continue;
+      if (e.getAttribute("type") === "search" || e.getAttribute("aria-label") === "Search") continue;
+      const r = e.getBoundingClientRect();
+      if (e.offsetParent !== null || r.width > 0) return e;
     }
     return null;
   };
@@ -287,23 +301,31 @@ const ZSProvider = (() => {
       if ([...n.classList].some((c) => c.startsWith("rounded"))) return n;
       n = n.parentElement;
     }
-    return ed.closest("form");
+    return ed.closest("form") || ed.parentElement;
+  }
+
+  function isValueEditor(el) {
+    return el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
   }
 
   // ── Input lock ────────────────────────────────────────────────────────────
-  // The textarea is real: `readonly` blocks the user but is IGNORED by the
-  // native prototype setter used in setTextareaValue(), so our own injections
-  // keep working. getEditor() keys off the <form>, not the placeholder, so the
-  // placeholder swap below is safe.
   function setInputLock(on) {
     const ed = getEditor();
     if (!ed) return;
     if (on) {
       if (!ed.dataset.zsPlaceholder) ed.dataset.zsPlaceholder = ed.getAttribute("placeholder") || "";
-      ed.setAttribute("readonly", "");
+      if (isValueEditor(ed)) {
+        ed.setAttribute("readonly", "");
+      } else {
+        ed.setAttribute("contenteditable", "false");
+      }
       ed.setAttribute("placeholder", "⏳ Agent working… please wait");
     } else {
-      ed.removeAttribute("readonly");
+      if (isValueEditor(ed)) {
+        ed.removeAttribute("readonly");
+      } else {
+        ed.setAttribute("contenteditable", "true");
+      }
       if (ed.dataset.zsPlaceholder != null) ed.setAttribute("placeholder", ed.dataset.zsPlaceholder);
     }
   }
@@ -312,7 +334,7 @@ const ZSProvider = (() => {
   const ariaOf = (b) => b.getAttribute("aria-label") || "";
   const allButtons = () => [...document.querySelectorAll("button")];
   const sendButton = () =>
-    allButtons().find((b) => S.sendAria.test(ariaOf(b)) && b.offsetParent !== null) || null;
+    allButtons().find((b) => (S.sendAria.test(ariaOf(b)) || b.getAttribute("type") === "submit") && b.offsetParent !== null) || null;
   const stopButton = () =>
     allButtons().find((b) => S.stopAria.test(ariaOf(b)) && b.offsetParent !== null) || null;
 
@@ -414,22 +436,47 @@ const ZSProvider = (() => {
     return text.slice(0, headLen) + marker + text.slice(text.length - tailLen);
   }
 
-  // React-controlled <textarea>: set .value via the native prototype setter so
-  // React's onChange fires, dispatch an input event, wait for the submit button
-  // to re-enable, then click it (Enter would insert a newline).
+  // React-controlled <textarea> or <input> or contenteditable: set value via native setter
+  // or execCommand so React's synthetic events fire properly.
   function setTextareaValue(el, v) {
-    const proto = window.HTMLTextAreaElement && window.HTMLTextAreaElement.prototype;
+    const ctor = el.tagName === "INPUT" ? window.HTMLInputElement : window.HTMLTextAreaElement;
+    const proto = ctor && ctor.prototype;
     const setter = proto && Object.getOwnPropertyDescriptor(proto, "value");
     if (setter && setter.set) setter.set.call(el, v);
     else el.value = v;
     el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
+  function setEditorText(ed, text) {
+    if (!ed) return;
+    if (isValueEditor(ed)) {
+      setTextareaValue(ed, text);
+      return;
+    }
+    ed.setAttribute("contenteditable", "true");
+    ed.focus();
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ed);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      const inserted = document.execCommand("insertText", false, text);
+      if (!inserted) {
+        ed.textContent = text;
+        ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      }
+    } catch {
+      ed.textContent = text;
+      ed.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
   async function typeAndSend(text, images) {
     const editor = getEditor();
     if (!editor) throw new Error("Arena input box not found");
     editor.focus();
-    setTextareaValue(editor, truncateForSend(text));
+    setEditorText(editor, truncateForSend(text));
     if (images && images.length) tagImages(images);
     diag("arena.tas.enter", {
       textLen: (text || "").length,
@@ -522,8 +569,8 @@ const ZSProvider = (() => {
   // stays gated. The mode dropdown's trigger is a `button[role="combobox"]` whose
   // visible text IS the current mode name; we read it to gate Start. Detection
   // fails OPEN (unknown → allow) so a DOM reskin never wrongly blocks the default.
-  const MODE_RE = /\b(direct|battle|agent|side by side)\b/i;
-  const SUPPORTED_MODES = new Set(["direct"]);
+  const MODE_RE = /\b(direct|battle|agent|side by side|chat)\b/i;
+  const SUPPORTED_MODES = new Set(["direct", "chat"]);
   function currentMode() {
     for (const c of document.querySelectorAll('button[role="combobox"]')) {
       if (c.offsetParent === null) continue;
@@ -594,7 +641,7 @@ const ZSProvider = (() => {
       combo = [...document.querySelectorAll('button[role="combobox"]')].find((x) => x.offsetParent !== null) || null;
       if (!combo) await sleep(250);
     }
-    if (!combo || /direct/i.test(combo.textContent || "")) return; // gone or already Direct
+    if (!combo || /direct|chat/i.test(combo.textContent || "")) return; // gone or already Direct / Chat
     // Open the dropdown only if it is closed - clicking an already-open combobox
     // would toggle it shut and there would be no option to pick.
     if (combo.getAttribute("aria-expanded") !== "true") { try { combo.click(); } catch {} }
@@ -661,7 +708,7 @@ const ZSProvider = (() => {
   // reallyVisible() ignores display:none / detached closed dialogs, so a chat page
   // with no open modal never matches. Our own UI lives in #zs-root and is skipped.
   function overlayBlocking() {
-    for (const d of document.querySelectorAll('[role="dialog"]')) {
+    for (const d of document.querySelectorAll('[role="dialog"][aria-modal="true"], [role="dialog"].modal, .modal-backdrop + [role="dialog"]')) {
       if (d.closest("#zs-root")) continue;
       if (reallyVisible(d)) return true;
     }

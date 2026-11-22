@@ -21,7 +21,8 @@ if (typeof importScripts === "function" && typeof ZSGuard === "undefined") {
 }
 
 const PORT = 17613;
-const URL = `ws://127.0.0.1:${PORT}`;
+const URLS = [`ws://127.0.0.1:${PORT}`, `ws://localhost:${PORT}`];
+let currentUrlIndex = 0;
 
 // Chat sites where a snapgentV3 provider content script runs. Status pushes go
 // to every tab matching these. Add the new provider's URL pattern here (and in
@@ -118,10 +119,12 @@ function connect() {
     return;
   }
   clearTimeout(reconnectTimer);
+  const targetUrl = URLS[currentUrlIndex % URLS.length];
   try {
-    ws = new WebSocket(URL);
+    ws = new WebSocket(targetUrl);
   } catch (e) {
-    log("WebSocket ctor failed", e);
+    log("WebSocket ctor failed for " + targetUrl, e);
+    currentUrlIndex++;
     scheduleReconnect();
     return;
   }
@@ -130,7 +133,7 @@ function connect() {
     connected = true;
     reconnectDelay = RECONNECT_MIN;
     lastMessageAt = Date.now();
-    log("connected to bridge");
+    log("connected to bridge at " + targetUrl);
     startHeartbeat();
     broadcastStatus();
   };
@@ -157,11 +160,12 @@ function connect() {
     stopHeartbeat();
     failAllPending("bridge connection closed");
     broadcastStatus();
+    currentUrlIndex++;
     scheduleReconnect();
   };
 
-  ws.onerror = () => {
-    // onclose will follow; nothing to do here but avoid an unhandled error.
+  ws.onerror = (e) => {
+    log("WebSocket error on " + targetUrl, e);
     try { ws.close(); } catch {}
   };
 }
@@ -391,20 +395,32 @@ function statusObj() {
 }
 
 function broadcastStatus() {
-  chrome.runtime.sendMessage(statusObj()).catch(() => {});
-  chrome.tabs.query({ url: PROVIDER_URLS }, (tabs) => {
-    for (const t of tabs) chrome.tabs.sendMessage(t.id, statusObj()).catch(() => {});
-  });
+  try {
+    chrome.runtime.sendMessage(statusObj()).catch(() => {});
+  } catch {}
+  try {
+    if (chrome.tabs && chrome.tabs.query) {
+      chrome.tabs.query({ url: PROVIDER_URLS }, (tabs) => {
+        if (!tabs || (chrome.runtime && chrome.runtime.lastError)) return;
+        for (const t of tabs) {
+          try {
+            chrome.tabs.sendMessage(t.id, statusObj()).catch(() => {});
+          } catch {}
+        }
+      });
+    }
+  } catch {}
 }
 
 // ── messages from content.js / popup.js ─────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === "status") {
+    if (!connected) connect(); // self-heal after a worker wake-up
+    sendResponse(statusObj());
+    return false; // synchronous response
+  }
   (async () => {
-    switch (msg.type) {
-      case "status":
-        if (!connected) connect(); // self-heal after a worker wake-up
-        sendResponse(statusObj());
-        break;
+    switch (msg && msg.type) {
       // Liveness probe for the content script. Without this case a
       // bg({type:"ping"}) falls through to `default:` and answers
       // {ok:false, error:"unknown message"} - which any caller reads as "the
