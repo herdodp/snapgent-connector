@@ -56,6 +56,86 @@ MOCK_SLOW_MCP = "import time\n" + MOCK_MCP.replace(
 )
 
 
+# Speaks MCP 2025-03-26 instead of echoing the client's revision, and behaves like a
+# spec-compliant server that uses the bidirectional channel: it pings the client and
+# asks for elicitation before answering tools/list, then adds a tool at runtime and
+# announces it with notifications/tools/list_changed.
+MOCK_MCP_COMPAT = r"""
+import json
+import sys
+
+state = {"ping_ok": False, "elicit_rejected": False, "swapped": False}
+pending_list = []
+
+
+def emit(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+def tools_result():
+    tools = [{
+        "name": "echo",
+        "description": "Echo a message",
+        "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}},
+    }]
+    if state["ping_ok"]:
+        tools.append({"name": "ping_ok", "description": "Client answered ping", "inputSchema": {"type": "object", "properties": {}}})
+    if state["elicit_rejected"]:
+        tools.append({"name": "elicit_rejected", "description": "Client rejected elicitation", "inputSchema": {"type": "object", "properties": {}}})
+    if state["swapped"]:
+        tools.append({"name": "extra_tool", "description": "Added at runtime", "inputSchema": {"type": "object", "properties": {}}})
+    return {"tools": tools}
+
+
+def flush_pending():
+    if state["ping_ok"] and state["elicit_rejected"]:
+        while pending_list:
+            emit({"jsonrpc": "2.0", "id": pending_list.pop(0), "result": tools_result()})
+
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+    except Exception:
+        continue
+    if request.get("method") is None:
+        if request.get("id") == "srv-ping" and request.get("result") == {}:
+            state["ping_ok"] = True
+            flush_pending()
+        elif request.get("id") == "srv-elicit":
+            error = request.get("error") or {}
+            state["elicit_rejected"] = error.get("code") == -32601
+            flush_pending()
+        continue
+    if "id" not in request:
+        continue
+    method = request.get("method")
+    request_id = request.get("id")
+    if method == "initialize":
+        emit({"jsonrpc": "2.0", "id": request_id, "result": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"tools": {"listChanged": True}},
+            "serverInfo": {"name": "mock-compat", "version": "1"},
+        }})
+        emit({"jsonrpc": "2.0", "id": "srv-ping", "method": "ping", "params": {}})
+        emit({"jsonrpc": "2.0", "id": "srv-elicit", "method": "elicitation/create", "params": {"message": "need input"}})
+    elif method == "tools/list":
+        if state["ping_ok"] and state["elicit_rejected"]:
+            emit({"jsonrpc": "2.0", "id": request_id, "result": tools_result()})
+        else:
+            pending_list.append(request_id)
+    elif method == "tools/call":
+        message = request.get("params", {}).get("arguments", {}).get("message", "")
+        emit({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": message or "ok"}]}})
+        if message == "swap":
+            state["swapped"] = True
+            emit({"jsonrpc": "2.0", "method": "notifications/tools/list_changed", "params": {}})
+    else:
+        emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}})
+"""
+
+
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
     @contextlib.asynccontextmanager
     async def _ws_client(self, root, script):
@@ -101,6 +181,68 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await server.stop()
             self.assertFalse(server.alive)
+
+    async def test_mcp_server_initiated_requests_are_answered(self):
+        # A 2025-03-26 server may ping the client and ask for elicitation before it
+        # answers tools/list. Ignoring those requests leaves the server blocked, so
+        # startup only succeeds here when ping is answered and elicitation is rejected.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_compat.py"
+            mock_path.write_text(MOCK_MCP_COMPAT, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                self.assertEqual(server.protocol_version, "2025-03-26")
+                names = [tool["name"] for tool in server.tools]
+                self.assertIn("ping_ok", names)
+                self.assertIn("elicit_rejected", names)
+            finally:
+                await server.stop()
+
+    async def test_mcp_tool_list_refreshes_on_list_changed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_compat.py"
+            mock_path.write_text(MOCK_MCP_COMPAT, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                self.assertNotIn("extra_tool", [tool["name"] for tool in server.tools])
+                await server.call_tool("echo", {"message": "swap"}, 5)
+                deadline = asyncio.get_running_loop().time() + 5
+                while "extra_tool" not in [tool["name"] for tool in server.tools]:
+                    if asyncio.get_running_loop().time() > deadline:
+                        self.fail("tools/list_changed was not applied to the tool list")
+                    await asyncio.sleep(0.05)
+            finally:
+                await server.stop()
+
+    async def test_unknown_protocol_revision_does_not_block_startup(self):
+        # A server newer than this client answers with a revision we do not know. The
+        # bridge must keep using it instead of failing the whole MCP server, otherwise
+        # one MCP package release breaks every tool the assistant could use.
+        newer = MOCK_MCP.replace(
+            '"protocolVersion": request["params"]["protocolVersion"]',
+            '"protocolVersion": "2099-01-01"',
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_mcp.py"
+            mock_path.write_text(newer, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                self.assertEqual(server.protocol_version, "2099-01-01")
+                self.assertEqual([tool["name"] for tool in server.tools], ["echo"])
+            finally:
+                await server.stop()
 
     async def test_large_response_line_is_received(self):
         # Regression: a single JSON line larger than asyncio's default 64 KB

@@ -170,7 +170,13 @@ es.onmessage=()=>{};
 }));
 poll(); setInterval(poll,1000);
 </script></body></html>"""
-MCP_PROTOCOL_VERSION = "2024-11-05"
+# MCP revisions this client can speak. It offers the newest one and then honours the
+# revision the server picks: a server may answer with an older revision it supports,
+# and it may also answer with something newer than this bridge knows. The newer case
+# is logged rather than refused, because failing the whole server over a revision
+# string breaks installs whose MCP package simply moved first.
+MCP_PROTOCOL_VERSION = "2025-06-18"
+MCP_SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 BRIDGE_VERSION = "3.9.14"
 MAX_LOG_CHARS = 1000
 MAX_CONCURRENT_REQUESTS = 32
@@ -214,6 +220,20 @@ def _json_line(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+# MCP servers reached by url carry their credential in the query string. The token must
+# never reach the log file or an error message the assistant can read back, so every
+# url that leaves this process goes through this filter first.
+_SECRET_QUERY = re.compile(r"(?i)([?&](?:token|access_token|key|api_key|apikey|secret)=)[^&#]*")
+_SECRET_USERINFO = re.compile(r"^(?P<scheme>wss?://)[^/@]+@")
+
+
+def _redact_mcp_url(value: str) -> str:
+    if not isinstance(value, str):
+        return value
+    redacted = _SECRET_USERINFO.sub(lambda match: match.group("scheme") + "<redacted>@", value)
+    return _SECRET_QUERY.sub(lambda match: match.group(1) + "<redacted>", redacted)
+
+
 class MCPServer:
     def __init__(self, server_id: str, config: Dict[str, Any]) -> None:
         self.server_id = server_id
@@ -228,13 +248,27 @@ class MCPServer:
         self._start_lock = asyncio.Lock()
         self.error: Optional[str] = None
         self.ready = False
+        self.protocol_version = MCP_PROTOCOL_VERSION
+        self._refreshing_tools = False
+        # A server is either a child process speaking JSON-RPC on stdio, or a WebSocket
+        # endpoint (the Snapgent bridge APK serves MCP at ws://127.0.0.1:8765/ws).
+        raw_url = config.get("url")
+        self.url: Optional[str] = raw_url if isinstance(raw_url, str) and raw_url else None
+        self.transport = "websocket" if self.url else "stdio"
+        self._ws: Any = None
+        self._ws_reader_task: Optional[asyncio.Task] = None
 
     @property
     def alive(self) -> bool:
+        if self.url:
+            reader_dead = bool(self._ws_reader_task and self._ws_reader_task.done())
+            return bool(self._ws is not None and not reader_dead)
         reader_dead = bool(self._reader_task and self._reader_task.done())
         return bool(self.process and self.process.returncode is None and not reader_dead)
 
     async def start(self) -> bool:
+        if self.url:
+            return await self._start_websocket()
         async with self._start_lock:
             if self.alive and self.ready:
                 return True
@@ -278,7 +312,7 @@ class MCPServer:
             self._reader_task = asyncio.create_task(self._read_stdout())
             self._stderr_task = asyncio.create_task(self._read_stderr())
             try:
-                await self._request(
+                initialized = await self._request(
                     "initialize",
                     {
                         "protocolVersion": MCP_PROTOCOL_VERSION,
@@ -287,15 +321,10 @@ class MCPServer:
                     },
                     timeout=12,
                 )
+                self.protocol_version = self._negotiated_version(initialized)
                 await self._notify("notifications/initialized")
                 result = await self._request("tools/list", {}, timeout=20)
-                raw_tools = result.get("tools", []) if isinstance(result, dict) else []
-                if not isinstance(raw_tools, list):
-                    raise RuntimeError("MCP tools/list returned an invalid tool list.")
-                self.tools = [
-                    tool for tool in raw_tools
-                    if isinstance(tool, dict) and isinstance(tool.get("name"), str)
-                ]
+                self.tools = self._parse_tools(result)
                 self.ready = True
                 log(f"[{self.server_id}] MCP server up ({len(self.tools)} tools advertised)")
                 return True
@@ -305,23 +334,80 @@ class MCPServer:
                 await self.stop()
                 return False
 
+    async def _start_websocket(self) -> bool:
+        async with self._start_lock:
+            if self.alive and self.ready:
+                return True
+            await self.stop()
+            if websockets is None:
+                self.error = "The websockets package is required for url-based MCP servers."
+                log(f"[{self.server_id}] {self.error}")
+                return False
+            url = self.url or ""
+            if not url.startswith(("ws://", "wss://")):
+                self.error = "MCP server url must start with ws:// or wss://."
+                log(f"[{self.server_id}] {self.error}")
+                return False
+            try:
+                self._ws = await websockets.connect(url, max_size=None)
+            except Exception as error:  # InvalidURI, handshake and socket errors alike
+                self.error = _redact_mcp_url(str(error)) or error.__class__.__name__
+                log(f"[{self.server_id}] MCP websocket failed: {self.error}")
+                self._ws = None
+                return False
+            self.tools = []
+            self.error = None
+            self._ws_reader_task = asyncio.create_task(self._read_websocket())
+            try:
+                initialized = await self._request(
+                    "initialize",
+                    {
+                        "protocolVersion": MCP_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": "snapgent-bridge", "version": BRIDGE_VERSION},
+                    },
+                    timeout=12,
+                )
+                self.protocol_version = self._negotiated_version(initialized)
+                await self._notify("notifications/initialized")
+                result = await self._request("tools/list", {}, timeout=20)
+                self.tools = self._parse_tools(result)
+                self.ready = True
+                log(
+                    f"[{self.server_id}] MCP server up over websocket "
+                    f"({len(self.tools)} tools advertised, {_redact_mcp_url(url)})"
+                )
+                return True
+            except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
+                self.error = _redact_mcp_url(str(error))
+                log(f"[{self.server_id}] MCP startup failed: {self.error}")
+                await self.stop()
+                return False
+
     async def stop(self) -> None:
+        ws, self._ws = self._ws, None
         process = self.process
         self.process = None
         self.tools = []
         self.ready = False
-        for task in (self._reader_task, self._stderr_task):
+        for task in (self._reader_task, self._stderr_task, self._ws_reader_task):
             if task and not task.done():
                 task.cancel()
-        tasks = [task for task in (self._reader_task, self._stderr_task) if task]
+        tasks = [task for task in (self._reader_task, self._stderr_task, self._ws_reader_task) if task]
         self._reader_task = None
         self._stderr_task = None
+        self._ws_reader_task = None
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(RuntimeError(f"{self.server_id} MCP server stopped."))
         self._pending.clear()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if ws is not None:
+            try:
+                await ws.close()
+            except (OSError, RuntimeError, asyncio.TimeoutError):
+                pass
         if not process or process.returncode is not None:
             return
         if process.stdin:
@@ -339,13 +425,62 @@ class MCPServer:
                 process.kill()
                 await process.wait()
 
+    async def _read_websocket(self) -> None:
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            async for raw in ws:
+                try:
+                    message = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                    log(f"[{self.server_id}] ignored non-JSON MCP websocket frame.")
+                    continue
+                if isinstance(message, dict):
+                    self._handle_incoming(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # a closed socket is a disconnect, not a crash
+            log(f"[{self.server_id}] MCP websocket read failed: {_redact_mcp_url(str(error))}")
+        finally:
+            if self._ws is ws:
+                self._ws = None
+                self.ready = False
+                for future in self._pending.values():
+                    if not future.done():
+                        future.set_exception(
+                            RuntimeError(f"{self.server_id} MCP server disconnected.")
+                        )
+
+    def _handle_incoming(self, message: Dict[str, Any]) -> None:
+        if isinstance(message.get("method"), str):
+            # Server -> client traffic: requests (ping, roots/list, sampling,
+            # elicitation) and notifications (tools/list_changed, message). Dropping
+            # them makes a spec-compliant server wait forever for a reply, so they run
+            # on their own task and never block the reader.
+            asyncio.create_task(self._handle_server_message(message))
+            return
+        if "id" in message:
+            request_id = message.get("id")
+            future = self._pending.get(request_id) if isinstance(request_id, int) else None
+            if future and not future.done():
+                future.set_result(message)
+
     async def _send(self, payload: Dict[str, Any]) -> None:
+        data = _json_line(payload)
+        if self.url:
+            ws = self._ws
+            if ws is None:
+                raise RuntimeError(f"{self.server_id} MCP server is offline.")
+            async with self._write_lock:
+                await ws.send(data)
+            return
         process = self.process
         if not process or process.returncode is not None or not process.stdin:
             raise RuntimeError(f"{self.server_id} MCP server is offline.")
-        data = (_json_line(payload) + "\n").encode("utf-8")
+        encoded = (data + "\n").encode("utf-8")
         async with self._write_lock:
-            process.stdin.write(data)
+            process.stdin.write(encoded)
             await process.stdin.drain()
 
     async def _request(
@@ -382,6 +517,83 @@ class MCPServer:
                 "params": params or {},
             }
         )
+
+    def _negotiated_version(self, result: Any) -> str:
+        chosen = result.get("protocolVersion") if isinstance(result, dict) else None
+        if not isinstance(chosen, str) or not chosen:
+            return MCP_PROTOCOL_VERSION
+        if chosen not in MCP_SUPPORTED_PROTOCOL_VERSIONS:
+            log(
+                f"[{self.server_id}] MCP server negotiated an unknown revision "
+                f"({chosen}); continuing on a best-effort basis."
+            )
+        return chosen
+
+    @staticmethod
+    def _parse_tools(result: Any) -> List[Dict[str, Any]]:
+        raw_tools = result.get("tools", []) if isinstance(result, dict) else []
+        if not isinstance(raw_tools, list):
+            raise RuntimeError("MCP tools/list returned an invalid tool list.")
+        return [
+            tool for tool in raw_tools
+            if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+        ]
+
+    async def _reply(self, request_id: Any, result: Any) -> None:
+        await self._send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    async def _reply_error(self, request_id: Any, code: int, message: str) -> None:
+        await self._send(
+            {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+        )
+
+    async def _handle_server_message(self, message: Dict[str, Any]) -> None:
+        """Answer requests a server sends to its client, and act on notifications.
+
+        MCP is bidirectional: after initialize a server may call ping, ask for roots,
+        or ask the host for user input (sampling/elicitation). The bridge has no UI for
+        those, so it answers ping and roots honestly and rejects the rest with the
+        JSON-RPC "method not found" error the specification expects, instead of leaving
+        the server blocked on a reply that never comes.
+        """
+        method = message.get("method")
+        request_id = message.get("id")
+        try:
+            if request_id is None:
+                if method == "notifications/tools/list_changed":
+                    await self.refresh_tools()
+                elif method == "notifications/message":
+                    params = message.get("params")
+                    log(f"[{self.server_id}] MCP log: {str(params)[:MAX_LOG_CHARS]}")
+                return
+            if method == "ping":
+                await self._reply(request_id, {})
+            elif method == "roots/list":
+                # initialize() advertises no roots capability, but answering the empty
+                # list is cheaper for the server than an error it may surface as fatal.
+                await self._reply(request_id, {"roots": []})
+            else:
+                await self._reply_error(
+                    request_id, -32601, f"Unsupported client method from bridge: {method}"
+                )
+        except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
+            log(f"[{self.server_id}] MCP server message {method} failed: {error}")
+
+    async def refresh_tools(self) -> None:
+        if not self.ready or self._refreshing_tools:
+            return
+        self._refreshing_tools = True
+        try:
+            result = await self._request("tools/list", {}, timeout=20)
+            tools = self._parse_tools(result)
+        except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
+            log(f"[{self.server_id}] MCP tools/list refresh failed: {error}")
+            return
+        finally:
+            self._refreshing_tools = False
+        if tools != self.tools:
+            self.tools = tools
+            log(f"[{self.server_id}] MCP tool list refreshed ({len(tools)} tools advertised)")
 
     async def call_tool(
         self, tool_name: str, arguments: Dict[str, Any], timeout: float
@@ -430,11 +642,8 @@ class MCPServer:
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     log(f"[{self.server_id}] ignored non-JSON MCP stdout.")
                     continue
-                request_id = message.get("id")
-                if isinstance(request_id, int):
-                    future = self._pending.get(request_id)
-                    if future and not future.done():
-                        future.set_result(message)
+                if isinstance(message, dict):
+                    self._handle_incoming(message)
         except asyncio.CancelledError:
             raise
         except (ValueError, asyncio.LimitOverrunError) as error:
