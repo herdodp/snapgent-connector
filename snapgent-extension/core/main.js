@@ -2916,7 +2916,20 @@
         // Fully injected turn (result / sys) → hide what carries the injected
         // text. On a dual-side turn that is only the user bubble, so the
         // model's answer in the same container survives (see injectedHidePart).
-        if (chip.parentElement !== item) item.insertBefore(chip, item.firstChild);
+        // A provider may ALSO supply chipAnchor(item) for these turns: Gemini's
+        // injected result turn IS the user's own message bubble, and the user
+        // asked for the result chip to sit inside that bubble (so it reads as
+        // part of their message) instead of floating above it as a sticker.
+        // Same anchor the non-whole branch uses; default remains the turn root.
+        const anchor = (P.chipAnchor && P.chipAnchor(item)) || item;
+        const wantLast = !!P.chipAppend && anchor === item;
+        const trailRef = wantLast && P.chipTrailRef ? P.chipTrailRef(item) : null;
+        const inPlace = chip.parentElement === anchor &&
+          (wantLast ? chip.nextElementSibling === trailRef : anchor.firstElementChild === chip);
+        if (!inPlace) {
+          if (wantLast) anchor.insertBefore(chip, trailRef);
+          else anchor.insertBefore(chip, anchor.firstChild);
+        }
         hideInjectedWhole(item);
       } else {
         unhideInjectedWhole(item);

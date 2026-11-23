@@ -190,5 +190,23 @@ ok("expanded state is mirrored on the turn element",
 ok("a recycled turn drops the expanded state with the rest",
   /delete item\.dataset\.zopen/.test(src));
 
+// ── 13. Gemini's collapsed-prompt scrim never paints over our chip ─────────
+// Measured live on the real gemini.google.com tab (CDP, 2026-11-23): Gemini
+// overlays a `div.luminous-expand-fade` gradient (x1091..1183, #171717 solid
+// from 56px) plus a 40px `button.mdc-icon-button`/`.luminous-toggle-pill` over
+// the right end of a user bubble. On a bubble whose prompt we already mask
+// they turned "list_commands · result" into "· resul" and buried our chevron.
+// Both must be dropped - but ONLY inside our chip turns: a user's own long
+// prompt still needs its fade/expand chevron.
+ok("Gemini's expand fade is hidden inside chip turns",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \.luminous-expand-fade[^{]*\{[^}]*display: none !important/.test(css));
+ok("Gemini's collapse toggle is hidden inside chip turns",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) button:has\(> \.luminous-toggle-pill\)[^{]*\{[^}]*display: none !important/.test(css));
+// Mutation check: an unscoped rule would also kill the fade on the user's own
+// truncated prompts, so the `:has(.zs-chip)` scope is part of the behaviour.
+ok("the scrim rules stay scoped to chip turns",
+  !/html\.zs-site-gemini user-query \.luminous-expand-fade[^{]*\{[^}]*display: none/.test(css) &&
+  !/html\.zs-site-gemini user-query button:has\(> \.luminous-toggle-pill\)[^{]*\{[^}]*display: none/.test(css));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

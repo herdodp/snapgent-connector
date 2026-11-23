@@ -778,6 +778,42 @@ const ZSProvider = (() => {
     return hidAny;
   }
 
+  // ── Chip anchor + mask target for injected USER turns ─────────────────────
+  // Gemini's injected tool-result turn is a normal user message: the bubble
+  // (span.user-query-bubble-with-background) carries the JSON we sent. Pinning
+  // the chip at the turn root made it read like a sticker floating above the
+  // bubble, so the chip is anchored INSIDE the bubble instead and only the text
+  // inside that bubble is masked. Result: the chip reads as part of the user's
+  // own message, exactly where the result payload sits.
+  //
+  // Not for our own system turns (bootstrap/reminder): those must keep the
+  // whole turn masked with the status chip pinned at turn level, otherwise the
+  // giant CONTEXT prompt would survive as a visible bubble.
+  const BUBBLE_SEL = ".user-query-bubble-with-background, .query-content";
+  const BUBBLE_TEXT_SEL = ".query-text, .query-text-line, .query-text-line p";
+
+  function userBubble(item) {
+    if (!isUserItem(item)) return null;
+    const b = item.querySelector(BUBBLE_SEL);
+    if (!b || b === item) return null;
+    // Mask target must exist, otherwise masking would hide the bubble that now
+    // holds our chip (chip invisible + rebuild loop).
+    if (!b.querySelector(BUBBLE_TEXT_SEL)) return null;
+    const txt = itemText(item);
+    if (typeof ZS !== "undefined" && ZS.isSysPromptText && ZS.isSysPromptText(txt)) return null;
+    return b;
+  }
+  // Chip goes into the bubble's inner flex row, next to where the text was.
+  const chipAnchor = (item) => {
+    const b = userBubble(item);
+    return b ? (b.querySelector(".horizontal-container") || b) : null;
+  };
+  // Mask only the injected text line inside the bubble - never the bubble.
+  const injectedHideNode = (item) => {
+    const b = userBubble(item);
+    return b ? b.querySelector(BUBBLE_TEXT_SEL) : null;
+  };
+
   return {
     id: "gemini",
     displayName: "Gemini",
@@ -797,6 +833,11 @@ const ZSProvider = (() => {
     // wiping any chip placed inside it. Tell the core to anchor chips at the
     // turn-element level instead, where they survive those re-renders.
     chipAtItemLevel: true,
+    // Result chips live inside the user's bubble (see chipAnchor above) and
+    // only the injected text line is masked (injectedHideNode), so the bubble
+    // frame keeps the chip visible.
+    chipAnchor,
+    injectedHideNode,
     // The "Working…" input cover overshoots the editor box by this many px on
     // each side. Gemini's Quill keeps typed text near the rounded corners, so a
     // few px of bleed hides the slivers that would otherwise peek (see placeBar /
