@@ -2423,7 +2423,7 @@
       const txt = P.classifyText(it, ".zs-chip");
       // The bootstrap turn and every rider both carry the marker - either one
       // means the rules were fully stated here, so stop counting.
-      if (txt.includes(ZS.SYS_MARKER)) break;
+      if (ZS.isSysPromptText(txt)) break;
       if (!P.isUserItem(it)) continue;
       if (ZSParse.isInjectedFeedback(txt)) results++;
       else users++;
@@ -3063,7 +3063,7 @@
       }
 
       // 1. System-prompt bootstrap turn → animated while starting, gear when done.
-      if (txt.includes(ZS.SYS_MARKER)) {
+      if (ZS.isSysPromptText(txt)) {
         const phase = A.starting ? "run" : "sys";
         if (item.dataset.zs !== "sys" || item.dataset.zphase !== phase || chipGone) {
           this.chip(item, { label: "Starting Up", category: "tool", phase, cls: "sys", whole: true });
@@ -5481,6 +5481,7 @@
   function isZsSignalText(txt) {
     if (!txt) return false;
     if (txt.includes(ZS.SYS_MARKER)) return true;
+    if (typeof ZS.isSysPromptText === "function" && ZS.isSysPromptText(txt)) return true;
     // The injected result caption used to be matched only at a line start. But
     // ChatGPT's 2026-11 turn container glues the chip label into the SAME
     // textContent ("list_commands · resultOutput of 'list_commands': …"), so
@@ -5642,7 +5643,7 @@
         continue;
       }
       const txt = P.classifyText(item, ".zs-chip");
-      if (txt.includes(ZS.SYS_MARKER) ||
+      if (ZS.isSysPromptText(txt) ||
           (P.isUserItem(item) && ZSParse.isInjectedFeedback(txt))) {
         hideInjectedWhole(item);
       }
