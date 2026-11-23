@@ -806,33 +806,106 @@ const ZSProvider = (() => {
   // inset), and measuring that outlier would push every chip off by its delta.
   // The LAST such turn wins so a re-laid-out newest reply is what we follow.
   function currentColumnTurn() {
+    // `.markdown` is the box we prefer, but every Gemini build we have seen puts
+    // the reply text under `message-content`; falling back to the turn itself
+    // keeps the measurement alive if a build renames the wrapper.
+    const textOf = (t) => t.querySelector(".markdown, message-content, .response-content") || t;
     let pick = null;
     for (const t of document.querySelectorAll(S.assistantItem)) {
-      const md = t.querySelector(".markdown");
-      if (!md || md.getBoundingClientRect().width < 24) continue;
+      const text = textOf(t);
+      if (!text || text.getBoundingClientRect().width < 24) continue;
       if (!t.closest(".conversation-container")) continue;
-      pick = { turn: t, text: md };
+      pick = { turn: t, text };
     }
     if (pick) return pick;
     const t = document.querySelector(S.assistantItem);
-    const md = t && t.querySelector(".markdown");
-    return md ? { turn: t, text: md } : null;
+    if (!t) return null;
+    const text = textOf(t);
+    return text ? { turn: t, text } : null;
+  }
+
+  // Read the readable column of one reply, in two passes.
+  //
+  // Pass 1 (the `.markdown` box) is enough when Gemini caps that element itself:
+  // it measured 900px inside a 1571px turn in the harness, and inset = box edges.
+  //
+  // Pass 2 exists because the user's real page (23 Nov 2026, 2236px window)
+  // reported "still no padding": there `.markdown` spans the WHOLE turn and the
+  // cap lives on the blocks inside it, so pass 1 answered 0/0 and the chips stayed
+  // at the window edge while the text sat ~340px further in. In that layout the
+  // column is measured from the rendered TEXT LINES instead: prose line boxes
+  // only (`<pre>`, tables and images legitimately run wider), the left edge taken
+  // as the most common line start (4px buckets) so an indented list item or a
+  // centred heading cannot drag it, and the right inset mirrored - Gemini centres
+  // that column inside the turn, which is exactly why both sides need the same
+  // number.
+  function textColumnInset(t, text) {
+    const x = text.getBoundingClientRect();
+    if (!x.width) return { l: 0, r: 0, source: "none", lines: 0 };
+    const l0 = Math.max(0, Math.round(x.left - t.left));
+    const r0 = Math.max(0, Math.round(t.right - x.right));
+    if (l0 >= 4 || r0 >= 4) return { l: l0, r: r0, source: "markdown", lines: 0 };
+    const run = document.createRange();
+    const lefts = [];
+    const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.nodeValue || !node.nodeValue.trim()) continue;
+      const el = node.parentElement;
+      if (!el || el.closest("pre, table, code, img, svg, .code-block")) continue;
+      run.selectNodeContents(node);
+      for (const b of run.getClientRects()) {
+        if (b.width < 8) continue;
+        lefts.push(Math.round(b.left - t.left));
+      }
+    }
+    // One measured line is enough: a short reply is still a reply, and refusing
+    // to measure it is what left the user's chips at the window edge.
+    if (!lefts.length) return { l: 0, r: 0, source: "none", lines: 0 };
+    const buckets = new Map();
+    for (const v of lefts) {
+      const k = Math.round(v / 4) * 4;
+      buckets.set(k, (buckets.get(k) || 0) + 1);
+    }
+    let bestK = 0;
+    let bestHits = -1;
+    for (const [k, hits] of buckets) {
+      if (hits > bestHits || (hits === bestHits && k < bestK)) {
+        bestK = k;
+        bestHits = hits;
+      }
+    }
+    const l = Math.max(0, bestK);
+    return { l, r: l, source: "text", lines: lefts.length };
   }
 
   function publishChipColumn(force) {
     const pick = currentColumnTurn();
     if (!pick) return;
     const t = pick.turn.getBoundingClientRect();
-    const x = pick.text.getBoundingClientRect();
-    if (!t.width || !x.width) return;
-    const l = Math.max(0, Math.round(x.left - t.left));
-    const r = Math.max(0, Math.round(t.right - x.right));
-    const sig = `${l}/${r}`;
+    if (!t.width) return;
+    const m = textColumnInset(t, pick.text);
+    // Kept on the page so a live probe (or the user reporting a miss) can read
+    // which pass answered without opening the extension's isolated world.
+    window.__zsGemColDebug = {
+      l: m.l,
+      r: m.r,
+      source: m.source,
+      lines: m.lines,
+      turnW: Math.round(t.width),
+      textW: Math.round(pick.text.getBoundingClientRect().width)
+    };
+    // Also mirrored onto the html element: DevTools' default console runs in the
+    // page world and cannot see the isolated one, so `$0`-style poking or
+    // "document.documentElement.dataset.zsGemCol" is how the user reports a miss.
+    document.documentElement.dataset.zsGemCol =
+      `${m.source}:${m.l}/${m.r} lines:${m.lines} turnW:${Math.round(t.width)}`;
+    const sig = `${m.l}/${m.r}/${m.source}`;
     if (!force && sig === colSig) return;
     colSig = sig;
     const st = document.documentElement.style;
-    st.setProperty(COL_L, `${l}px`);
-    st.setProperty(COL_R, `${r}px`);
+    st.setProperty(COL_L, `${m.l}px`);
+    st.setProperty(COL_R, `${m.r}px`);
   }
 
   function installChipColumnWatch() {
@@ -958,7 +1031,9 @@ const ZSProvider = (() => {
     // actions
     attachImages, clearAttachments, conversationKey,
     installSendHooks, findToolBlockSpot,
-    // Exported for live probes/tests: re-measure the readable column now.
+    // Exported for live probes/tests: re-measure the readable column now, and
+    // read which pass answered (markdown box vs text lines) plus the numbers.
     publishChipColumn,
+    chipColumnDebug: () => window.__zsGemColDebug || null,
   };
 })();

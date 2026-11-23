@@ -253,12 +253,33 @@ ok("the provider measures the readable column from the reply itself",
   /const COL_R = "--zs-gem-col-r"/.test(gem) &&
   /function currentColumnTurn\(\)/.test(gem) &&
   /if \(!t\.closest\("\.conversation-container"\)\) continue/.test(gem) &&
-  /st\.setProperty\(COL_L, `\$\{l\}px`\)/.test(gem) &&
-  /st\.setProperty\(COL_R, `\$\{r\}px`\)/.test(gem));
+  /st\.setProperty\(COL_L, `\$\{m\.l\}px`\)/.test(gem) &&
+  /st\.setProperty\(COL_R, `\$\{m\.r\}px`\)/.test(gem));
 ok("the provider re-measures on resize and on later re-layout",
   /addEventListener\("resize", \(\) => publishChipColumn\(true\)/.test(gem) &&
   /setInterval\(kick, 1500\)/.test(gem) &&
   /installChipColumnWatch\(\);/.test(gem));
+
+// ── 16. The inset is measured from text lines when .markdown spans the turn ──
+// Reported 2026-11-23 17:44 by the user AFTER reloading the extension: chips
+// still sat at the window edge while the reply text started ~340px further in.
+// Cause: their Gemini build keeps `.markdown` as wide as the turn and caps the
+// blocks INSIDE it, so the first measurement pass answered 0/0. The provider now
+// falls back to measuring the rendered prose lines and mirrors the right inset,
+// because Gemini centres that column inside the turn.
+ok("the provider measures the readable column from text lines when the box spans the turn",
+  /function textColumnInset\(t, text\)/.test(gem) &&
+  /document\.createTreeWalker\(text, NodeFilter\.SHOW_TEXT, null\)/.test(gem) &&
+  /if \(l0 >= 4 \|\| r0 >= 4\) return \{ l: l0, r: r0, source: "markdown", lines: 0 \}/.test(gem));
+ok("the text-line pass ignores blocks that legitimately run wider",
+  /el\.closest\("pre, table, code, img, svg, \.code-block"\)/.test(gem));
+ok("the text-line pass takes the most common line start, not the first one",
+  /const buckets = new Map\(\)/.test(gem) && /Math\.round\(v \/ 4\) \* 4/.test(gem));
+ok("the right inset mirrors the left one because the column is centred",
+  /return \{ l, r: l, source: "text", lines: lefts\.length \}/.test(gem));
+ok("a miss is debuggable from the page itself",
+  /window\.__zsGemColDebug = \{/.test(gem) && /chipColumnDebug: \(\) => window\.__zsGemColDebug \|\| null/.test(gem) &&
+  /dataset\.zsGemCol/.test(gem));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
