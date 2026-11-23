@@ -208,5 +208,23 @@ ok("the scrim rules stay scoped to chip turns",
   !/html\.zs-site-gemini user-query \.luminous-expand-fade[^{]*\{[^}]*display: none/.test(css) &&
   !/html\.zs-site-gemini user-query button:has\(> \.luminous-toggle-pill\)[^{]*\{[^}]*display: none/.test(css));
 
+// ── 14. Chip turns stay compact; the agent card hugs its own label ─────────
+// Measured live (CDP 9231, 2026-11-23): a masked user turn was 112px tall while
+// its bubble was 60px - the leftover `div.luminous-actions-container` (36px at
+// top 44) was the 52px hole between a tool call and its result. The agent card
+// was also stretched to the full 911px column, leaving its chevron ~700px from
+// the label. Both rules are scoped to chip turns so a real prompt keeps its
+// toolbar, padding and full width.
+ok("the empty action toolbar is dropped on chip turns",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \.luminous-actions-container,\s*html\.zs-site-gemini model-response:has\(\.zs-chip\) \.luminous-actions-container\s*\{[^}]*display: none !important/.test(css));
+ok("a chip turn collapses to its bubble height",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) :is\(user-query-content, \.user-query-container\)\s*\{[^}]*min-height: 0 !important/.test(css));
+ok("the agent card is sized by its content, not the column",
+  /html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*width: fit-content !important/.test(css) &&
+  /html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*max-width: min\(100%, 620px\) !important/.test(css));
+// Mutation check: forcing the card back to the full column must fail this.
+ok("the agent card no longer stretches to the agent column",
+  !/html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*\n\s*width: 100% !important/.test(css));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
