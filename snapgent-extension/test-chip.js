@@ -15,6 +15,7 @@ const fs = require("fs");
 
 const src = fs.readFileSync(__dirname + "/core/main.js", "utf8");
 const css = fs.readFileSync(__dirname + "/overlay.css", "utf8");
+const gem = fs.readFileSync(__dirname + "/providers/gemini.js", "utf8");
 
 let pass = 0;
 let fail = 0;
@@ -225,6 +226,39 @@ ok("the agent card is sized by its content, not the column",
 // Mutation check: forcing the card back to the full column must fail this.
 ok("the agent card no longer stretches to the agent column",
   !/html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*\n\s*width: 100% !important/.test(css));
+
+// ── 15. Chips sit on Gemini's readable column, both sides ──────────────────
+// Screenshot from the user, 2026-11-23 16:57: command cards hugged the far left
+// of the window and the "· result" pills ran past the right edge of the reply
+// text. Cause measured live on the real page: Gemini caps the READABLE column
+// and centers it inside the turn (the reply markdown stops well short of the
+// turn box on a wide window), while the turn itself keeps the full scroller
+// width. Our chips hang off the TURN edges, so they end up outside the text.
+// The cap is a Gemini-side layout preference and its width depends on the
+// window, so the inset is measured at runtime and published as
+// --zs-gem-col-l / --zs-gem-col-r; a hardcoded px value would break at the next
+// window size.
+ok("the agent card starts where Gemini's reply text starts",
+  /html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*margin: 6px var\(--zs-gem-col-r, 0px\) 0 var\(--zs-gem-col-l, 0px\) !important/.test(css));
+ok("a chip turn is padded by the measured column inset",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \{[^}]*padding: 0 var\(--zs-gem-col-r, 0px\) 0 var\(--zs-gem-col-l, 0px\) !important/.test(css) &&
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \{[^}]*box-sizing: border-box !important/.test(css));
+// Mutation check: any fixed inset would satisfy the look on ONE window size and
+// break the alignment on the next, which is exactly the report being fixed.
+ok("the column inset is measured, never hardcoded in px",
+  !/html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*margin: 6px 0 0 \d+px/.test(css) &&
+  !/html\.zs-site-gemini user-query:has\(\.zs-chip\) \{[^}]*padding: 0 \d+px 0 \d+px/.test(css));
+ok("the provider measures the readable column from the reply itself",
+  /const COL_L = "--zs-gem-col-l"/.test(gem) &&
+  /const COL_R = "--zs-gem-col-r"/.test(gem) &&
+  /function currentColumnTurn\(\)/.test(gem) &&
+  /if \(!t\.closest\("\.conversation-container"\)\) continue/.test(gem) &&
+  /st\.setProperty\(COL_L, `\$\{l\}px`\)/.test(gem) &&
+  /st\.setProperty\(COL_R, `\$\{r\}px`\)/.test(gem));
+ok("the provider re-measures on resize and on later re-layout",
+  /addEventListener\("resize", \(\) => publishChipColumn\(true\)/.test(gem) &&
+  /setInterval\(kick, 1500\)/.test(gem) &&
+  /installChipColumnWatch\(\);/.test(gem));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1644,22 +1644,32 @@ html.zs-site-gemini .conversation-container { align-items: stretch !important; }
 /* Agent side. Content-sized, not column-sized: a 40-character label stretched
    across 911px left its chevron ~700px away from the text, which is the other
    half of the "kurang rapih" in the 23 Nov screenshot. 620px keeps a long tool
-   path readable while the whole card still hugs its own content. */
+   path readable while the whole card still hugs its own content.
+   The left/right margin is the MEASURED inset of Gemini's readable column
+   (--zs-gem-col-*): on a wide window the reply markdown is capped and centered
+   inside the turn, so a card pinned at the turn edge floats far outside the
+   text the user reads. The provider publishes the inset; 0px (the common case,
+   where the column already fills the turn) leaves the old geometry untouched. */
 html.zs-site-gemini model-response .zs-chip {
   width: fit-content !important;
   max-width: min(100%, 620px) !important;
-  margin: 6px 0 0 0 !important;
+  margin: 6px var(--zs-gem-col-r, 0px) 0 var(--zs-gem-col-l, 0px) !important;
 }
 html.zs-site-gemini model-response > div:has(message-content.zs-cmd-mask) {
   display: none !important;
 }
 
-/* Our system turns (bootstrap / reminder): full turn width, left like before. */
+/* Our system turns (bootstrap / reminder): full turn width, left like before.
+   The horizontal padding is Gemini's own readable-column inset (measured by the
+   provider, see --zs-gem-col-*), so a system card and a result pill both stop
+   where the reply text stops instead of hugging the window edge. box-sizing is
+   pinned because width:100% + padding would otherwise overflow. */
 html.zs-site-gemini user-query:has(.zs-chip) {
   width: 100% !important;
   max-width: 100% !important;
   margin: 0 !important;
-  padding: 0 !important;
+  padding: 0 var(--zs-gem-col-r, 0px) 0 var(--zs-gem-col-l, 0px) !important;
+  box-sizing: border-box !important;
   min-height: 0 !important;
   justify-content: flex-start !important;
 }

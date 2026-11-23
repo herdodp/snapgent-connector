@@ -778,6 +778,85 @@ const ZSProvider = (() => {
     return hidAny;
   }
 
+  // ── Chip column alignment (measured live, 2026-11-23) ─────────────────────
+  // Gemini renders the READABLE column separately from the turn box: on the
+  // user's window the reply markdown is capped and centered inside
+  // <model-response>, while the turn itself keeps the full scroller width. Our
+  // chips hang off the TURN edges (the command chip at the model-response root,
+  // the result pill justified to the right of the user turn), so in that layout
+  // they sit ~80-160px outside the text the user is reading - reported as "chips
+  // have no left/right padding that matches Gemini's own text output".
+  //
+  // The cap is a Gemini-side layout preference (it is 0px wide on a 1072px
+  // window and >0 on the user's wider one), so hardcoding an inset would break
+  // at the next window size. Instead the inset is MEASURED from a real reply and
+  // published as two CSS variables that overlay.css applies to chip turns only:
+  //   --zs-gem-col-l  left inset of the text column inside its turn
+  //   --zs-gem-col-r  right inset of the text column inside its turn
+  // Measured again on resize and on a slow interval (a reply can be re-laid out
+  // by Angular without any resize), and cached so a steady page costs nothing.
+  const COL_L = "--zs-gem-col-l";
+  const COL_R = "--zs-gem-col-r";
+  let colSig = "";
+
+  // Pick the reply whose layout the chips must follow. Only a turn that sits in
+  // a real `.conversation-container` counts: Gemini also keeps stray
+  // <model-response> previews outside the transcript (measured live: one 900px
+  // markdown at x362 while every transcript turn was 997px wide with a 48px
+  // inset), and measuring that outlier would push every chip off by its delta.
+  // The LAST such turn wins so a re-laid-out newest reply is what we follow.
+  function currentColumnTurn() {
+    let pick = null;
+    for (const t of document.querySelectorAll(S.assistantItem)) {
+      const md = t.querySelector(".markdown");
+      if (!md || md.getBoundingClientRect().width < 24) continue;
+      if (!t.closest(".conversation-container")) continue;
+      pick = { turn: t, text: md };
+    }
+    if (pick) return pick;
+    const t = document.querySelector(S.assistantItem);
+    const md = t && t.querySelector(".markdown");
+    return md ? { turn: t, text: md } : null;
+  }
+
+  function publishChipColumn(force) {
+    const pick = currentColumnTurn();
+    if (!pick) return;
+    const t = pick.turn.getBoundingClientRect();
+    const x = pick.text.getBoundingClientRect();
+    if (!t.width || !x.width) return;
+    const l = Math.max(0, Math.round(x.left - t.left));
+    const r = Math.max(0, Math.round(t.right - x.right));
+    const sig = `${l}/${r}`;
+    if (!force && sig === colSig) return;
+    colSig = sig;
+    const st = document.documentElement.style;
+    st.setProperty(COL_L, `${l}px`);
+    st.setProperty(COL_R, `${r}px`);
+  }
+
+  function installChipColumnWatch() {
+    if (window.__zsGemColWatch) return;
+    window.__zsGemColWatch = true;
+    const kick = () => {
+      try {
+        publishChipColumn(false);
+      } catch (_) {
+        /* layout not ready yet; the next tick retries */
+      }
+    };
+    window.addEventListener("resize", () => publishChipColumn(true), { passive: true });
+    // A background tab throttles setInterval (verified live: the value stayed at
+    // its first reading until the tab was brought to front), so the cheap
+    // listener-driven kicks matter as much as the timer: scrolling and coming
+    // back to the tab both re-measure immediately.
+    window.addEventListener("scroll", kick, { passive: true, capture: true });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) publishChipColumn(true);
+    });
+    setInterval(kick, 1500);
+  }
+
   // ── Chip anchor + mask target for injected USER turns ─────────────────────
   // Gemini's injected tool-result turn is a normal user message: the bubble
   // (span.user-query-bubble-with-background) carries the JSON we sent. Pinning
@@ -856,7 +935,15 @@ const ZSProvider = (() => {
     // sessions - observed live, model behavior, not something the prompt fixes.
     unstableWarning:
       "Gemini may stop using tools in long sessions. Remind it to use the commands, or start a new chat",
-    init({ diag: d } = {}) { if (d) diag = d; },
+    init({ diag: d } = {}) {
+      if (d) diag = d;
+      // Keep our chip turns on Gemini's readable column (publishChipColumn).
+      try {
+        installChipColumnWatch();
+      } catch (_) {
+        /* no DOM yet (unit test harness); harmless */
+      }
+    },
     // turns
     allItems, isUserItem, isAssistantItem, itemText, classifyText,
     assistantCount, userCount, lastAssistant, readAssistant,
@@ -871,5 +958,7 @@ const ZSProvider = (() => {
     // actions
     attachImages, clearAttachments, conversationKey,
     installSendHooks, findToolBlockSpot,
+    // Exported for live probes/tests: re-measure the readable column now.
+    publishChipColumn,
   };
 })();
