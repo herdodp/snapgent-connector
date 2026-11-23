@@ -1204,17 +1204,9 @@ html.zs-site-gemini body:not(.dark-theme) user-query .zs-chip.result {
 }
 html.zs-site-gemini body:not(.dark-theme) .zs-chip.open .zs-chip-body { border-top-color: #dde3ea; }
 html.zs-site-gemini body:not(.dark-theme) .zs-chip-body pre { color: #1f1f1f; }
-/* The floating "⚠ unstable" pill is drawn by the bar (core/overlay.css, amber).
-   Inside Gemini it must not re-introduce the yellow the user rejected, so it
-   rides the same tonal surface. More specific than the id-only rule there. */
-html.zs-site-gemini #zs-unstable {
-  background: #1e1f20; border: 1px solid #2c2e30; color: #c4c7c5;
-  font-family: "Google Sans Flex", "Google Sans", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
-html.zs-site-gemini #zs-unstable:hover { background: #26282a; border-color: #3c4043; }
-html.zs-site-gemini body:not(.dark-theme) #zs-unstable {
-  background: #f0f4f9; border-color: #dde3ea; color: #444746;
-}
+/* Gemini no longer renders the "⚠ unstable" pill (the provider stopped
+   declaring unstableWarning), so the tonal overrides that existed only to
+   de-yellow it inside Gemini are gone with it. */
 
 /* Injected RESULT → sit in the user's blue bubble.
    ChatGPT delivers the tool feedback AS a user message, so hiding it and

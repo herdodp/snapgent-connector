@@ -1003,11 +1003,6 @@ const ZSProvider = (() => {
     // watcher uses this to refuse finalizing before this send's reply turn
     // exists (fixes premature loop.end on the previous turn's stable text).
     reliableCounts: true,
-    // Shown as a permanent, non-intrusive notice in the snapgentV3 panel.
-    // Gemini drifts away from emitting tool blocks after a while in long
-    // sessions - observed live, model behavior, not something the prompt fixes.
-    unstableWarning:
-      "Gemini may stop using tools in long sessions. Remind it to use the commands, or start a new chat",
     init({ diag: d } = {}) {
       if (d) diag = d;
       // Keep our chip turns on Gemini's readable column (publishChipColumn).

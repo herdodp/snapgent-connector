@@ -281,5 +281,18 @@ ok("a miss is debuggable from the page itself",
   /window\.__zsGemColDebug = \{/.test(gem) && /chipColumnDebug: \(\) => window\.__zsGemColDebug \|\| null/.test(gem) &&
   /dataset\.zsGemCol/.test(gem));
 
+// ── 17. Gemini carries no "⚠ unstable" label ───────────────────────────────
+// The pill described Gemini dropping tool blocks in long sessions. It no longer
+// reflected live behavior and the user asked for it to go, so the provider must
+// stop declaring unstableWarning - while providers that still need the notice
+// keep theirs, since the core renders the pill only when a provider opts in.
+ok("gemini no longer declares an unstable warning",
+  !/unstableWarning\s*:/.test(gem));
+ok("the pill still has a renderer for providers that declare it",
+  /P\.unstableWarning \? `<button id="zs-unstable"/.test(src));
+const glmTs = fs.readFileSync(__dirname + "/providers/glm.js", "utf8");
+ok("providers that still need the warning keep theirs",
+  /unstableWarning\s*:/.test(glmTs));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
