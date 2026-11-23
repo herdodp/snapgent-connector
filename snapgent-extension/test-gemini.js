@@ -255,6 +255,97 @@ async function main() {
     ok(env.state.sent === 0, "nothing was sent", env.state.sent);
   }
 
+  // ── 7. injected result turn: chip goes INSIDE the user bubble ────────────
+  // Live complaint (2026-11-23): the result chip rendered as a pill floating
+  // above the user's own message. The result payload IS a normal user message
+  // in Gemini (the extension sends the tool output as the user's next turn), so
+  // the chip must sit in that bubble and only the text line may be masked -
+  // masking the bubble itself would hide the chip with it.
+  console.log("\n# result chip anchored inside the user bubble");
+  {
+    const env = makeEnv();
+    const textNodeOf = (s) => ({ nodeType: 3, nodeValue: s });
+    const mkEl = (tag, cls, kids) => {
+      const e = {
+        nodeType: 1,
+        tagName: tag.toUpperCase(),
+        _cls: new Set(String(cls || "").split(/\s+/).filter(Boolean)),
+        childNodes: [],
+        parentElement: null,
+      };
+      e.classList = {
+        add: (c) => e._cls.add(c),
+        remove: (c) => e._cls.delete(c),
+        contains: (c) => e._cls.has(c),
+      };
+      e.matches = (sel) => String(sel).split(",").some((s) => e._cls.has(s.trim().replace(/^\./, "")));
+      const findIn = (root, name) => {
+        for (const c of root.childNodes) {
+          if (c.nodeType !== 1) continue;
+          if (c._cls.has(name)) return c;
+          const d = findIn(c, name);
+          if (d) return d;
+        }
+        return null;
+      };
+      e.querySelector = (sel) => {
+        for (const part of String(sel).split(",")) {
+          const name = part.trim().split(/\s+/).pop().replace(/^\./, "");
+          if (!name) continue;
+          const hit = findIn(e, name);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      for (const k of kids || []) {
+        if (k && k.nodeType) { k.parentElement = e; e.childNodes.push(k); }
+        else { const t = textNodeOf(String(k)); t.parentElement = e; e.childNodes.push(t); }
+      }
+      return e;
+    };
+    // <user-query> → .query-content → .query-bubble-anchor →
+    //   span.user-query-bubble-with-background → span.horizontal-container →
+    //     div.query-text → p.query-text-line  ("Output of …")
+    const buildTurn = (label) => {
+      const line = mkEl("p", "query-text-line", [label]);
+      const qtext = mkEl("div", "query-text", [line]);
+      const row = mkEl("span", "horizontal-container", [qtext]);
+      const bubble = mkEl("span", "user-query-bubble-with-background", [row]);
+      const anchor = mkEl("div", "query-bubble-anchor", [bubble]);
+      const content = mkEl("div", "query-content", [anchor]);
+      return mkEl("user-query", "ng-star-inserted", [content]);
+    };
+
+    const resultTurn = buildTurn('Output of \'list_commands\': {"tools":[1]}');
+    const anchor = env.ZS.chipAnchor ? env.ZS.chipAnchor(resultTurn) : null;
+    const hide = env.ZS.injectedHideNode ? env.ZS.injectedHideNode(resultTurn) : null;
+    ok(!!env.ZS.chipAnchor && !!env.ZS.injectedHideNode,
+      "provider exposes chipAnchor + injectedHideNode", Object.keys(env.ZS).length);
+    ok(!!anchor && anchor !== resultTurn && anchor.classList.contains("horizontal-container"),
+      "chip anchors inside the bubble's row, not at the turn root",
+      anchor && anchor.classList.contains("horizontal-container"));
+    ok(!!hide && hide.classList.contains("query-text"),
+      "only the text line is masked", hide && hide._cls && [...hide._cls]);
+    ok(!!anchor && !!hide && anchor !== hide,
+      "masked text is not the chip's own container", !!(anchor && hide));
+
+    // Our own system turn must NOT be redirected: hiding only its text line
+    // would leave the giant CONTEXT prompt bubble visible.
+    const sysTurn = buildTurn("CONTEXT: you are snapgentV3 in Gemini. …");
+    const prevGlobal = global.ZS;
+    global.ZS = { isSysPromptText: (t) => /CONTEXT:[^\n]{0,100}snapgentV3/i.test(t) };
+    const sysAnchor = env.ZS.chipAnchor(sysTurn);
+    const sysHide = env.ZS.injectedHideNode(sysTurn);
+    global.ZS = prevGlobal;
+    ok(sysAnchor === null, "system turn keeps the turn-level chip pin", sysAnchor === null);
+    ok(sysHide === null, "system turn still masks the whole turn", sysHide === null);
+
+    // Mutation check: without these two hooks the same turn falls back to a
+    // turn-level sticker + whole-turn mask (the reported behaviour).
+    ok(env.ZS.chipAnchor(buildTurn("plain user text")) !== null,
+      "ordinary user turn is unaffected by the sys guard", true);
+  }
+
   console.log(failures ? `\nFAILED (${failures})` : "\nall Gemini send checks passed");
   process.exit(failures ? 1 : 0);
 }
