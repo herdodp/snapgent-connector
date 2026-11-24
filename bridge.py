@@ -223,7 +223,32 @@ def _json_line(value: Any) -> str:
 # MCP servers reached by url carry their credential in the query string. The token must
 # never reach the log file or an error message the assistant can read back, so every
 # url that leaves this process goes through this filter first.
-_SECRET_QUERY = re.compile(r"(?i)([?&](?:token|access_token|key|api_key|apikey|secret)=)[^&#]*")
+#
+# A list of five exact names was too narrow: a server that names its parameter
+# `password` or `client_secret` had the value written to the log in plain text (owner
+# review 2026-11-25). The parameter name is matched by CONTAINING a credential-ish
+# word instead, because the server - not us - chooses the name: passwords (password,
+# passwd, pwd), client secrets, api keys (api_key, apikey, x-api-key), bearer and
+# access tokens, signatures (signature, sig), auth, credentials, sessions, cookies,
+# JWTs and tickets. A harmless parameter such as `transport=websocket` stays readable.
+_SECRET_PARAM_HINTS = (
+    "token",
+    "secret",
+    "passw",
+    "pwd",
+    "key",
+    "sig",
+    "auth",
+    "credential",
+    "session",
+    "cookie",
+    "jwt",
+    "bearer",
+    "ticket",
+)
+_SECRET_QUERY = re.compile(
+    r"(?i)([?&][^=&#\s]*?(?:" + "|".join(_SECRET_PARAM_HINTS) + r")[^=&#\s]*?=)[^&#\s\"']*"
+)
 _SECRET_USERINFO = re.compile(r"^(?P<scheme>wss?://)[^/@]+@")
 
 

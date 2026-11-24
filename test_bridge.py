@@ -182,6 +182,84 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 await server.stop()
             self.assertFalse(server.alive)
 
+    def test_redact_mcp_url_hides_every_credential_parameter(self):
+        # A server chooses its own query parameter name, so redaction cannot rely on
+        # five known names: `password` and `client_secret` used to reach the log in
+        # plain text (owner review 2026-11-25).
+        url = (
+            "wss://user:usersecret@example.test/ws"
+            "?token=tok-value-1&password=pass-value-1&client_secret=secret-value-1"
+            "&x-api-key=key-value-1&signature=sig-value-1&transport=websocket"
+        )
+        redacted = bridge._redact_mcp_url(url)
+        for secret in ("usersecret", "tok-value-1", "pass-value-1", "secret-value-1", "key-value-1", "sig-value-1"):
+            self.assertNotIn(secret, redacted)
+        self.assertNotIn("secret-value-1", redacted)
+        self.assertEqual(redacted.count("<redacted>"), 6)
+        # A parameter that is not a credential stays readable, otherwise the log
+        # cannot be used to tell one server's transport from another's.
+        self.assertIn("transport=websocket", redacted)
+        self.assertEqual(bridge._redact_mcp_url(123), 123)
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_url_mcp_server_starts_and_never_logs_the_credential(self):
+        # The REAL url transport: MCPServer connects to a live MCP-over-WebSocket
+        # server, so the redaction is exercised on the path that actually logs the
+        # url (startup line) rather than on a helper in isolation.
+        async def upstream(websocket, _path=None):
+            async for raw in websocket:
+                request = json.loads(raw)
+                if "id" not in request:
+                    continue
+                method = request.get("method")
+                if method == "initialize":
+                    result = {
+                        "protocolVersion": request["params"]["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "urlmock", "version": "1"},
+                    }
+                elif method == "tools/list":
+                    result = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+                else:
+                    result = {}
+                await websocket.send(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+
+        logged = []
+        with patch.object(bridge, "log", side_effect=lambda message: logged.append(str(message))):
+            async with bridge.websockets.serve(upstream, "127.0.0.1", 0, max_size=None) as ws_server:
+                port = ws_server.sockets[0].getsockname()[1]
+                url = (
+                    f"ws://127.0.0.1:{port}/ws?token=tok-value-2"
+                    "&password=pass-value-2&client_secret=secret-value-2&transport=websocket"
+                )
+                server = bridge.MCPServer("urlmock", {"url": url})
+                try:
+                    self.assertTrue(await server.start())
+                    self.assertTrue(server.ready)
+                    self.assertEqual([tool["name"] for tool in server.tools], ["echo"])
+                finally:
+                    await server.stop()
+        joined = "\n".join(logged)
+        self.assertIn("MCP server up over websocket", joined)
+        for secret in ("tok-value-2", "pass-value-2", "secret-value-2"):
+            self.assertNotIn(secret, joined)
+        self.assertIn("<redacted>", joined)
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_url_transport_error_does_not_leak_the_credential(self):
+        # websockets puts the whole URI into an InvalidURI message, so a failed start
+        # is the other place a credential would escape into `self.error` and the log.
+        logged = []
+        with patch.object(bridge, "log", side_effect=lambda message: logged.append(str(message))):
+            server = bridge.MCPServer(
+                "badurl",
+                {"url": "ws://127.0.0.1:99999/ws?password=leaky-pass-1&token=leaky-tok-1"},
+            )
+            self.assertFalse(await server.start())
+        joined = "\n".join(logged) + "\n" + str(server.error)
+        self.assertNotIn("leaky-pass-1", joined)
+        self.assertNotIn("leaky-tok-1", joined)
+
     async def test_mcp_server_initiated_requests_are_answered(self):
         # A 2025-03-26 server may ping the client and ask for elicitation before it
         # answers tools/list. Ignoring those requests leaves the server blocked, so
