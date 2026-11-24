@@ -190,6 +190,28 @@ class VscodeMcpTests(unittest.TestCase):
                 method,
             )
 
+    def test_notifications_naming_a_supported_method_stay_silent(self):
+        # Regression: the missing-id check ran after the handlers, so a ping notification
+        # answered with id: null and a tools/call notification actually ran the tool.
+        # Both are notifications, so neither may answer or have an effect.
+        for method, params in (
+            ("ping", {}),
+            ("tools/list", {}),
+            (
+                "tools/call",
+                {
+                    "name": "write_file",
+                    "arguments": {"path": "notify-side-effect.txt", "content": "x"},
+                },
+            ),
+        ):
+            self.assertEqual(
+                self._exchange({"jsonrpc": "2.0", "method": method, "params": params}),
+                [],
+                method,
+            )
+        self.assertFalse((self.workspace / "notify-side-effect.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

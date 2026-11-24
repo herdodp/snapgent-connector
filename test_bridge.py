@@ -222,6 +222,71 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await server.stop()
 
+    async def test_tool_list_change_republishes_the_bridge_catalog(self):
+        # Regression: refresh_tools() only moved MCPServer.tools, so Bridge._catalog —
+        # the list the extension is handed — stayed stale and a tool a server added at
+        # runtime never reached the UI. Asserted through Bridge, and the broadcast is
+        # what proves the extension would actually see it.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_compat.py"
+            mock_path.write_text(MOCK_MCP_COMPAT, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}
+                ),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    self.assertNotIn("extra_tool", [tool["name"] for tool in manager._catalog])
+                    async with bridge.websockets.serve(
+                        manager.handle_client, "127.0.0.1", 0, max_size=None
+                    ) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        async with bridge.websockets.connect(
+                            f"ws://127.0.0.1:{port}", max_size=None
+                        ) as client:
+                            await client.recv()  # initial "connected" message
+                            await client.send(
+                                json.dumps(
+                                    {
+                                        "id": 1,
+                                        "type": "call_tool",
+                                        "name": "echo",
+                                        "arguments": {"message": "swap"},
+                                        "timeout": 5000,
+                                    }
+                                )
+                            )
+                            deadline = asyncio.get_running_loop().time() + 5
+                            republished = False
+                            while asyncio.get_running_loop().time() < deadline:
+                                try:
+                                    frame = json.loads(
+                                        await asyncio.wait_for(client.recv(), timeout=1)
+                                    )
+                                except asyncio.TimeoutError:
+                                    continue
+                                if frame.get("type") != "connected":
+                                    continue
+                                names = [tool["name"] for tool in frame.get("tools", [])]
+                                if "extra_tool" in names:
+                                    republished = True
+                                    break
+                            self.assertTrue(
+                                republished,
+                                "the bridge never broadcast the refreshed catalog",
+                            )
+                            self.assertIn(
+                                "extra_tool", [tool["name"] for tool in manager._catalog]
+                            )
+                finally:
+                    await manager.stop_servers()
+
     async def test_unknown_protocol_revision_does_not_block_startup(self):
         # A server newer than this client answers with a revision we do not know. The
         # bridge must keep using it instead of failing the whole MCP server, otherwise

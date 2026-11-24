@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     import websockets
@@ -250,6 +250,9 @@ class MCPServer:
         self.ready = False
         self.protocol_version = MCP_PROTOCOL_VERSION
         self._refreshing_tools = False
+        # Set by Bridge: a runtime tools/list change must reach the bridge catalog and
+        # the extension, not just this server's own list.
+        self.on_tools_changed: Optional[Callable[[str], Awaitable[None]]] = None
         # A server is either a child process speaking JSON-RPC on stdio, or a WebSocket
         # endpoint (the Snapgent bridge APK serves MCP at ws://127.0.0.1:8765/ws).
         raw_url = config.get("url")
@@ -594,6 +597,17 @@ class MCPServer:
         if tools != self.tools:
             self.tools = tools
             log(f"[{self.server_id}] MCP tool list refreshed ({len(tools)} tools advertised)")
+            await self._notify_tools_changed()
+
+    async def _notify_tools_changed(self) -> None:
+        """Let the owner of this server republish the catalog it caches itself."""
+        callback = self.on_tools_changed
+        if callback is None:
+            return
+        try:
+            await callback(self.server_id)
+        except (RuntimeError, OSError, ValueError) as error:
+            log(f"[{self.server_id}] catalog update after a tool refresh failed: {error}")
 
     async def call_tool(
         self, tool_name: str, arguments: Dict[str, Any], timeout: float
@@ -798,6 +812,8 @@ class Bridge:
             server_id: MCPServer(server_id, server_config)
             for server_id, server_config in config.items()
         }
+        for server in self.servers.values():
+            server.on_tools_changed = self._server_tools_changed
         async def _start_one(server: MCPServer) -> None:
             try:
                 await server.start()
@@ -837,6 +853,17 @@ class Bridge:
                     "inputSchema": tool.get("inputSchema", {"type": "object", "properties": {}}),
                 }
             )
+
+    async def _server_tools_changed(self, server_id: str) -> None:
+        """Rebuild the cached catalog after a runtime change and tell every client.
+
+        A server can swap its tool list at runtime (notifications/tools/list_changed).
+        Refreshing only the server's own list leaves the bridge catalog — the list the
+        extension offers — stale, so this rebuild has to happen here and be broadcast.
+        """
+        self._rebuild_catalog()
+        log(f"[{server_id}] MCP tool list changed; republished {len(self._catalog)} tools")
+        await self.broadcast(self._connected_message())
 
     def _server_status(self) -> List[Dict[str, Any]]:
         return [

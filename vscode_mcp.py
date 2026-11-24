@@ -663,6 +663,14 @@ def handle_request(request: Dict[str, Any]) -> None:
     request_id = request.get("id")
     params = request.get("params") or {}
 
+    if request_id is None:
+        # Notifications must neither be answered nor acted on: a response to a
+        # notification is itself a protocol error, and a notification that names a
+        # supported method (ping, tools/call, ...) is not a request the client made.
+        # This check sits before dispatch, otherwise those methods answer with a null id
+        # or, worse, run a tool the host never asked for.
+        return
+
     if method == "initialize":
         requested = params.get("protocolVersion")
         _negotiated_protocol = (
@@ -704,10 +712,6 @@ def handle_request(request: Dict[str, Any]) -> None:
             })
         return
 
-    if request_id is None:
-        # Notifications (initialized, cancelled, and anything newer) must not be
-        # answered: a response to a notification is itself a protocol error.
-        return
     send_message({
         "jsonrpc": "2.0",
         "id": request_id,
