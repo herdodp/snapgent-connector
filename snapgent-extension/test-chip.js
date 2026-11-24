@@ -294,5 +294,17 @@ const glmTs = fs.readFileSync(__dirname + "/providers/glm.js", "utf8");
 ok("providers that still need the warning keep theirs",
   /unstableWarning\s*:/.test(glmTs));
 
+// ── 18. Chat spacing stays Gemini's own unless a chip is present ────────────
+// Reviewer catch on PR #14: an unscoped
+// `infinite-scroller.chat-history { row-gap: 10px }` retightened the turn gap
+// of EVERY Gemini conversation, chip or not. Only a chat that actually carries
+// a chip may be respaced, so each such rule has to be scoped with :has(.zs-chip).
+const chatHistoryRules = [...css.matchAll(/[^{}]*infinite-scroller\.chat-history[^{}]*\{[^}]*\}/g)]
+  .map((m) => m[0]);
+ok("the chip-turn chat-history rule exists", chatHistoryRules.length > 0);
+ok("chat-history spacing is scoped to chats that carry a chip",
+  chatHistoryRules.every((rule) => rule.split("{")[0].includes(":has(.zs-chip)")),
+  chatHistoryRules.map((r) => r.split("{")[0].trim()));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

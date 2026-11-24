@@ -18,7 +18,12 @@ const ZS = (() => {
   // reopening such a chat read as "No agent". The prompt's own opening words
   // are OUR fabricated text, so matching them anywhere is safe and makes a
   // stripped marker degrade to "still hidden" instead of "raw prompt visible".
-  const SYS_TEXT_RE = /CONTEXT:[^\n]{0,100}snapgentV3/i;
+  // Anchored to the START of the turn. The bootstrap prompt opens with these
+  // two words, so anything that only quotes them mid-sentence is an ordinary
+  // message — matching it unanchored made a turn like "Please review this
+  // prompt: CONTEXT: you are snapgentV3 …" read as a Snapgent session and
+  // disappear from view.
+  const SYS_TEXT_RE = /^\s*CONTEXT:[^\n]{0,100}snapgentV3/i;
   function isSysPromptText(txt) {
     if (!txt) return false;
     return txt.includes(SYS_MARKER) || SYS_TEXT_RE.test(txt);

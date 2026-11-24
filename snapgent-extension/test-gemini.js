@@ -26,6 +26,15 @@
 // test keeps it that way.
 const fs = require("fs");
 const readSource = (rel) => fs.readFileSync(rel, "utf8").replace(/\r\n/g, "\n");
+const vm = require("vm");
+// core/config.js is an IIFE that assigns `const ZS`. Evaluate it for real so the
+// detection checks below exercise the shipped signature, not a copy of it.
+function loadCoreZS() {
+  const context = vm.createContext({
+    console, window: {}, document: {}, navigator: {}, setTimeout, clearTimeout,
+  });
+  return vm.runInContext(`${readSource(__dirname + "/core/config.js")}\n;ZS;`, context);
+}
 // Optional argv[2] lets the mutation check run the SAME test against an older
 // copy of the provider (it must fail there).
 const TARGET = process.argv[2] || __dirname + "/providers/gemini.js";
@@ -331,9 +340,21 @@ async function main() {
 
     // Our own system turn must NOT be redirected: hiding only its text line
     // would leave the giant CONTEXT prompt bubble visible.
+    const coreZS = loadCoreZS();
+    {
+      // The signature only fires at the START of a turn. An ordinary message that
+      // merely quotes the prompt must stay an ordinary turn - matching it anywhere
+      // hid that message as if the whole conversation were a Snapgent session.
+      ok(coreZS.isSysPromptText("CONTEXT: snapgentV3 is a browser extension that sends your plain-text JSON commands…"),
+        "the real bootstrap prompt is recognised", true);
+      ok(coreZS.isSysPromptText("⟦ZS-SYS⟧\nCONTEXT: snapgentV3 is a browser extension…"),
+        "a marked bootstrap prompt is still recognised", true);
+      ok(coreZS.isSysPromptText("Please review this prompt: CONTEXT: you are snapgentV3 in Gemini.") === false,
+        "a message that only quotes the prompt is not a Snapgent turn", false);
+    }
     const sysTurn = buildTurn("CONTEXT: you are snapgentV3 in Gemini. …");
     const prevGlobal = global.ZS;
-    global.ZS = { isSysPromptText: (t) => /CONTEXT:[^\n]{0,100}snapgentV3/i.test(t) };
+    global.ZS = { isSysPromptText: coreZS.isSysPromptText };
     const sysAnchor = env.ZS.chipAnchor(sysTurn);
     const sysHide = env.ZS.injectedHideNode(sysTurn);
     global.ZS = prevGlobal;

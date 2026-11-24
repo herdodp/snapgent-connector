@@ -1775,7 +1775,9 @@ html.zs-site-gemini user-query:has(.zs-chip) .user-query-bubble-with-background 
 /* One tool loop reads as one block: 6px between the cards of a chip exchange
    instead of Gemini's 52px history gap. */
 html.zs-site-gemini .conversation-container:has(.zs-chip) { row-gap: 6px !important; }
-html.zs-site-gemini infinite-scroller.chat-history { row-gap: 10px !important; }
+/* Scoped to a chat that actually carries a chip: an unscoped rule tightened the
+   turn spacing of every Gemini conversation. */
+html.zs-site-gemini infinite-scroller.chat-history:has(.zs-chip) { row-gap: 10px !important; }
 /* Stray "⧉ …" row between cards: the masked code wrapper's header (copy +
    overflow) can sit one level deeper than the direct child the rule above
    targets after Gemini re-renders. Hide any masked wrapper that carries the
