@@ -88,7 +88,18 @@ const ZSProvider = (() => {
     // parsed, the tool never ran and the session stalled. textContent is already
     // the safe source here (textWithout walks nodeValue).
     reply: '.markdown,[data-markdown-text-style="assistant-message"]',
-    editor: '#prompt-textarea,[data-mobile-composer-prompt],textarea[aria-label="Chat with ChatGPT"],[role="textbox"][aria-label="Ask ChatGPT"]',
+    // The aria-label entries below are ENGLISH strings ("Ask ChatGPT" /
+    // "Chat with ChatGPT"), and ChatGPT translates them with the account locale:
+    // measured live 2026-11-25, chatgpt.com served with Accept-Language id-ID
+    // reports promptPlaceholder="Tanya ChatGPT" and promptLabel="Obrolan dengan
+    // ChatGPT". On the 2026-11 desktop layout the composer div carries NO id
+    // (live-measured: id=""), so the English aria-label was the ONLY match and an
+    // Indonesian account resolved NO editor at all - and core's placeBar() hides
+    // the bar and the collapsed dot whenever getEditor() is null, which is
+    // exactly the "Snapgent UI only appears after switching the language to
+    // English" report. The structural selectors appended here (and the fallback
+    // in getEditor()) name no user-visible string, so they hold in every locale.
+    editor: '#prompt-textarea,[data-mobile-composer-prompt],[data-testid="prompt-textarea"],textarea[aria-label="Chat with ChatGPT"],[role="textbox"][aria-label="Ask ChatGPT"],[class*="composer-surface"] [contenteditable="true"],.ProseMirror[contenteditable="true"],[data-composer-input] [contenteditable="true"],form[data-chatgpt-composer] [contenteditable="true"],[data-composer-markdown][contenteditable="true"]',
     // The ONE submit control; its data-testid says whether it is currently a
     // send or a stop button (see isStopBtn). Id first - it survives testid churn.
     // 2026-11-18: ChatGPT's composer send control is now a bare
@@ -98,7 +109,7 @@ const ZSProvider = (() => {
     // injected message was never submitted and the loop sat on "Starting…"
     // forever with no reply (user report: "ga ngepaste output"). Keep the old
     // selectors too - A/B variants and other locales still use them.
-    submitBtn: "#composer-submit-button, button[data-testid='send-button'], button[data-testid='stop-button'], button[aria-label='Send'], button[aria-label='Send message'], button[aria-label='Envoyer'], button[aria-label*='Stop'], button[aria-label*='stop'], button[aria-label*='Interrompre'], button[aria-label*='Arrêter']",
+    submitBtn: "#composer-submit-button, button[data-testid='send-button'], button[data-testid='stop-button'], button[data-testid*='send' i], button[data-testid*='stop' i], form button[type='submit'], button[aria-label='Send'], button[aria-label='Send message'], button[aria-label='Envoyer'], button[aria-label*='Stop'], button[aria-label*='stop'], button[aria-label*='Interrompre'], button[aria-label*='Arrêter']",
     // Kept for installSendHooks, which needs to recognise a click on the native
     // stop control wherever it lives.
     stopBtn: "button[data-testid='stop-button']",
@@ -492,9 +503,30 @@ const ZSProvider = (() => {
   const assistantItems = () => allItems().filter(isAssistantItem);
   const assistantCount = () => assistantItems().length;
   const userCount = () => allItems().filter(isUserItem).length;
+  // Last-resort composer resolution that names NO localized string. Used when
+  // every S.editor selector missed - which happens when ChatGPT ships a layout
+  // whose only stable hook is the accessible role, and that label is translated
+  // ("Tanya ChatGPT" in id-ID). Without this the bar and the collapsed dot stay
+  // display:none forever (core placeBar), i.e. no Snapgent UI on the page.
+  const fallbackEditor = () => {
+    let hosts = [];
+    try {
+      hosts = [].slice.call(document.querySelectorAll('[contenteditable="true"],[contenteditable=""]'));
+    } catch { hosts = []; }
+    const visible = hosts.filter((ed) => (ed.getClientRects ? ed.getClientRects().length > 0 : true));
+    if (!visible.length) return null;
+    const inComposer = visible.filter((ed) => {
+      try { return !!(ed.closest && ed.closest('[class*="composer-surface"],form')); } catch { return false; }
+    });
+    const pool = inComposer.length ? inComposer : visible;
+    // The composer sits lowest in the document; taking the LAST match avoids
+    // grabbing an in-thread editor or the search box above it.
+    return pool[pool.length - 1];
+  };
   const getEditor = () => {
     const editors = [...document.querySelectorAll(S.editor)];
-    return editors.find((ed) => ed.getClientRects().length > 0) || editors[0] || null;
+    const laidOut = editors.filter((ed) => (ed.getClientRects ? ed.getClientRects().length > 0 : true));
+    return laidOut[0] || editors[0] || fallbackEditor();
   };
   const editorText = () => {
     const e = getEditor();
@@ -672,9 +704,18 @@ const ZSProvider = (() => {
   // sendButton() cheerfully returns the stop square and every guarded click is
   // refused. That is exactly what stranded a tool result in the composer and
   // raised "ChatGPT did not accept the injected message after 4 attempts".
+  // ChatGPT translates the submit control's aria-label with the account locale,
+  // and on the 2026-11 layout it carries no id and no data-testid, so an English
+  // "Send"/"Stop" only matched for an English account: an Indonesian one shows
+  // "Kirim pesan" / "Hentikan". These word lists (CJK/Cyrillic/Arabic included,
+  // matched WITHOUT \b so the scripts still work) let the control be found by
+  // meaning instead of by language. Measured live 2026-11-25: id-ID serves
+  // promptPlaceholder "Tanya ChatGPT", promptLabel "Obrolan dengan ChatGPT".
+  const SEND_WORDS = /send|envoyer|enviar|senden|invia|versturen|verzenden|kirim|送信|发送|發送|보내기|전송|إرسال|отправить|gönder|gửi|ส่ง|भेजें|βάλε|αποστολή|wyślij|poslat/i;
+  const STOP_WORDS = /stop|arrêter|arreter|interrompre|interrompi|detener|parar|stoppen|hentikan|berhenti|停止|중지|إيقاف|остановить|durdur|dừng|หยุด|रोकें|σταμάτησε|παύση|zatrzymaj|zastavit/i;
   const isStopBtn = (b) => !!b && (
-    b.getAttribute("data-testid") === "stop-button" ||
-    /\b(stop|interrompre|arrêter)\b/i.test(b.getAttribute("aria-label") || "")
+    /stop/i.test(b.getAttribute("data-testid") || "") ||
+    STOP_WORDS.test(b.getAttribute("aria-label") || "")
   );
   // ChatGPT keeps a SECOND, zero-size copy of the composer form in the DOM and
   // its submit control there ("Stop", aria-label matched by S.submitBtn) has a
@@ -699,7 +740,25 @@ const ZSProvider = (() => {
     }
     return laidOut[0];
   }
-  const submitButton = () => pickSubmit(document.querySelectorAll(S.submitBtn), getEditor());
+  // Locale-proof last resort for the submit control: no selector above names a
+  // translated string except the English/French aria-label entries, so scan the
+  // composer's own buttons and match the label by MEANING (SEND_WORDS /
+  // STOP_WORDS). Kept last so the measured selectors always win.
+  function labeledSubmit(ed) {
+    const box = ed && ed.closest
+      ? (ed.closest("form") || ed.closest('[class*="composer-surface"]'))
+      : null;
+    const scope = box || document;
+    let list = [];
+    try { list = [].slice.call(scope.querySelectorAll("button")); } catch { return null; }
+    const laid = list.filter((b) => (b.getClientRects ? b.getClientRects().length > 0 : true));
+    const byLabel = laid.filter((b) => SEND_WORDS.test(b.getAttribute("aria-label") || ""));
+    if (byLabel.length) return byLabel[0];
+    const stop = laid.find((b) => isStopBtn(b));
+    return stop || null;
+  }
+  const submitButton = () => pickSubmit(document.querySelectorAll(S.submitBtn), getEditor())
+    || labeledSubmit(getEditor());
   const sendButton = () => {
     const b = submitButton();
     return b && !isStopBtn(b) ? b : null;
@@ -1652,6 +1711,9 @@ const ZSProvider = (() => {
     streamLen, snapshot,
     // composer / state
     getEditor, editorText, chatIsEmpty, isFreshChat, composerFrame, barMount, barAnchor,
+    // Exported so a test can pin locale independence: the submit control and the
+    // composer are found by structure/meaning, never by an English label alone.
+    sendButton, stopButton,
     // Cover the scrolling text band, and lift the core's 200px clamp past that
     // band's own ~245px ceiling so a full composer is covered edge to edge.
     coverTarget,
