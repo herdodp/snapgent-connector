@@ -7,6 +7,10 @@ from unittest.mock import patch
 
 import vscode_mcp
 
+# Captured before any test patches vscode_mcp.list_vscode_windows: the storage
+# test needs the REAL implementation while setUpLock stubs it for the allowlist.
+REAL_LIST_VSCODE_WINDOWS = vscode_mcp.list_vscode_windows
+
 
 class VscodeMcpTests(unittest.TestCase):
     def setUp(self):
@@ -141,6 +145,18 @@ class VscodeMcpTests(unittest.TestCase):
         )
         sessions_patch.start()
         self.addCleanup(sessions_patch.stop)
+        # lock_workspace only accepts folders VS Code has open; for the tests,
+        # every directory created under self.root counts as one.
+        windows_patch = patch.object(
+            vscode_mcp, "list_vscode_windows",
+            side_effect=lambda: [
+                {"name": entry.name, "path": str(entry), "active": False}
+                for entry in sorted(self.root.iterdir())
+                if entry.is_dir()
+            ],
+        )
+        windows_patch.start()
+        self.addCleanup(windows_patch.stop)
         env_patch = patch.dict("os.environ", {}, clear=False)
         env_patch.start()
         self.addCleanup(env_patch.stop)
@@ -223,6 +239,36 @@ class VscodeMcpTests(unittest.TestCase):
         self.setUpLock()
         with self.assertRaises(FileNotFoundError):
             vscode_mcp.lock_workspace(str(self.root / "missing"))
+
+    def test_lock_workspace_rejects_folder_not_open_in_vscode(self):
+        # lock_workspace is a regular model-callable tool: without the
+        # allowlist, a path coming out of a model reply could move the
+        # workspace boundary anywhere on disk (home folder, drive root).
+        self.setUpLock()
+        outside = self.root.parent / "not-a-vscode-window"
+        outside.mkdir()
+        self.addCleanup(outside.rmdir)
+        with self.assertRaises(ValueError):
+            vscode_mcp.lock_workspace(str(outside))
+
+    def test_lock_workspace_allows_app_pinned_folder(self):
+        # The app-picked folder (ZS_WORKSPACE) was chosen by the user through
+        # the standalone app's own UI, so it stays lockable even when it is
+        # not a folder VS Code has open.
+        self.setUpLock()
+        app_project = self.root / "app-project"
+        app_project.mkdir()
+        with patch.dict("os.environ", {"ZS_WORKSPACE": str(app_project)}):
+            result = vscode_mcp.lock_workspace(str(app_project))
+        self.assertTrue(result["locked"])
+        self.assertEqual(vscode_mcp._read_workspace_lock(), app_project.resolve())
+
+    def test_parse_window_uri_rejects_bare_uri(self):
+        # A malformed file:// URI must not quietly resolve to the current
+        # working directory.
+        self.assertIsNone(vscode_mcp._parse_window_uri("file://"))
+        self.assertIsNone(vscode_mcp._parse_window_uri("file:///"))
+        self.assertIsNone(vscode_mcp._parse_window_uri(""))
 
     def test_get_workspace_info_reports_lock_state(self):
         self.setUpLock()
@@ -318,18 +364,24 @@ class VscodeMcpTests(unittest.TestCase):
         second = self.root / "second-project"
         second.mkdir()
         storage = self.root / "storage.json"
+        # Path.as_uri() produces the real VS Code format on every platform
+        # (file:///C:/... with an escaped colon on Windows) - string
+        # concatenation would yield backslashes that urlparse misreads there.
         storage.write_text(json.dumps({
             "windowsState": {
-                "lastActiveWindow": {"folder": f"file://{self.workspace}"},
+                "lastActiveWindow": {"folder": self.workspace.as_uri()},
                 "openedWindows": [
-                    {"folder": f"file://{self.workspace}"},
-                    {"folder": f"file://{second}"},
+                    {"folder": self.workspace.as_uri()},
+                    {"folder": second.as_uri()},
                     {},
                     {"folder": "file:///does/not/exist"},
                 ],
             }
         }), encoding="utf-8")
-        with patch.object(vscode_mcp, "_vscode_storage_paths", return_value=[storage]):
+        # setUpLock stubs list_vscode_windows for the lock allowlist; this
+        # test drives the REAL implementation through the fake storage.json.
+        with patch.object(vscode_mcp, "list_vscode_windows", REAL_LIST_VSCODE_WINDOWS), \
+             patch.object(vscode_mcp, "_vscode_storage_paths", return_value=[storage]):
             windows = vscode_mcp.list_vscode_windows()
         self.assertEqual(
             windows,
@@ -343,7 +395,8 @@ class VscodeMcpTests(unittest.TestCase):
         self.setUpLock()
         storage = self.root / "storage.json"
         storage.write_text("not json at all", encoding="utf-8")
-        with patch.object(vscode_mcp, "_vscode_storage_paths", return_value=[storage]):
+        with patch.object(vscode_mcp, "list_vscode_windows", REAL_LIST_VSCODE_WINDOWS), \
+             patch.object(vscode_mcp, "_vscode_storage_paths", return_value=[storage]):
             self.assertEqual(vscode_mcp.list_vscode_windows(), [])
 
     def test_handle_request_pops_session_key(self):

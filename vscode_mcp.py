@@ -86,6 +86,11 @@ def _parse_window_uri(uri: str) -> Optional[Path]:
     try:
         parsed = urlparse(uri)
         path = unquote(parsed.path)
+        if not path or path == "/":
+            # A bare or malformed file:// URI must never fall through to
+            # Path("").resolve(), which quietly yields the current working
+            # directory.
+            return None
         if sys.platform == "win32" and re.match(r"^/[A-Za-z]:/", path):
             path = path[1:]
         candidate = Path(path).resolve()
@@ -208,8 +213,14 @@ def _save_sessions() -> None:
         tmp = sessions_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(_SESSION_WORKSPACES, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, sessions_file)
-    except OSError:
-        pass  # the in-memory registry still covers this run
+    except OSError as error:
+        # The in-memory registry still covers this run, but say so - on a
+        # read-only install every pin silently dies with the process, and the
+        # user should learn that at save time, not after a restart.
+        sys.stderr.write(
+            f"[vscode-mcp] Could not persist session workspaces to "
+            f"{sessions_file}: {error}. Pins last only for this run.\n"
+        )
 
 
 def _session_workspace(session: Optional[str]) -> Optional[Path]:
@@ -364,6 +375,35 @@ def _run_process(command: List[str], root: Path, timeout: int = 30) -> str:
     return output[:MAX_FILE_CHARS]
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    # normcase is a no-op on POSIX; on Windows it lowercases and normalizes
+    # separators, matching the filesystem's case-insensitive comparison.
+    return os.path.normcase(str(left)) == os.path.normcase(str(right))
+
+
+def _allowed_workspace_roots() -> List[Path]:
+    # Folders a USER chose - not the model: every project folder VS Code
+    # currently has open, plus the standalone app's picked folder. Only these
+    # may become a lock target. lock_workspace is exposed as a regular tool,
+    # and without this allowlist a path coming out of a model reply could move
+    # the workspace boundary anywhere on disk (home folder, drive root).
+    roots: List[Path] = []
+    override = os.environ.get("ZS_WORKSPACE")
+    if override:
+        try:
+            candidate = Path(override).expanduser().resolve()
+        except (OSError, ValueError):
+            candidate = None
+        if candidate is not None and candidate.is_dir():
+            roots.append(candidate)
+    for window in list_vscode_windows():
+        try:
+            roots.append(Path(window["path"]).expanduser().resolve())
+        except (OSError, ValueError):
+            continue
+    return roots
+
+
 def get_workspace_info() -> Dict[str, Any]:
     root = get_root()
     source = _workspace_source()
@@ -383,12 +423,23 @@ def lock_workspace(path: str = "") -> Dict[str, Any]:
     # because "start a session" must re-pin to the window the user is looking
     # at right now, not to whatever a previous session left behind. A tab id
     # (__zs_session, injected by the bridge) pins THAT tab only, so several
-    # chat tabs can each hold a different project at the same time.
+    # chat tabs can each hold a different project at the same time. An
+    # explicit path is accepted ONLY if it is a folder VS Code currently has
+    # open (or the app-picked workspace) - the extension's picker offers
+    # exactly those, and the allowlist keeps a model-driven call from moving
+    # the workspace boundary to any directory on disk.
     if isinstance(path, str) and path.strip():
         target = Path(path).expanduser()
         if not target.is_dir():
             raise FileNotFoundError(f"Not a directory: {path}")
         root = target.resolve()
+        if not any(_same_path(root, allowed) for allowed in _allowed_workspace_roots()):
+            raise ValueError(
+                f"Refusing to lock '{path}': only a folder VS Code currently "
+                "has open (see list_vscode_windows) or the app-picked "
+                "workspace can be locked. Open the folder in VS Code and "
+                "retry."
+            )
     else:
         override = os.environ.get("ZS_WORKSPACE")
         root = None
@@ -821,7 +872,7 @@ STR = {"type": "string"}
 TOOLS = [
     _tool("get_workspace_info", "Get the active VS Code workspace name, path, and Git status.", {}),
     _tool("list_vscode_windows", "List every project folder VS Code currently has open (focused window first) with name and path.", {}),
-    _tool("lock_workspace", "Pin the session to one workspace folder so switching to another VS Code window does NOT change the workspace. Call with no arguments at session start to pin the folder VS Code currently has focused, or pass a path to pin that folder. Each chat tab pins its own workspace.", {"path": STR}),
+    _tool("lock_workspace", "Pin the session to one workspace folder so switching to another VS Code window does NOT change the workspace. Call with no arguments at session start to pin the folder VS Code currently has focused, or pass a path to pin that folder (only a folder VS Code currently has open, as reported by list_vscode_windows, or the app-picked workspace is accepted). Each chat tab pins its own workspace.", {"path": STR}),
     _tool("unlock_workspace", "Remove the workspace pin and follow the focused VS Code window again.", {}),
     _tool("get_project_info", "Inspect common project manifests and package scripts.", {}),
     _tool("list_dir", "List files and folders in the workspace.", {"path": STR}),
