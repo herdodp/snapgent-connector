@@ -52,14 +52,36 @@ class StubEvent {
 // detachedAlways: the editor stays detached (no usable composer at all).
 function makeEnv(opts) {
   const o = opts || {};
+  // Quill's composer DOM, modelled literally: one <p> per hard line, a <br> per
+  // soft break, and NONE of them contributes "\n" to textContent. The provider
+  // derives the message's line structure from this DOM, so a stub that only
+  // stores a string cannot tell a preserved line break from a dropped one.
+  const paras = [{ lines: [""] }];
+  const cur = () => paras[paras.length - 1];
+  const resetParas = () => { paras.length = 0; paras.push({ lines: [""] }); };
+  const setFromString = (s) => {
+    const lines = String(s).split("\n");
+    paras.length = 0;
+    paras.push({ lines });
+  };
+  const textNow = () => paras.map((p) => p.lines.join("")).join("");
   const state = {
-    buffer: "",
     sent: 0,
     focusCalls: 0,
     focusAllowed: o.focusAfter === undefined,
     selectAllPending: false,
     connected: !o.detachedAlways,
   };
+  // What editor.textContent reads (no newlines) - kept as `buffer` so the older
+  // assertions keep meaning the same thing.
+  Object.defineProperty(state, "buffer", {
+    get: () => textNow(),
+    set: (v) => setFromString(String(v)),
+  });
+  // The reconstructed line array, for asserting that formatting survived.
+  Object.defineProperty(state, "lines", {
+    get: () => paras.flatMap((p) => p.lines),
+  });
   if (typeof o.focusAfter === "number") setTimeout(() => { state.focusAllowed = true; }, o.focusAfter);
   if (typeof o.remountAfter === "number") {
     state.connected = false;
@@ -79,8 +101,20 @@ function makeEnv(opts) {
     attrs: { contenteditable: "true" },
     offsetParent: {},
     get isConnected() { return state.connected; },
-    get textContent() { return state.buffer; },
-    set textContent(v) { state.buffer = String(v); },
+    get textContent() { return textNow(); },
+    set textContent(v) { setFromString(String(v)); },
+    // <p> blocks with text nodes and <br> separators, exactly like .ql-editor.
+    get childNodes() {
+      return paras.map((p) => {
+        const kids = [];
+        p.lines.forEach((ln, i) => {
+          if (i) kids.push({ nodeType: 1, tagName: "BR", childNodes: [] });
+          if (ln) kids.push({ nodeType: 3, nodeValue: ln });
+          else if (!i) kids.push({ nodeType: 1, tagName: "BR", childNodes: [] });
+        });
+        return { nodeType: 1, tagName: "P", childNodes: kids };
+      });
+    },
     getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; },
     setAttribute(n, v) { this.attrs[n] = String(v); },
     closest() { return null; },
@@ -148,11 +182,14 @@ function makeEnv(opts) {
       // dropSpaces reproduces a write that silently loses its spaces: the
       // characters are mostly there, so a whitespace-insensitive comparison
       // would call it complete and send a mangled prompt.
-      state.buffer += o.dropSpaces ? String(val).replace(/ /g, "") : String(val);
+      const v = o.dropSpaces ? String(val).replace(/ /g, "") : String(val);
+      cur().lines[cur().lines.length - 1] += v;
     } else if (cmd === "insertLineBreak") {
       // Quill turns this into a soft <br>: a line break in the message, but no
-      // "\n" in textContent.
-      state.buffer += "\n";
+      // "\n" in textContent. dropLineBreaks reproduces the failure the owner
+      // found - execCommand reporting true while the break never lands, which
+      // glues "line one" and "line two" into "line oneline two".
+      if (!o.dropLineBreaks) cur().lines.push("");
     }
     return true;
   };
@@ -234,6 +271,8 @@ async function main() {
     ok(env.state.sent === 1, "send button was clicked once", env.state.sent);
     ok(/line one/.test(env.state.buffer) && /line three/.test(env.state.buffer),
       "every line reached the composer", env.state.buffer);
+    ok(env.state.lines.join("|") === "line one|line two|line three",
+      "the line structure survived (3 lines)", env.state.lines);
     ok(!env.diags.some((d) => d.name === "send.insertMiss"),
       "no false insertMiss on soft breaks", env.diags.map((d) => d.name));
   }
@@ -262,6 +301,23 @@ async function main() {
     const ret = await env.ZS.typeAndSend("read file", []);
     ok(ret === false, "typeAndSend returns strict false", ret);
     ok(env.state.sent === 0, "nothing was sent", env.state.sent);
+  }
+
+  // ── 6b. a write that loses a LINE BREAK is not "complete" either ─────────
+  // execCommand reports true even when insertLineBreak inserts nothing, and
+  // Quill's textContent carries no "\n", so a comparison that strips line breaks
+  // accepts "line oneline two" as the requested "line one\nline two" and sends a
+  // message with its formatting lost (owner review 2026-11-25).
+  console.log("\n# write losing a line break");
+  {
+    const env = makeEnv({ dropLineBreaks: true });
+    const ret = await env.ZS.typeAndSend("line one\nline two", []);
+    ok(env.state.buffer === "line oneline two", "the stub really glued the lines", env.state.buffer);
+    ok(env.state.lines.length === 1, "one line reached the composer instead of two", env.state.lines);
+    ok(ret === false, "typeAndSend returns strict false", ret);
+    ok(env.state.sent === 0, "a message with lost formatting is never sent", env.state.sent);
+    ok(env.diags.some((d) => d.name === "send.insertMiss"),
+      "the miss is diagnosable", env.diags.map((d) => d.name));
   }
 
   // ── 7. injected result turn: chip goes INSIDE the user bubble ────────────
@@ -349,10 +405,25 @@ async function main() {
         "the real bootstrap prompt is recognised", true);
       ok(coreZS.isSysPromptText("⟦ZS-SYS⟧\nCONTEXT: snapgentV3 is a browser extension…"),
         "a marked bootstrap prompt is still recognised", true);
+      // The second bootstrap shape core/mcp produces for a session that starts
+      // without a target server.
+      ok(coreZS.isSysPromptText("CONTEXT: the user has installed a browser extension called snapgentV3 in their own browser. Here is how it works, so you can use it on their behalf:"),
+        "the no-target bootstrap prompt is recognised too", true);
       ok(coreZS.isSysPromptText("Please review this prompt: CONTEXT: you are snapgentV3 in Gemini.") === false,
         "a message that only quotes the prompt is not a Snapgent turn", false);
+      // The signature must be the prompt's own opening words, not "CONTEXT:" plus
+      // any wording that mentions the extension: this user sentence was still
+      // classified as a system turn by the previous [^\n]{0,100} pattern and got
+      // hidden across providers (owner review 2026-11-25).
+      ok(coreZS.isSysPromptText("CONTEXT: I am discussing the snapgentV3 extension, not sending its prompt.") === false,
+        "a CONTEXT sentence merely mentioning snapgentV3 is not a Snapgent turn", false);
+      ok(coreZS.isSysPromptText("CONTEXT: snapgentV3 is broken on this page, can you look?") === false,
+        "a CONTEXT sentence opening with the app name is not a Snapgent turn", false);
     }
-    const sysTurn = buildTurn("CONTEXT: you are snapgentV3 in Gemini. …");
+    // The fixture is a REAL bootstrap turn - the two prefixes the extension
+    // actually sends. "CONTEXT: you are snapgentV3 in Gemini." is not one of
+    // them (and must not be treated as one, see the assertions above).
+    const sysTurn = buildTurn("CONTEXT: snapgentV3 is a browser extension that sends your plain-text JSON commands…");
     const prevGlobal = global.ZS;
     global.ZS = { isSysPromptText: coreZS.isSysPromptText };
     const sysAnchor = env.ZS.chipAnchor(sysTurn);

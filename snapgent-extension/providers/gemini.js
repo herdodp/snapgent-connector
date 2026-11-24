@@ -386,13 +386,64 @@ const ZSProvider = (() => {
   // Yielding does not make the insert faster, it makes the page stay alive while
   // it happens - and lets the Stop button remain usable.
   const INSERT_CHUNK_LINES = 120;
-  // Whitespace-insensitive fingerprint of a composer value. Quill turns every
-  // insertLineBreak into a soft <br> (and a hard newline into a fresh <p>), and
-  // neither contributes a "\n" to textContent - so a plain string compare can
-  // never confirm a multi-line insert. Only line breaks may vanish: a space or
-  // tab is real content, and stripping it would make "read file" and "readfile"
-  // compare equal, accepting a write that lost characters.
-  const settleText = (s) => String(s == null ? "" : s).replace(/\r?\n/g, "");
+  // ── Line-structure fingerprint ──────────────────────────────────────────
+  // Quill turns every insertLineBreak into a soft <br> (a hard newline becomes a
+  // fresh <p>), and NEITHER contributes a "\n" to textContent. A comparison that
+  // just drops line breaks therefore accepts a write that LOST them: when
+  // insertLineBreak silently no-ops, "line one\nline two" reaches the composer
+  // as "line oneline two", the stripped strings match, and the message is sent
+  // with its formatting gone (owner review 2026-11-25). So the lines are rebuilt
+  // from the DOM itself and compared one by one. Only line breaks are derived
+  // from structure: a space or tab is real content, and normalising it away would
+  // make "read file" compare equal to "readfile".
+  const BLOCK_TAGS = /^(P|DIV|LI|PRE|H[1-6]|BLOCKQUOTE|TR)$/;
+  const isBlockEl = (n) =>
+    !!n && n.nodeType === 1 && BLOCK_TAGS.test(String(n.tagName || "").toUpperCase());
+  const isBrEl = (n) =>
+    !!n && n.nodeType === 1 && String(n.tagName || "").toUpperCase() === "BR";
+  // Lines inside one block: a <br> opens a new line, text accumulates into the
+  // current one. An empty Quill line is <p><br></p> - ONE empty line, not two.
+  function inlineLines(node) {
+    const kids = Array.from(node.childNodes || []);
+    if (kids.length === 1 && isBrEl(kids[0])) return [""];
+    const lines = [""];
+    const walk = (n) => {
+      for (const c of Array.from(n.childNodes || [])) {
+        if (c.nodeType === 3) { lines[lines.length - 1] += c.nodeValue || ""; continue; }
+        if (c.nodeType !== 1) continue;
+        if (isBrEl(c)) { lines.push(""); continue; }
+        walk(c);
+      }
+    };
+    walk(node);
+    return lines;
+  }
+  // Every block element is its own line. Inline nodes at the editor root join
+  // the line being built, so a composer that is not paragraph-wrapped still
+  // works.
+  function composerLines(ed) {
+    if (!ed) return [""];
+    const kids = Array.from(ed.childNodes || []);
+    if (!kids.some(isBlockEl)) return inlineLines(ed);
+    const lines = [];
+    for (const k of kids) {
+      if (isBlockEl(k)) { lines.push(...inlineLines(k)); continue; }
+      if (isBrEl(k)) { lines.push(""); continue; }
+      const ls = inlineLines(k);
+      if (lines.length) { lines[lines.length - 1] += ls[0]; lines.push(...ls.slice(1)); }
+      else lines.push(...ls);
+    }
+    return lines.length ? lines : [""];
+  }
+  const wantedLines = (s) => String(s == null ? "" : s).replace(/\r\n?/g, "\n").split("\n");
+  // True only if the editor holds `text` line for line. An all-whitespace payload
+  // has no fingerprint; there the only honest check is "no longer empty".
+  function editorHolds(ed, text) {
+    const want = wantedLines(text);
+    const got = composerLines(ed);
+    if (!want.join("").trim()) return got.join("").length > 0;
+    return want.length === got.length && want.every((line, i) => line === got[i]);
+  }
   // Whether the text really landed must be MEASURED, not assumed: execCommand
   // returns true and silently does nothing when the editable does not own focus.
   // Validated live on Gemini's Start path: every insertText returned true while
@@ -498,12 +549,14 @@ const ZSProvider = (() => {
       }
       if (lines.length > INSERT_CHUNK_LINES) diag("send.insertDone", { lines: lines.length, ms: Date.now() - t0 });
     }
-    const want = settleText(text);
-    const got = settleText(editorText());
-    // An all-whitespace payload has no fingerprint; the only honest check is
-    // that the editor is no longer empty.
-    const ok = want ? got === want : got.length > 0;
-    if (!ok) diag("send.insertMiss", { focused: !!ed, want: want.length, got: got.length });
+    const ok = editorHolds(getEditor() || ed, text);
+    if (!ok) {
+      diag("send.insertMiss", {
+        focused: !!ed,
+        wantLines: wantedLines(text).length,
+        gotLines: composerLines(getEditor() || ed).length,
+      });
+    }
     return ok;
   }
 
@@ -525,7 +578,7 @@ const ZSProvider = (() => {
       // calls with 3 different files, and the model's replies stayed generic
       // - it never got one coherent image). So: only retype if the text isn't
       // already there, and only attach if nothing is pending yet.
-      if (editorText() !== text) {
+      if (!editorHolds(ed, text)) {
         if ((await setEditorText(ed, text)) === false) {
           // One cheap self-retry: a modal/cover can hold focus for a beat while
           // the composer mounts. A verified insert costs ~10ms once the editor
