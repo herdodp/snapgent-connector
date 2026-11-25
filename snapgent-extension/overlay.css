@@ -10,6 +10,11 @@
 /* ── status bar (anchored above the composer; left/top/width set inline) ──── */
 #zs-bar {
   position: fixed;
+  /* Gemini mounts the bar INSIDE .input-area-container, which the site styles
+     with pointer-events:none (measured live 2026-11-25: bar computed pe=none and
+     elementFromPoint over Start hit Gemini's input-container). The bar is our own
+     interactive UI, so restore hit-testing here even under such an ancestor. */
+  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 9px;
