@@ -3504,7 +3504,7 @@
   const ui = (() => {
     let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl, hideBtn, dotBtn;
     let hudHidden = false; // collapsed status card → round blue button (persisted)
-    let targetBtn, targetMenuEl;
+    let targetBtn, targetMenuEl, targetNameEl;
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
     let bridgeOk = false, workspaceReady = false, workspaceProbePending = false, workspaceProbeAt = 0;
@@ -3572,6 +3572,10 @@
       stopBtn = root.querySelector("#zs-stop");
       targetSelect = root.querySelector("#zs-target");
       targetBtn = root.querySelector("#zs-target-btn");
+      // Cached at build: a provider's barMount() can re-parent #zs-bar into the
+      // site's own container (Gemini does), after which root.querySelector()
+      // no longer reaches the label and it would freeze on the first value.
+      targetNameEl = root.querySelector("#zs-target-name");
       targetMenuEl = root.querySelector("#zs-target-menu");
       switchBtn = root.querySelector("#zs-switch");
       hideBtn = root.querySelector("#zs-bar-hide");
@@ -3801,7 +3805,7 @@
       }
       targetSelect.value = id;
       targetSelect.disabled = false; // never locked: the user may switch MCP target at any time
-      const nameEl = root && root.querySelector("#zs-target-name");
+      const nameEl = targetNameEl || (root && root.querySelector("#zs-target-name"));
       if (nameEl) nameEl.textContent = (options.find((option) => option.id === id) || { name: id }).name;
       if (targetMenuEl && !targetMenuEl.hidden) renderTargetMenu();
     }
