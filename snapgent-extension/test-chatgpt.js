@@ -239,6 +239,69 @@ const proseMirrorComposer = {
 composerNodes = [proseMirrorComposer];
 ok("accessible ChatGPT composer is detected", P.getEditor() === proseMirrorComposer);
 
+// ── Locale independence (2026-11-25 report) ─────────────────────────────────
+// "The Snapgent UI only appears after switching ChatGPT to English." On the
+// 2026-11 desktop layout the composer div carries NO id and NO data-testid
+// (live-measured: id=""), so the ENGLISH aria-label was its only hook. A
+// translated account is served promptPlaceholder "Tanya ChatGPT" / promptLabel
+// "Obrolan dengan ChatGPT" (measured live 2026-11-25 with Accept-Language
+// id-ID), so no selector matched and getEditor() returned null - and core's
+// placeBar() then hides BOTH the bar and the collapsed dot, i.e. no Snapgent UI
+// on the page at all. These pin the locale-free path: a composer with NO label
+// whatsoever must still resolve, and a page with no editing host must not.
+const surfaceStub = { querySelectorAll: () => [] };
+const bareComposer = {
+  tagName: "DIV",
+  parent: null,
+  id: "",
+  // No aria-label, no placeholder, no role: the worst case for a translation.
+  getAttribute: (n) => ({ contenteditable: "true" })[n] ?? null,
+  getClientRects: () => [{ width: 320, height: 64 }],
+  closest: (sel) => (/composer-surface|form/.test(sel) ? surfaceStub : null),
+};
+const savedQueryAll = global.document.querySelectorAll;
+// S.editor finds nothing here, exactly like the translated-label DOM does.
+global.document.querySelectorAll = (selector) =>
+  selector.trim().startsWith("[contenteditable") ? [bareComposer] : [];
+ok("a composer with no English label still resolves (structural fallback)",
+  P.getEditor() === bareComposer);
+ok("the resolved composer still has a frame to mount against",
+  P.composerFrame() === surfaceStub);
+
+// No editing host at all: the fallback must NOT invent one, or the bar would
+// anchor to page chrome on every non-composer view.
+global.document.querySelectorAll = () => [];
+ok("no editing host means no editor (fallback has no false positive)",
+  P.getEditor() === null);
+
+// The submit control on the 2026-11 layout has no id and no data-testid; its
+// only name is a translated aria-label ("Kirim pesan" in id-ID). Matching the
+// English/French words only meant an Indonesian account never found it, so the
+// send fell through to a synthetic Enter that ProseMirror ignores with the
+// composer unfocused - the text stayed put and the loop stalled.
+const sendStub = {
+  tagName: "BUTTON",
+  getAttribute: (n) => (n === "aria-label" ? "Kirim pesan" : null),
+  getClientRects: () => [{ width: 32, height: 32 }],
+  disabled: false,
+};
+const stopStub = {
+  tagName: "BUTTON",
+  getAttribute: (n) => (n === "aria-label" ? "Hentikan" : null),
+  getClientRects: () => [{ width: 32, height: 32 }],
+  disabled: false,
+};
+let composerButtons = [sendStub];
+const formStub = { querySelectorAll: () => composerButtons };
+const edInForm = { closest: (sel) => (sel === "form" ? formStub : null) };
+global.document.querySelectorAll = (selector) =>
+  selector.trim().startsWith("[contenteditable") ? [edInForm] : [];
+ok("a translated submit label is still found", P.sendButton() === sendStub);
+ok("a translated stop label is not mistaken for send", P.sendButton() === sendStub && P.stopButton() === null);
+composerButtons = [stopStub];
+ok("a translated stop label is recognised as stop", P.stopButton() === stopStub && P.sendButton() === null);
+global.document.querySelectorAll = savedQueryAll;
+
 // The current ChatGPT layout renders assistant replies in a DilResponseRoot
 // without the classic data-message-author-role/data-message-id attributes.
 const dilReply = el("div", { class: "DilResponseRoot-HfQrEh" }, [
@@ -806,7 +869,9 @@ ok("mobile textarea text can be read", P.editorText() === "");
   const prov = readSource("/providers/chatgpt.js");
   ok("the submit lookup no longer takes the first match in the document",
     /function pickSubmit\(list, ed\)/.test(prov) &&
-    /const submitButton = \(\) => pickSubmit\(document\.querySelectorAll\(S\.submitBtn\), getEditor\(\)\);/.test(prov) &&
+    // The lookup must still go through pickSubmit (visibility + own-form rules);
+    // the locale fallback is allowed to ride behind it.
+    /const submitButton = \(\) => pickSubmit\(document\.querySelectorAll\(S\.submitBtn\), getEditor\(\)\)/.test(prov) &&
     !/const b = document\.querySelector\(S\.submitBtn\);/.test(prov));
 
   const pickSrc = (prov.match(/function pickSubmit\(list, ed\) \{[\s\S]*?\n  \}/) || [""])[0];
