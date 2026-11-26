@@ -186,10 +186,14 @@ function makeEnv(opts) {
       cur().lines[cur().lines.length - 1] += v;
     } else if (cmd === "insertLineBreak") {
       // Quill turns this into a soft <br>: a line break in the message, but no
-      // "\n" in textContent. dropLineBreaks reproduces the failure the owner
-      // found - execCommand reporting true while the break never lands, which
-      // glues "line one" and "line two" into "line oneline two".
-      if (!o.dropLineBreaks) cur().lines.push("");
+      // "\n" in textContent. Live Gemini/Chrome can also insert a literal "\n"
+      // inside the <p> text node instead of <br> (measured live 2026-11-26).
+      // dropLineBreaks reproduces the failure the owner found - execCommand
+      // reporting true while the break never lands.
+      if (!o.dropLineBreaks) {
+        if (o.textNodeNewlines) cur().lines[cur().lines.length - 1] += "\n";
+        else cur().lines.push("");
+      }
     }
     return true;
   };
@@ -275,6 +279,16 @@ async function main() {
       "the line structure survived (3 lines)", env.state.lines);
     ok(!env.diags.some((d) => d.name === "send.insertMiss"),
       "no false insertMiss on soft breaks", env.diags.map((d) => d.name));
+  }
+
+  console.log("\n# multi-line text (Quill text-node newlines)");
+  {
+    const env = makeEnv({ textNodeNewlines: true });
+    const ret = await env.ZS.typeAndSend("line one\nline two\nline three", []);
+    ok(ret === true, "typeAndSend reports success on text-node \\n", ret);
+    ok(env.state.sent === 1, "send button was clicked once", env.state.sent);
+    ok(!env.diags.some((d) => d.name === "send.insertMiss"),
+      "no false insertMiss on text-node \\n", env.diags.map((d) => d.name));
   }
 
   // ── 5. no usable composer at all → report, never a phantom send ──────────

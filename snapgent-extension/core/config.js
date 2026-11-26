@@ -15,11 +15,11 @@ const ZS = (() => {
   // live 2026-11-23: both textContent and the collapsed 4-line preview start at
   // "CONTEXT:"), so a marker-only test never recognised the bootstrap there -
   // the whole system prompt stayed on screen as a giant framed bubble, and
-  // reopening such a chat read as "No agent". The prompt's own opening words
-  // are OUR fabricated text, so matching them anywhere is safe and makes a
-  // stripped marker degrade to "still hidden" instead of "raw prompt visible".
-  // Anchored to the START of the turn, AND to the prompt's own opening words.
-  // `CONTEXT:` alone is not a signature: the two bootstrap prompts we fabricate
+  // reopening such a chat read as "No agent". Anchored to the START of the
+  // turn, AND to the prompt's own opening words: matching their exact anchored
+  // opening makes a stripped marker degrade to "still hidden" instead of
+  // "raw prompt visible". `CONTEXT:` alone is not a signature: the two
+  // bootstrap prompts we fabricate
   // open with one of exactly two prefixes, so anything else after `CONTEXT:` is a
   // user sentence, not our turn. Allowing arbitrary text between the two words
   // (the previous `[^\n]{0,100}`) meant a normal message like

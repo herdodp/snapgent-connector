@@ -409,7 +409,12 @@ const ZSProvider = (() => {
     const lines = [""];
     const walk = (n) => {
       for (const c of Array.from(n.childNodes || [])) {
-        if (c.nodeType === 3) { lines[lines.length - 1] += c.nodeValue || ""; continue; }
+        if (c.nodeType === 3) {
+          const parts = String(c.nodeValue || "").split(/\r\n?|\n/);
+          lines[lines.length - 1] += parts[0];
+          for (let i = 1; i < parts.length; i++) lines.push(parts[i]);
+          continue;
+        }
         if (c.nodeType !== 1) continue;
         if (isBrEl(c)) { lines.push(""); continue; }
         walk(c);
@@ -563,7 +568,7 @@ const ZSProvider = (() => {
   async function typeAndSend(text, images) {
     const ed = getEditor();
     if (!ed) throw new Error("Gemini input box not found");
-    // Cap BEFORE any comparison below, so the retry path's `editorText() !== text`
+    // Cap BEFORE any comparison below, so the retry path's `!editorHolds(ed, text)`
     // test compares against what we actually typed.
     text = truncateForSend(text);
     const relock = _locked;
