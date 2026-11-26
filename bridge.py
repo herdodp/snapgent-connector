@@ -220,43 +220,30 @@ def _json_line(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-# MCP servers reached by url carry their credential in the query string. The token must
-# never reach the log file or an error message the assistant can read back, so every
-# url that leaves this process goes through this filter first.
-#
-# A list of five exact names was too narrow: a server that names its parameter
-# `password` or `client_secret` had the value written to the log in plain text (owner
-# review 2026-11-25). The parameter name is matched by CONTAINING a credential-ish
-# word instead, because the server - not us - chooses the name: passwords (password,
-# passwd, pwd), client secrets, api keys (api_key, apikey, x-api-key), bearer and
-# access tokens, signatures (signature, sig), auth, credentials, sessions, cookies,
-# JWTs and tickets. A harmless parameter such as `transport=websocket` stays readable.
-_SECRET_PARAM_HINTS = (
-    "token",
-    "secret",
-    "passw",
-    "pwd",
-    "key",
-    "sig",
-    "auth",
-    "credential",
-    "session",
-    "cookie",
-    "jwt",
-    "bearer",
-    "ticket",
-)
-_SECRET_QUERY = re.compile(
-    r"(?i)([?&][^=&#\s]*?(?:" + "|".join(_SECRET_PARAM_HINTS) + r")[^=&#\s]*?=)[^&#\s\"']*"
-)
-_SECRET_USERINFO = re.compile(r"^(?P<scheme>wss?://)[^/@]+@")
+# MCP servers reached by url may carry credentials in userinfo, query parameters, or
+# fragments. Because the server chooses the parameter names, a denylist always misses
+# new names (`pass`, `pw`, `pin`, `otp`, `code`, `sid`, etc.). Flip to an allowlist:
+# redact every query/fragment parameter value except names known to be harmless, and
+# redact userinfo anywhere in a message (error strings often embed the URL mid-text).
+_SAFE_QUERY_PARAMS = frozenset({"transport"})
+_SECRET_QUERY_KV = re.compile(r"([?&;#])([^=&#;\s\"']+)=([^&#;\s\"']*)")
+_SECRET_BARE_FRAGMENT = re.compile(r"(?i)(wss?://[^\s\"'#]+)#([^\s\"'=]+)(?=[\s\"']|$)")
+_SECRET_USERINFO = re.compile(r"(?i)(?P<scheme>wss?://)[^/@\s\"'<>]+@")
 
 
 def _redact_mcp_url(value: str) -> str:
     if not isinstance(value, str):
         return value
     redacted = _SECRET_USERINFO.sub(lambda match: match.group("scheme") + "<redacted>@", value)
-    return _SECRET_QUERY.sub(lambda match: match.group(1) + "<redacted>", redacted)
+    redacted = _SECRET_QUERY_KV.sub(
+        lambda match: (
+            match.group(0)
+            if match.group(1) != "#" and match.group(2).lower() in _SAFE_QUERY_PARAMS
+            else f"{match.group(1)}{match.group(2)}=<redacted>"
+        ),
+        redacted,
+    )
+    return _SECRET_BARE_FRAGMENT.sub(lambda match: f"{match.group(1)}#<redacted>", redacted)
 
 
 class MCPServer:
