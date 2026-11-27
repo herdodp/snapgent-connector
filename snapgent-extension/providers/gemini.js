@@ -706,5 +706,10 @@ const ZSProvider = (() => {
     // actions
     attachImages, clearAttachments, conversationKey,
     installSendHooks, findToolBlockSpot,
+    // Re-state the snapgentV3 system prompt periodically (same cadence as
+    // ChatGPT) so long Gemini sessions do not drift back to plain text or
+    // Gemini's native tool syntax.
+    resendSystemEvery: 6,
+    sendCharBudget: SEND_MAX_CHARS - 4000,
   };
 })();
