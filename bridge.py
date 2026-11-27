@@ -13,7 +13,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import unquote
 
 try:
     import websockets
@@ -226,24 +227,47 @@ def _json_line(value: Any) -> str:
 # redact every query/fragment parameter value except names known to be harmless, and
 # redact userinfo anywhere in a message (error strings often embed the URL mid-text).
 _SAFE_QUERY_PARAMS = frozenset({"transport"})
-_SECRET_QUERY_KV = re.compile(r"([?&;#])([^=&#;\s\"']+)=([^&#;\s\"']*)")
-_SECRET_BARE_FRAGMENT = re.compile(r"(?i)(wss?://[^\s\"'#]+)#([^\s\"'=]+)(?=[\s\"']|$)")
-_SECRET_USERINFO = re.compile(r"(?i)(?P<scheme>wss?://)[^/@\s\"'<>]+@")
+_MCP_URL_TAIL = re.compile(r"(?i)(wss?://[^\s\"'?#]+)([?#][^\s\"']*)")
+_SECRET_USERINFO = re.compile(
+    r"(?i)(?P<scheme>wss?://)(?:[^\s/?#]+|[^\s/?#]*?:[^\s?#]*?)@"
+)
+
+
+def _redact_url_tail(match: re.Match) -> str:
+    prefix, tail = match.group(1), match.group(2)
+    parts = re.split(r"([?&#;])", tail)
+    out = [prefix]
+    in_fragment = False
+    for index in range(1, len(parts), 2):
+        sep = parts[index]
+        seg = parts[index + 1] if index + 1 < len(parts) else ""
+        if sep == "#":
+            in_fragment = True
+        out.append(sep)
+        if not seg:
+            continue
+        if "=" in seg:
+            raw_name = seg.split("=", 1)[0]
+            if not in_fragment and unquote(raw_name).lower() in _SAFE_QUERY_PARAMS:
+                out.append(seg)
+            else:
+                out.append(f"{raw_name}=<redacted>")
+            continue
+        decoded = unquote(seg)
+        if not in_fragment and "=" in decoded:
+            dec_name = decoded.split("=", 1)[0].lower()
+            if dec_name in _SAFE_QUERY_PARAMS:
+                out.append(seg)
+                continue
+        out.append("<redacted>")
+    return "".join(out)
 
 
 def _redact_mcp_url(value: str) -> str:
     if not isinstance(value, str):
         return value
     redacted = _SECRET_USERINFO.sub(lambda match: match.group("scheme") + "<redacted>@", value)
-    redacted = _SECRET_QUERY_KV.sub(
-        lambda match: (
-            match.group(0)
-            if match.group(1) != "#" and match.group(2).lower() in _SAFE_QUERY_PARAMS
-            else f"{match.group(1)}{match.group(2)}=<redacted>"
-        ),
-        redacted,
-    )
-    return _SECRET_BARE_FRAGMENT.sub(lambda match: f"{match.group(1)}#<redacted>", redacted)
+    return _MCP_URL_TAIL.sub(_redact_url_tail, redacted)
 
 
 class MCPServer:
@@ -262,6 +286,8 @@ class MCPServer:
         self.ready = False
         self.protocol_version = MCP_PROTOCOL_VERSION
         self._refreshing_tools = False
+        self._refresh_tools_pending = False
+        self._bg_tasks: Set[asyncio.Task] = set()
         # Set by Bridge: a runtime tools/list change must reach the bridge catalog and
         # the extension, not just this server's own list.
         self.on_tools_changed: Optional[Callable[[str], Awaitable[None]]] = None
@@ -364,7 +390,7 @@ class MCPServer:
                 log(f"[{self.server_id}] {self.error}")
                 return False
             try:
-                self._ws = await websockets.connect(url, max_size=None)
+                self._ws = await websockets.connect(url, max_size=128 * 1024 * 1024)
             except Exception as error:  # InvalidURI, handshake and socket errors alike
                 self.error = _redact_mcp_url(str(error)) or error.__class__.__name__
                 log(f"[{self.server_id}] MCP websocket failed: {self.error}")
@@ -473,7 +499,9 @@ class MCPServer:
             # elicitation) and notifications (tools/list_changed, message). Dropping
             # them makes a spec-compliant server wait forever for a reply, so they run
             # on their own task and never block the reader.
-            asyncio.create_task(self._handle_server_message(message))
+            task = asyncio.create_task(self._handle_server_message(message))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
             return
         if "id" in message:
             request_id = message.get("id")
@@ -595,21 +623,29 @@ class MCPServer:
             log(f"[{self.server_id}] MCP server message {method} failed: {error}")
 
     async def refresh_tools(self) -> None:
-        if not self.ready or self._refreshing_tools:
+        if not self.ready:
+            return
+        if self._refreshing_tools:
+            self._refresh_tools_pending = True
             return
         self._refreshing_tools = True
         try:
-            result = await self._request("tools/list", {}, timeout=20)
-            tools = self._parse_tools(result)
-        except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
-            log(f"[{self.server_id}] MCP tools/list refresh failed: {error}")
-            return
+            while True:
+                self._refresh_tools_pending = False
+                try:
+                    result = await self._request("tools/list", {}, timeout=20)
+                    tools = self._parse_tools(result)
+                except (asyncio.TimeoutError, RuntimeError, OSError, ValueError) as error:
+                    log(f"[{self.server_id}] MCP tools/list refresh failed: {error}")
+                    return
+                if tools != self.tools:
+                    self.tools = tools
+                    log(f"[{self.server_id}] MCP tool list refreshed ({len(tools)} tools advertised)")
+                    await self._notify_tools_changed()
+                if not self._refresh_tools_pending:
+                    break
         finally:
             self._refreshing_tools = False
-        if tools != self.tools:
-            self.tools = tools
-            log(f"[{self.server_id}] MCP tool list refreshed ({len(tools)} tools advertised)")
-            await self._notify_tools_changed()
 
     async def _notify_tools_changed(self) -> None:
         """Let the owner of this server republish the catalog it caches itself."""

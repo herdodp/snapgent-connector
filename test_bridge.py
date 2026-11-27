@@ -219,6 +219,19 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("wss://<redacted>@h.test/ws?x=<redacted>#<redacted>", redacted_embedded)
         self.assertEqual(bridge._redact_mcp_url(123), 123)
 
+        # Segments without `=`, percent-encoded `=` (`%3D`), and userinfo with `/`.
+        for raw_url, hidden in (
+            ("ws://h/ws?SECRETVALUE", "SECRETVALUE"),
+            ("ws://h/ws?token%3Dabc", "token%3Dabc"),
+            ("wss://user:pa/ss@h/ws", "pa/ss"),
+            ("ws://h/ws?transport=websocket&BARE#frag1;frag2", "BARE"),
+        ):
+            out = bridge._redact_mcp_url(raw_url)
+            self.assertNotIn(hidden, out)
+            self.assertIn("<redacted>", out)
+        self.assertIn("transport=websocket", bridge._redact_mcp_url("ws://h/ws?transport=websocket&BARE"))
+        self.assertIn("transport%3Dwebsocket", bridge._redact_mcp_url("ws://h/ws?transport%3Dwebsocket&SECRET"))
+
     @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
     async def test_url_mcp_server_starts_and_never_logs_the_credential(self):
         # The REAL url transport: MCPServer connects to a live MCP-over-WebSocket
@@ -278,6 +291,16 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         joined = "\n".join(logged) + "\n" + str(server.error)
         for secret in ("leaky-userpw", "leaky-pass-1", "leaky-pw", "887766"):
             self.assertNotIn(secret, joined)
+
+        # Also cover a failing URL whose query carries a bare secret without `=`.
+        logged_bare = []
+        with patch.object(bridge, "log", side_effect=lambda message: logged_bare.append(str(message))):
+            bare_server = bridge.MCPServer(
+                "badurl-bare",
+                {"url": "ws://127.0.0.1:99999/ws?BARESECRETVALUE"},
+            )
+            self.assertFalse(await bare_server.start())
+        self.assertNotIn("BARESECRETVALUE", "\n".join(logged_bare) + "\n" + str(bare_server.error))
 
     async def test_mcp_server_initiated_requests_are_answered(self):
         # A 2025-03-26 server may ping the client and ask for elicitation before it
