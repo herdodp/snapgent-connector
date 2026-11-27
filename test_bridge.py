@@ -56,6 +56,86 @@ MOCK_SLOW_MCP = "import time\n" + MOCK_MCP.replace(
 )
 
 
+# Speaks MCP 2025-03-26 instead of echoing the client's revision, and behaves like a
+# spec-compliant server that uses the bidirectional channel: it pings the client and
+# asks for elicitation before answering tools/list, then adds a tool at runtime and
+# announces it with notifications/tools/list_changed.
+MOCK_MCP_COMPAT = r"""
+import json
+import sys
+
+state = {"ping_ok": False, "elicit_rejected": False, "swapped": False}
+pending_list = []
+
+
+def emit(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+def tools_result():
+    tools = [{
+        "name": "echo",
+        "description": "Echo a message",
+        "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}},
+    }]
+    if state["ping_ok"]:
+        tools.append({"name": "ping_ok", "description": "Client answered ping", "inputSchema": {"type": "object", "properties": {}}})
+    if state["elicit_rejected"]:
+        tools.append({"name": "elicit_rejected", "description": "Client rejected elicitation", "inputSchema": {"type": "object", "properties": {}}})
+    if state["swapped"]:
+        tools.append({"name": "extra_tool", "description": "Added at runtime", "inputSchema": {"type": "object", "properties": {}}})
+    return {"tools": tools}
+
+
+def flush_pending():
+    if state["ping_ok"] and state["elicit_rejected"]:
+        while pending_list:
+            emit({"jsonrpc": "2.0", "id": pending_list.pop(0), "result": tools_result()})
+
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+    except Exception:
+        continue
+    if request.get("method") is None:
+        if request.get("id") == "srv-ping" and request.get("result") == {}:
+            state["ping_ok"] = True
+            flush_pending()
+        elif request.get("id") == "srv-elicit":
+            error = request.get("error") or {}
+            state["elicit_rejected"] = error.get("code") == -32601
+            flush_pending()
+        continue
+    if "id" not in request:
+        continue
+    method = request.get("method")
+    request_id = request.get("id")
+    if method == "initialize":
+        emit({"jsonrpc": "2.0", "id": request_id, "result": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"tools": {"listChanged": True}},
+            "serverInfo": {"name": "mock-compat", "version": "1"},
+        }})
+        emit({"jsonrpc": "2.0", "id": "srv-ping", "method": "ping", "params": {}})
+        emit({"jsonrpc": "2.0", "id": "srv-elicit", "method": "elicitation/create", "params": {"message": "need input"}})
+    elif method == "tools/list":
+        if state["ping_ok"] and state["elicit_rejected"]:
+            emit({"jsonrpc": "2.0", "id": request_id, "result": tools_result()})
+        else:
+            pending_list.append(request_id)
+    elif method == "tools/call":
+        message = request.get("params", {}).get("arguments", {}).get("message", "")
+        emit({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": message or "ok"}]}})
+        if message == "swap":
+            state["swapped"] = True
+            emit({"jsonrpc": "2.0", "method": "notifications/tools/list_changed", "params": {}})
+    else:
+        emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}})
+"""
+
+
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
     @contextlib.asynccontextmanager
     async def _ws_client(self, root, script):
@@ -101,6 +181,253 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await server.stop()
             self.assertFalse(server.alive)
+
+    def test_redact_mcp_url_hides_every_credential_parameter(self):
+        # Allowlist redaction: any query/fragment parameter outside the short safe set
+        # (`transport`) is redacted, regardless of parameter name, `;` separator, or
+        # `#fragment`, and userinfo is redacted even when the URL is embedded mid-message.
+        url = (
+            "wss://user:usersecret@example.test/ws"
+            "?token=tok-value-1&password=pass-value-1&client_secret=secret-value-1"
+            "&pass=p1&pw=p2&pin=pin-val-1&otp=998877&code=abc&sid=xyz"
+            ";extra=semicolon-val&transport=websocket#frag_secret=frag-val"
+        )
+        redacted = bridge._redact_mcp_url(url)
+        for secret in (
+            "usersecret",
+            "tok-value-1",
+            "pass-value-1",
+            "secret-value-1",
+            "p1",
+            "p2",
+            "pin-val-1",
+            "998877",
+            "abc",
+            "xyz",
+            "semicolon-val",
+            "frag-val",
+        ):
+            self.assertNotIn(secret, redacted)
+        self.assertEqual(redacted.count("<redacted>"), 12)
+        self.assertIn("transport=websocket", redacted)
+
+        embedded = "error connecting to wss://u1:embeddedpw@h.test/ws?x=val-x#baresecret"
+        redacted_embedded = bridge._redact_mcp_url(embedded)
+        self.assertNotIn("embeddedpw", redacted_embedded)
+        self.assertNotIn("val-x", redacted_embedded)
+        self.assertNotIn("baresecret", redacted_embedded)
+        self.assertIn("wss://<redacted>@h.test/ws?x=<redacted>#<redacted>", redacted_embedded)
+        self.assertEqual(bridge._redact_mcp_url(123), 123)
+
+        # Segments without `=`, percent-encoded `=` (`%3D`), and userinfo with `/`.
+        for raw_url, hidden in (
+            ("ws://h/ws?SECRETVALUE", "SECRETVALUE"),
+            ("ws://h/ws?token%3Dabc", "token%3Dabc"),
+            ("wss://user:pa/ss@h/ws", "pa/ss"),
+            ("ws://h/ws?transport=websocket&BARE#frag1;frag2", "BARE"),
+        ):
+            out = bridge._redact_mcp_url(raw_url)
+            self.assertNotIn(hidden, out)
+            self.assertIn("<redacted>", out)
+        self.assertIn("transport=websocket", bridge._redact_mcp_url("ws://h/ws?transport=websocket&BARE"))
+        self.assertIn("transport%3Dwebsocket", bridge._redact_mcp_url("ws://h/ws?transport%3Dwebsocket&SECRET"))
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_url_mcp_server_starts_and_never_logs_the_credential(self):
+        # The REAL url transport: MCPServer connects to a live MCP-over-WebSocket
+        # server, so the redaction is exercised on the path that actually logs the
+        # url (startup line) rather than on a helper in isolation.
+        async def upstream(websocket, _path=None):
+            async for raw in websocket:
+                request = json.loads(raw)
+                if "id" not in request:
+                    continue
+                method = request.get("method")
+                if method == "initialize":
+                    result = {
+                        "protocolVersion": request["params"]["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "urlmock", "version": "1"},
+                    }
+                elif method == "tools/list":
+                    result = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+                else:
+                    result = {}
+                await websocket.send(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+
+        logged = []
+        with patch.object(bridge, "log", side_effect=lambda message: logged.append(str(message))):
+            async with bridge.websockets.serve(upstream, "127.0.0.1", 0, max_size=None) as ws_server:
+                port = ws_server.sockets[0].getsockname()[1]
+                url = (
+                    f"ws://127.0.0.1:{port}/ws?token=tok-value-2"
+                    "&pass=p1&pw=p2&pin=4321&otp=998877&code=abc&sid=xyz&transport=websocket"
+                )
+                server = bridge.MCPServer("urlmock", {"url": url})
+                try:
+                    self.assertTrue(await server.start())
+                    self.assertTrue(server.ready)
+                    self.assertEqual([tool["name"] for tool in server.tools], ["echo"])
+                finally:
+                    await server.stop()
+        joined = "\n".join(logged)
+        self.assertIn("MCP server up over websocket", joined)
+        for secret in ("tok-value-2", "p1", "p2", "4321", "998877", "abc", "xyz"):
+            self.assertNotIn(secret, joined)
+        self.assertIn("transport=websocket", joined)
+        self.assertIn("<redacted>", joined)
+
+    @unittest.skipIf(bridge.websockets is None, "websockets package is not installed")
+    async def test_url_transport_error_does_not_leak_the_credential(self):
+        # websockets may put the whole URI into an InvalidURI message, so a failed start
+        # is the other place a credential would escape into `self.error` and the log.
+        logged = []
+        with patch.object(bridge, "log", side_effect=lambda message: logged.append(str(message))):
+            server = bridge.MCPServer(
+                "badurl",
+                {"url": "ws://u:leaky-userpw@127.0.0.1:99999/ws?pass=leaky-pass-1&pw=leaky-pw&otp=887766"},
+            )
+            self.assertFalse(await server.start())
+        joined = "\n".join(logged) + "\n" + str(server.error)
+        for secret in ("leaky-userpw", "leaky-pass-1", "leaky-pw", "887766"):
+            self.assertNotIn(secret, joined)
+
+        # Also cover a failing URL whose query carries a bare secret without `=`.
+        logged_bare = []
+        with patch.object(bridge, "log", side_effect=lambda message: logged_bare.append(str(message))):
+            bare_server = bridge.MCPServer(
+                "badurl-bare",
+                {"url": "ws://127.0.0.1:99999/ws?BARESECRETVALUE"},
+            )
+            self.assertFalse(await bare_server.start())
+        self.assertNotIn("BARESECRETVALUE", "\n".join(logged_bare) + "\n" + str(bare_server.error))
+
+    async def test_mcp_server_initiated_requests_are_answered(self):
+        # A 2025-03-26 server may ping the client and ask for elicitation before it
+        # answers tools/list. Ignoring those requests leaves the server blocked, so
+        # startup only succeeds here when ping is answered and elicitation is rejected.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_compat.py"
+            mock_path.write_text(MOCK_MCP_COMPAT, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                self.assertEqual(server.protocol_version, "2025-03-26")
+                names = [tool["name"] for tool in server.tools]
+                self.assertIn("ping_ok", names)
+                self.assertIn("elicit_rejected", names)
+            finally:
+                await server.stop()
+
+    async def test_mcp_tool_list_refreshes_on_list_changed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_compat.py"
+            mock_path.write_text(MOCK_MCP_COMPAT, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                self.assertNotIn("extra_tool", [tool["name"] for tool in server.tools])
+                await server.call_tool("echo", {"message": "swap"}, 5)
+                deadline = asyncio.get_running_loop().time() + 5
+                while "extra_tool" not in [tool["name"] for tool in server.tools]:
+                    if asyncio.get_running_loop().time() > deadline:
+                        self.fail("tools/list_changed was not applied to the tool list")
+                    await asyncio.sleep(0.05)
+            finally:
+                await server.stop()
+
+    async def test_tool_list_change_republishes_the_bridge_catalog(self):
+        # Regression: refresh_tools() only moved MCPServer.tools, so Bridge._catalog —
+        # the list the extension is handed — stayed stale and a tool a server added at
+        # runtime never reached the UI. Asserted through Bridge, and the broadcast is
+        # what proves the extension would actually see it.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mock_path = root / "mock_compat.py"
+            mock_path.write_text(MOCK_MCP_COMPAT, encoding="utf-8")
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock_path)], "env": {}}}}
+                ),
+                encoding="utf-8",
+            )
+            manager = bridge.Bridge()
+            with patch.object(bridge, "CONFIG_PATH", config_path):
+                await manager.start_servers()
+                try:
+                    self.assertNotIn("extra_tool", [tool["name"] for tool in manager._catalog])
+                    async with bridge.websockets.serve(
+                        manager.handle_client, "127.0.0.1", 0, max_size=None
+                    ) as server:
+                        port = server.sockets[0].getsockname()[1]
+                        async with bridge.websockets.connect(
+                            f"ws://127.0.0.1:{port}", max_size=None
+                        ) as client:
+                            await client.recv()  # initial "connected" message
+                            await client.send(
+                                json.dumps(
+                                    {
+                                        "id": 1,
+                                        "type": "call_tool",
+                                        "name": "echo",
+                                        "arguments": {"message": "swap"},
+                                        "timeout": 5000,
+                                    }
+                                )
+                            )
+                            deadline = asyncio.get_running_loop().time() + 5
+                            republished = False
+                            while asyncio.get_running_loop().time() < deadline:
+                                try:
+                                    frame = json.loads(
+                                        await asyncio.wait_for(client.recv(), timeout=1)
+                                    )
+                                except asyncio.TimeoutError:
+                                    continue
+                                if frame.get("type") != "connected":
+                                    continue
+                                names = [tool["name"] for tool in frame.get("tools", [])]
+                                if "extra_tool" in names:
+                                    republished = True
+                                    break
+                            self.assertTrue(
+                                republished,
+                                "the bridge never broadcast the refreshed catalog",
+                            )
+                            self.assertIn(
+                                "extra_tool", [tool["name"] for tool in manager._catalog]
+                            )
+                finally:
+                    await manager.stop_servers()
+
+    async def test_unknown_protocol_revision_does_not_block_startup(self):
+        # A server newer than this client answers with a revision we do not know. The
+        # bridge must keep using it instead of failing the whole MCP server, otherwise
+        # one MCP package release breaks every tool the assistant could use.
+        newer = MOCK_MCP.replace(
+            '"protocolVersion": request["params"]["protocolVersion"]',
+            '"protocolVersion": "2099-01-01"',
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_path = Path(temp_dir) / "mock_mcp.py"
+            mock_path.write_text(newer, encoding="utf-8")
+            server = bridge.MCPServer(
+                "mock",
+                {"command": sys.executable, "args": [str(mock_path)], "env": {}},
+            )
+            try:
+                self.assertTrue(await server.start())
+                self.assertEqual(server.protocol_version, "2099-01-01")
+                self.assertEqual([tool["name"] for tool in server.tools], ["echo"])
+            finally:
+                await server.stop()
 
     async def test_large_response_line_is_received(self):
         # Regression: a single JSON line larger than asyncio's default 64 KB

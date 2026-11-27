@@ -4,14 +4,19 @@
 // Response shapes match what core/main.js expects from extension background.js.
 const { spawn } = require("child_process");
 
-const PROTOCOL = "2024-11-05";
+// MCP revisions this client can speak, newest first. The revision the server picks in
+// the initialize result wins; an unknown (newer) one is kept on a best-effort basis so
+// an MCP package that moved first does not take the whole app offline.
+const PROTOCOL = "2025-06-18";
+const SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const VERSION = "app-1.0";
 
 class McpServer {
-  constructor(id, cfg, log) {
-    this.id = id; this.cfg = cfg; this.log = log;
+  constructor(id, cfg, log, onToolsChanged = () => {}) {
+    this.id = id; this.cfg = cfg; this.log = log; this.onToolsChanged = onToolsChanged;
     this.proc = null; this.ready = false; this.tools = []; this.error = null;
     this.pending = new Map(); this.nextId = 1; this.buf = "";
+    this.protocol = PROTOCOL; this.refreshing = false;
   }
   get alive() { return !!(this.proc && this.proc.exitCode === null && this.ready); }
 
@@ -35,7 +40,8 @@ class McpServer {
     proc.stdout.on("data", (chunk) => this._onData(chunk));
     proc.stderr.on("data", (d) => this.log(`[${this.id}] stderr: ${String(d).trim().slice(0, 1000)}`));
     try {
-      await this.request("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "snapgent-app", version: VERSION } }, 12000);
+      const initialized = await this.request("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "snapgent-app", version: VERSION } }, 12000);
+      this.protocol = this._negotiatedProtocol(initialized);
       this._write({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
       const r = await this.request("tools/list", {}, 20000);
       const raw = r && Array.isArray(r.tools) ? r.tools : [];
@@ -79,6 +85,7 @@ class McpServer {
       this.buf = this.buf.slice(i + 1);
       if (!line) continue;
       let msg; try { msg = JSON.parse(line); } catch { continue; }
+      if (typeof msg.method === "string") { this._onServerMessage(msg); continue; }
       if (typeof msg.id === "number" && this.pending.has(msg.id)) {
         const p = this.pending.get(msg.id);
         clearTimeout(p.timer); this.pending.delete(msg.id);
@@ -87,6 +94,52 @@ class McpServer {
       }
     }
   }
+  _negotiatedProtocol(result) {
+    const chosen = result && typeof result.protocolVersion === "string" ? result.protocolVersion : "";
+    if (!chosen) return PROTOCOL;
+    if (!SUPPORTED_PROTOCOLS.includes(chosen)) {
+      this.log(`[${this.id}] MCP server negotiated an unknown revision (${chosen}); continuing on a best-effort basis.`);
+    }
+    return chosen;
+  }
+
+  // MCP is bidirectional: a server may call ping, ask for roots, or ask the host for
+  // user input (sampling/elicitation). The app has no UI for those, so it answers ping
+  // and roots and rejects the rest with the JSON-RPC error the spec expects; ignoring
+  // a request makes the server wait for a reply that never arrives.
+  _onServerMessage(msg) {
+    const id = msg.id;
+    try {
+      if (id === undefined || id === null) {
+        if (msg.method === "notifications/tools/list_changed") this._refreshTools();
+        else if (msg.method === "notifications/message") this.log(`[${this.id}] MCP log: ${JSON.stringify(msg.params || {}).slice(0, 1000)}`);
+        return;
+      }
+      if (msg.method === "ping") this._reply(id, {});
+      else if (msg.method === "roots/list") this._reply(id, { roots: [] });
+      else this._replyError(id, -32601, `Unsupported client method from snapgent-app: ${msg.method}`);
+    } catch (e) { this.log(`[${this.id}] MCP server message failed: ${e.message || e}`); }
+  }
+
+  _reply(id, result) { try { this._write({ jsonrpc: "2.0", id, result }); } catch {} }
+  _replyError(id, code, message) { try { this._write({ jsonrpc: "2.0", id, error: { code, message } }); } catch {} }
+
+  async _refreshTools() {
+    if (!this.ready || this.refreshing) return;
+    this.refreshing = true;
+    try {
+      const r = await this.request("tools/list", {}, 20000);
+      const raw = r && Array.isArray(r.tools) ? r.tools : [];
+      const tools = raw.filter((t) => t && typeof t.name === "string");
+      if (JSON.stringify(tools) !== JSON.stringify(this.tools)) {
+        this.tools = tools;
+        this.log(`[${this.id}] MCP tool list refreshed (${tools.length} tools)`);
+        this.onToolsChanged(this.id);
+      }
+    } catch (e) { this.log(`[${this.id}] MCP tools/list refresh failed: ${e.message || e}`); }
+    finally { this.refreshing = false; }
+  }
+
   request(method, params, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
@@ -119,7 +172,7 @@ class BridgeCore {
   mcpAlive() { return [...this.servers.values()].some((s) => s.alive); }
 
   async start(config) {
-    this.servers = new Map(Object.entries(config).map(([id, cfg]) => [id, new McpServer(id, cfg, this.log)]));
+    this.servers = new Map(Object.entries(config).map(([id, cfg]) => [id, new McpServer(id, cfg, this.log, () => { this._rebuild(); this.onChange(); })]));
     await Promise.all([...this.servers.values()].map(async (s) => {
       try { await s.start(); } catch (e) { s.error = String(e.message || e); }
       this._rebuild(); this.onChange();

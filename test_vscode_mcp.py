@@ -136,6 +136,82 @@ class VscodeMcpTests(unittest.TestCase):
             "new new",
         )
 
+    def _exchange(self, payload):
+        sent = []
+        with patch.object(vscode_mcp, "send_message", side_effect=sent.append):
+            vscode_mcp.handle_request(payload)
+        return sent
+
+    def _initialize(self, version):
+        sent = self._exchange({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": version},
+        })
+        return sent[0]["result"]
+
+    def test_initialize_echoes_a_supported_revision(self):
+        self.assertEqual(self._initialize("2024-11-05")["protocolVersion"], "2024-11-05")
+        self.assertEqual(self._initialize("2025-03-26")["protocolVersion"], "2025-03-26")
+        self.assertEqual(self._initialize("2025-06-18")["protocolVersion"], "2025-06-18")
+
+    def test_initialize_falls_back_to_the_newest_revision(self):
+        # An unknown/future revision must be answered, not echoed: the client may not
+        # speak it, and a client that receives its own unknown version assumes support.
+        result = self._initialize("1999-01-01")
+        self.assertEqual(result["protocolVersion"], "2025-06-18")
+
+    def test_ping_returns_an_empty_result(self):
+        sent = self._exchange({"jsonrpc": "2.0", "id": 7, "method": "ping"})
+        self.assertEqual(sent, [{"jsonrpc": "2.0", "id": 7, "result": {}}])
+
+    def test_structured_content_only_for_the_revision_that_defines_it(self):
+        self._initialize("2024-11-05")
+        old = self._exchange({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "get_workspace_info", "arguments": {}},
+        })[0]["result"]
+        self.assertIn("content", old)
+        self.assertNotIn("structuredContent", old)
+
+        self._initialize("2025-06-18")
+        new = self._exchange({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "get_workspace_info", "arguments": {}},
+        })[0]["result"]
+        self.assertIn("structuredContent", new)
+
+    def test_notifications_are_not_answered(self):
+        # A response to a notification is itself a protocol error, so the server must
+        # stay silent for every notification, including ones it does not know.
+        for method in ("notifications/initialized", "notifications/cancelled", "notifications/future"):
+            self.assertEqual(
+                self._exchange({"jsonrpc": "2.0", "method": method, "params": {}}),
+                [],
+                method,
+            )
+
+    def test_notifications_naming_a_supported_method_stay_silent(self):
+        # Regression: the missing-id check ran after the handlers, so a ping notification
+        # answered with id: null and a tools/call notification actually ran the tool.
+        # Both are notifications, so neither may answer or have an effect.
+        for method, params in (
+            ("ping", {}),
+            ("tools/list", {}),
+            (
+                "tools/call",
+                {
+                    "name": "write_file",
+                    "arguments": {"path": "notify-side-effect.txt", "content": "x"},
+                },
+            ),
+        ):
+            self.assertEqual(
+                self._exchange({"jsonrpc": "2.0", "method": method, "params": params}),
+                [],
+                method,
+            )
+        self.assertFalse((self.workspace / "notify-side-effect.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

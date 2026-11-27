@@ -23,6 +23,19 @@ IGNORED_DIRECTORIES = {
 MAX_RESULTS = 500
 MAX_FILE_CHARS = 200_000
 SAFE_PROJECT_SCRIPTS = {"build", "check", "format", "lint", "test", "typecheck"}
+# MCP revisions this server can speak, newest first. The client picks the revision in
+# initialize(); this server echoes a revision it supports and falls back to its newest
+# when asked for something it does not know, which is what the specification requires.
+MCP_PROTOCOL_VERSION = "2025-06-18"
+MCP_SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+_negotiated_protocol = MCP_PROTOCOL_VERSION
+
+
+def _supports_structured_content(version: str) -> bool:
+    # structuredContent is a 2025-06-18 addition. Older clients are told to ignore
+    # unknown result fields, but not sending it keeps the reply honest for the
+    # revision that was actually negotiated.
+    return version == "2025-06-18"
 
 
 def _vscode_active_folder() -> Optional[Path]:
@@ -645,17 +658,37 @@ def send_message(message: Dict[str, Any]) -> None:
 
 
 def handle_request(request: Dict[str, Any]) -> None:
+    global _negotiated_protocol
     method = request.get("method")
     request_id = request.get("id")
     params = request.get("params") or {}
 
-    if method in ("initialize", "ping"):
-        result = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "vscode-mcp", "version": "2.0.0"},
-        } if method == "initialize" else {}
-        send_message({"jsonrpc": "2.0", "id": request_id, "result": result})
+    if request_id is None:
+        # Notifications must neither be answered nor acted on: a response to a
+        # notification is itself a protocol error, and a notification that names a
+        # supported method (ping, tools/call, ...) is not a request the client made.
+        # This check sits before dispatch, otherwise those methods answer with a null id
+        # or, worse, run a tool the host never asked for.
+        return
+
+    if method == "initialize":
+        requested = params.get("protocolVersion")
+        _negotiated_protocol = (
+            requested if requested in MCP_SUPPORTED_PROTOCOL_VERSIONS else MCP_PROTOCOL_VERSION
+        )
+        send_message({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": _negotiated_protocol,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "vscode-mcp", "version": "2.1.0"},
+            },
+        })
+        return
+
+    if method == "ping":
+        send_message({"jsonrpc": "2.0", "id": request_id, "result": {}})
         return
 
     if method == "tools/list":
@@ -667,14 +700,10 @@ def handle_request(request: Dict[str, Any]) -> None:
         try:
             output = tool_dispatch(params.get("name", ""), params.get("arguments") or {})
             text = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
-            send_message({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "content": [{"type": "text", "text": text}],
-                    "structuredContent": {"result": output},
-                },
-            })
+            result: Dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+            if _supports_structured_content(_negotiated_protocol):
+                result["structuredContent"] = {"result": output}
+            send_message({"jsonrpc": "2.0", "id": request_id, "result": result})
         except Exception as error:
             send_message({
                 "jsonrpc": "2.0",
@@ -683,8 +712,6 @@ def handle_request(request: Dict[str, Any]) -> None:
             })
         return
 
-    if method == "notifications/initialized":
-        return
     send_message({
         "jsonrpc": "2.0",
         "id": request_id,
