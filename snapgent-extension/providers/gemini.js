@@ -386,27 +386,195 @@ const ZSProvider = (() => {
   // Yielding does not make the insert faster, it makes the page stay alive while
   // it happens - and lets the Stop button remain usable.
   const INSERT_CHUNK_LINES = 120;
-  async function setEditorText(ed, text) {
-    ed.focus();
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(ed);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    const lines = String(text).split("\n");
-    const t0 = Date.now();
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i]) document.execCommand("insertText", false, lines[i]);
-      if (i < lines.length - 1) document.execCommand("insertLineBreak");
-      if (i && i % INSERT_CHUNK_LINES === 0) await sleep(0);
+  // ── Line-structure fingerprint ──────────────────────────────────────────
+  // Quill turns every insertLineBreak into a soft <br> (a hard newline becomes a
+  // fresh <p>), and NEITHER contributes a "\n" to textContent. A comparison that
+  // just drops line breaks therefore accepts a write that LOST them: when
+  // insertLineBreak silently no-ops, "line one\nline two" reaches the composer
+  // as "line oneline two", the stripped strings match, and the message is sent
+  // with its formatting gone (owner review 2026-11-25). So the lines are rebuilt
+  // from the DOM itself and compared one by one. Only line breaks are derived
+  // from structure: a space or tab is real content, and normalising it away would
+  // make "read file" compare equal to "readfile".
+  const BLOCK_TAGS = /^(P|DIV|LI|PRE|H[1-6]|BLOCKQUOTE|TR)$/;
+  const isBlockEl = (n) =>
+    !!n && n.nodeType === 1 && BLOCK_TAGS.test(String(n.tagName || "").toUpperCase());
+  const isBrEl = (n) =>
+    !!n && n.nodeType === 1 && String(n.tagName || "").toUpperCase() === "BR";
+  // Lines inside one block: a <br> opens a new line, text accumulates into the
+  // current one. An empty Quill line is <p><br></p> - ONE empty line, not two.
+  function inlineLines(node) {
+    const kids = Array.from(node.childNodes || []);
+    if (kids.length === 1 && isBrEl(kids[0])) return [""];
+    const lines = [""];
+    const walk = (n) => {
+      for (const c of Array.from(n.childNodes || [])) {
+        if (c.nodeType === 3) {
+          const parts = String(c.nodeValue || "").split(/\r\n?|\n/);
+          lines[lines.length - 1] += parts[0];
+          for (let i = 1; i < parts.length; i++) lines.push(parts[i]);
+          continue;
+        }
+        if (c.nodeType !== 1) continue;
+        if (isBrEl(c)) { lines.push(""); continue; }
+        walk(c);
+      }
+    };
+    walk(node);
+    // A single trailing <br> inside a non-empty <p> is contenteditable's
+    // line-end sentinel, not an extra blank line (an intentional trailing
+    // newline is <p>…</p><p><br></p> or <p>…<br><br></p>).
+    if (kids.length > 1 && isBrEl(kids[kids.length - 1]) && lines.length > 1 && lines[lines.length - 1] === "") {
+      lines.pop();
     }
-    if (lines.length > INSERT_CHUNK_LINES) diag("send.insertDone", { lines: lines.length, ms: Date.now() - t0 });
+    return lines;
+  }
+  // Every block element is its own line. Inline nodes at the editor root join
+  // the line being built, so a composer that is not paragraph-wrapped still
+  // works.
+  function composerLines(ed) {
+    if (!ed) return [""];
+    const kids = Array.from(ed.childNodes || []);
+    if (!kids.some(isBlockEl)) return inlineLines(ed);
+    const lines = [];
+    for (const k of kids) {
+      if (isBlockEl(k)) { lines.push(...inlineLines(k)); continue; }
+      if (isBrEl(k)) { lines.push(""); continue; }
+      const ls = inlineLines(k);
+      if (lines.length) { lines[lines.length - 1] += ls[0]; lines.push(...ls.slice(1)); }
+      else lines.push(...ls);
+    }
+    return lines.length ? lines : [""];
+  }
+  const wantedLines = (s) => String(s == null ? "" : s).replace(/\r\n?/g, "\n").split("\n");
+  // True only if the editor holds `text` line for line. An all-whitespace payload
+  // has no fingerprint; there the only honest check is "no longer empty".
+  function editorHolds(ed, text) {
+    const want = wantedLines(text);
+    const got = composerLines(ed);
+    if (!want.join("").trim()) return got.join("").length > 0;
+    return want.length === got.length && want.every((line, i) => line === got[i]);
+  }
+  // Whether the text really landed must be MEASURED, not assumed: execCommand
+  // returns true and silently does nothing when the editable does not own focus.
+  // Validated live on Gemini's Start path: every insertText returned true while
+  // the composer stayed at length 0, no send (arrow_upward) button rendered, and
+  // Start sat on "Starting…" until the empty-response timeout.
+  //
+  // The editor node is RE-RESOLVED on every pass on purpose. Angular remounts
+  // the composer (Quill re-init) while a session starts, so the handle captured
+  // a moment earlier is detached - and a detached element can never become
+  // document.activeElement, so focus() and the insert that follows are both
+  // silent no-ops even though the page looks perfectly normal. Same failure
+  // class as ChatGPT's ProseMirror remount described in core/main.js.
+  const editorUsable = (e) => !!e && e.isConnected !== false && e.offsetParent !== null;
+  const focusEditor = async (fallbackEl, timeoutMs = 2500) => {
+    const t0 = Date.now();
+    let n = 0;
+    let ed = getEditor() || fallbackEl;
+    while (Date.now() - t0 < timeoutMs) {
+      const live = getEditor();
+      if (editorUsable(live)) ed = live;
+      if (editorUsable(ed)) {
+        if (document.activeElement === ed) return ed;
+        // Blur whatever holds focus (Gemini parks it on <body> while the page is
+        // still hydrating) and then take it.
+        try {
+          const a = document.activeElement;
+          if (a && a !== ed && typeof a.blur === "function") a.blur();
+        } catch {}
+        try { ed.focus({ preventScroll: true }); } catch { try { ed.focus(); } catch {} }
+        if (document.activeElement === ed) return ed;
+        // focus() is not always enough: Quill hands the caret to its own text
+        // node only after a pointer gesture, so every other pass replays a real
+        // click sequence on the editor before focusing again.
+        if (n % 2) {
+          try {
+            const r = ed.getBoundingClientRect();
+            const o = {
+              bubbles: true, cancelable: true, button: 0,
+              clientX: r.left + 12, clientY: r.top + Math.max(8, r.height / 2),
+            };
+            ed.dispatchEvent(new MouseEvent("mousedown", o));
+            ed.dispatchEvent(new MouseEvent("mouseup", o));
+            ed.dispatchEvent(new MouseEvent("click", o));
+            ed.focus({ preventScroll: true });
+          } catch {}
+          if (document.activeElement === ed) return ed;
+        }
+      }
+      n++;
+      await sleep(50);
+    }
+    return null;
+  };
+
+  // Last resort when focus cannot be taken at all: write the value straight into
+  // the DOM and announce it. Gemini's Quill mirrors external DOM edits and emits
+  // text-change, so the composer registers the text and the send button appears
+  // (validated live in the extension's isolated world). innerHTML is blocked by
+  // the page's Trusted Types policy - build nodes instead.
+  function setEditorTextDom(ed, text) {
+    const lines = String(text).split("\n");
+    const frag = document.createDocumentFragment();
+    for (const line of lines) {
+      const p = document.createElement("p");
+      if (line) p.textContent = line;
+      else p.appendChild(document.createElement("br"));
+      frag.appendChild(p);
+    }
+    if (typeof ed.replaceChildren === "function") ed.replaceChildren(frag);
+    else { while (ed.firstChild) ed.removeChild(ed.firstChild); ed.appendChild(frag); }
+    const data = String(text);
+    ed.dispatchEvent(new InputEvent("beforeinput", {
+      bubbles: true, cancelable: true, inputType: "insertText", data,
+    }));
+    ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data }));
+    ed.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Returns true only when the editor verifiably holds `text`.
+  async function setEditorText(fallbackEl, text) {
+    let ed = await focusEditor(fallbackEl);
+    if (!ed) {
+      // No focus anywhere: fall back to the DOM write rather than reporting a
+      // failure that leaves Start stuck (it is also the only path that works in
+      // some isolated-world/CSP combinations).
+      const live = getEditor();
+      if (!editorUsable(live)) return false;
+      diag("send.domInsert", {});
+      setEditorTextDom(live, text);
+      ed = live;
+    } else {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ed);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      const lines = String(text).split("\n");
+      const t0 = Date.now();
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i]) document.execCommand("insertText", false, lines[i]);
+        if (i < lines.length - 1) document.execCommand("insertLineBreak");
+        if (i && i % INSERT_CHUNK_LINES === 0) await sleep(0);
+      }
+      if (lines.length > INSERT_CHUNK_LINES) diag("send.insertDone", { lines: lines.length, ms: Date.now() - t0 });
+    }
+    const ok = editorHolds(getEditor() || ed, text);
+    if (!ok) {
+      diag("send.insertMiss", {
+        focused: !!ed,
+        wantLines: wantedLines(text).length,
+        gotLines: composerLines(getEditor() || ed).length,
+      });
+    }
+    return ok;
   }
 
   async function typeAndSend(text, images) {
     const ed = getEditor();
     if (!ed) throw new Error("Gemini input box not found");
-    // Cap BEFORE any comparison below, so the retry path's `editorText() !== text`
+    // Cap BEFORE any comparison below, so the retry path's `!editorHolds(ed, text)`
     // test compares against what we actually typed.
     text = truncateForSend(text);
     const relock = _locked;
@@ -421,7 +589,23 @@ const ZSProvider = (() => {
       // calls with 3 different files, and the model's replies stayed generic
       // - it never got one coherent image). So: only retype if the text isn't
       // already there, and only attach if nothing is pending yet.
-      if (editorText() !== text) await setEditorText(ed, text);
+      if (!editorHolds(ed, text)) {
+        if ((await setEditorText(ed, text)) === false) {
+          // One cheap self-retry: a modal/cover can hold focus for a beat while
+          // the composer mounts. A verified insert costs ~10ms once the editor
+          // really owns focus, which is far cheaper than a core-level send
+          // retry (1s sleep + jitter).
+          diag("send.insertRetry", {});
+          await sleep(150);
+          if ((await setEditorText(ed, text)) === false) {
+            diag("send.emptyComposer", { why: "insert no-op" });
+            // Report the failure instead of leaving an empty composer behind:
+            // submitAndGetBase treats an empty editor as "sent and cleared", the
+            // false positive that stranded Start on "Starting…" for minutes.
+            return false;
+          }
+        }
+      }
       const hasPendingAttachment = () => {
         const box = document.querySelector(S.inputArea);
         return !!(box && box.querySelector("[class*='preview'], [class*='thumbnail']"));
@@ -444,18 +628,22 @@ const ZSProvider = (() => {
       // an empty editor and therefore no send button - the "Start did nothing,
       // the system prompt was never sent" report. Retyping now that the stop is
       // cleared is safe: the editor is either empty or holds our own text.
-      if (!sendButton() && editorText() !== text) {
+      if (!sendButton() && !editorHolds(ed, text)) {
         diag("send.retype", {});
-        await setEditorText(ed, text);
+        if ((await setEditorText(ed, text)) === false) {
+          diag("send.emptyComposer", { why: "retype no-op" });
+          return false;
+        }
         await waitFor(() => !!sendButton(), 2000);
       }
       const btn = sendButton();
       diag("send.click", { found: !!btn, pending: hasPendingAttachment() });
-      if (btn) { btn.click(); return; }
+      if (btn) { btn.click(); return true; }
       // Fallback: Enter sends in Gemini's composer.
       const o = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
       ed.dispatchEvent(new KeyboardEvent("keydown", o));
       ed.dispatchEvent(new KeyboardEvent("keyup", o));
+      return true;
     } finally {
       if (relock) { const e2 = getEditor(); if (e2) e2.setAttribute("contenteditable", "false"); }
     }
@@ -654,6 +842,194 @@ const ZSProvider = (() => {
     return hidAny;
   }
 
+  // ── Chip column alignment (measured live, 2026-11-23) ─────────────────────
+  // Gemini renders the READABLE column separately from the turn box: on the
+  // user's window the reply markdown is capped and centered inside
+  // <model-response>, while the turn itself keeps the full scroller width. Our
+  // chips hang off the TURN edges (the command chip at the model-response root,
+  // the result pill justified to the right of the user turn), so in that layout
+  // they sit ~80-160px outside the text the user is reading - reported as "chips
+  // have no left/right padding that matches Gemini's own text output".
+  //
+  // The cap is a Gemini-side layout preference (it is 0px wide on a 1072px
+  // window and >0 on the user's wider one), so hardcoding an inset would break
+  // at the next window size. Instead the inset is MEASURED from a real reply and
+  // published as two CSS variables that overlay.css applies to chip turns only:
+  //   --zs-gem-col-l  left inset of the text column inside its turn
+  //   --zs-gem-col-r  right inset of the text column inside its turn
+  // Measured again on resize and on a slow interval (a reply can be re-laid out
+  // by Angular without any resize), and cached so a steady page costs nothing.
+  const COL_L = "--zs-gem-col-l";
+  const COL_R = "--zs-gem-col-r";
+  let colSig = "";
+
+  // Pick the reply whose layout the chips must follow. Only a turn that sits in
+  // a real `.conversation-container` counts: Gemini also keeps stray
+  // <model-response> previews outside the transcript (measured live: one 900px
+  // markdown at x362 while every transcript turn was 997px wide with a 48px
+  // inset), and measuring that outlier would push every chip off by its delta.
+  // The LAST such turn wins so a re-laid-out newest reply is what we follow.
+  function currentColumnTurn() {
+    // `.markdown` is the box we prefer, but every Gemini build we have seen puts
+    // the reply text under `message-content`; falling back to the turn itself
+    // keeps the measurement alive if a build renames the wrapper.
+    const textOf = (t) => t.querySelector(".markdown, message-content, .response-content") || t;
+    let pick = null;
+    for (const t of document.querySelectorAll(S.assistantItem)) {
+      const text = textOf(t);
+      if (!text || text.getBoundingClientRect().width < 24) continue;
+      if (!t.closest(".conversation-container")) continue;
+      pick = { turn: t, text };
+    }
+    if (pick) return pick;
+    const t = document.querySelector(S.assistantItem);
+    if (!t) return null;
+    const text = textOf(t);
+    return text ? { turn: t, text } : null;
+  }
+
+  // Read the readable column of one reply, in two passes.
+  //
+  // Pass 1 (the `.markdown` box) is enough when Gemini caps that element itself:
+  // it measured 900px inside a 1571px turn in the harness, and inset = box edges.
+  //
+  // Pass 2 exists because the user's real page (23 Nov 2026, 2236px window)
+  // reported "still no padding": there `.markdown` spans the WHOLE turn and the
+  // cap lives on the blocks inside it, so pass 1 answered 0/0 and the chips stayed
+  // at the window edge while the text sat ~340px further in. In that layout the
+  // column is measured from the rendered TEXT LINES instead: prose line boxes
+  // only (`<pre>`, tables and images legitimately run wider), the left edge taken
+  // as the most common line start (4px buckets) so an indented list item or a
+  // centred heading cannot drag it, and the right inset mirrored - Gemini centres
+  // that column inside the turn, which is exactly why both sides need the same
+  // number.
+  function textColumnInset(t, text) {
+    const x = text.getBoundingClientRect();
+    if (!x.width) return { l: 0, r: 0, source: "none", lines: 0 };
+    const l0 = Math.max(0, Math.round(x.left - t.left));
+    const r0 = Math.max(0, Math.round(t.right - x.right));
+    if (l0 >= 4 || r0 >= 4) return { l: l0, r: r0, source: "markdown", lines: 0 };
+    const run = document.createRange();
+    const lefts = [];
+    const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.nodeValue || !node.nodeValue.trim()) continue;
+      const el = node.parentElement;
+      if (!el || el.closest("pre, table, code, img, svg, .code-block")) continue;
+      run.selectNodeContents(node);
+      for (const b of run.getClientRects()) {
+        if (b.width < 8) continue;
+        lefts.push(Math.round(b.left - t.left));
+      }
+    }
+    // One measured line is enough: a short reply is still a reply, and refusing
+    // to measure it is what left the user's chips at the window edge.
+    if (!lefts.length) return { l: 0, r: 0, source: "none", lines: 0 };
+    const buckets = new Map();
+    for (const v of lefts) {
+      const k = Math.round(v / 4) * 4;
+      buckets.set(k, (buckets.get(k) || 0) + 1);
+    }
+    let bestK = 0;
+    let bestHits = -1;
+    for (const [k, hits] of buckets) {
+      if (hits > bestHits || (hits === bestHits && k < bestK)) {
+        bestK = k;
+        bestHits = hits;
+      }
+    }
+    const l = Math.max(0, bestK);
+    return { l, r: l, source: "text", lines: lefts.length };
+  }
+
+  function publishChipColumn(force) {
+    const pick = currentColumnTurn();
+    if (!pick) return;
+    const t = pick.turn.getBoundingClientRect();
+    if (!t.width) return;
+    const m = textColumnInset(t, pick.text);
+    // Kept on the page so a live probe (or the user reporting a miss) can read
+    // which pass answered without opening the extension's isolated world.
+    window.__zsGemColDebug = {
+      l: m.l,
+      r: m.r,
+      source: m.source,
+      lines: m.lines,
+      turnW: Math.round(t.width),
+      textW: Math.round(pick.text.getBoundingClientRect().width)
+    };
+    // Also mirrored onto the html element: DevTools' default console runs in the
+    // page world and cannot see the isolated one, so `$0`-style poking or
+    // "document.documentElement.dataset.zsGemCol" is how the user reports a miss.
+    document.documentElement.dataset.zsGemCol =
+      `${m.source}:${m.l}/${m.r} lines:${m.lines} turnW:${Math.round(t.width)}`;
+    const sig = `${m.l}/${m.r}/${m.source}`;
+    if (!force && sig === colSig) return;
+    colSig = sig;
+    const st = document.documentElement.style;
+    st.setProperty(COL_L, `${m.l}px`);
+    st.setProperty(COL_R, `${m.r}px`);
+  }
+
+  function installChipColumnWatch() {
+    if (window.__zsGemColWatch) return;
+    window.__zsGemColWatch = true;
+    const kick = () => {
+      try {
+        publishChipColumn(false);
+      } catch (_) {
+        /* layout not ready yet; the next tick retries */
+      }
+    };
+    window.addEventListener("resize", () => publishChipColumn(true), { passive: true });
+    // A background tab throttles setInterval (verified live: the value stayed at
+    // its first reading until the tab was brought to front), so the cheap
+    // listener-driven kicks matter as much as the timer: scrolling and coming
+    // back to the tab both re-measure immediately.
+    window.addEventListener("scroll", kick, { passive: true, capture: true });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) publishChipColumn(true);
+    });
+    setInterval(kick, 1500);
+  }
+
+  // ── Chip anchor + mask target for injected USER turns ─────────────────────
+  // Gemini's injected tool-result turn is a normal user message: the bubble
+  // (span.user-query-bubble-with-background) carries the JSON we sent. Pinning
+  // the chip at the turn root made it read like a sticker floating above the
+  // bubble, so the chip is anchored INSIDE the bubble instead and only the text
+  // inside that bubble is masked. Result: the chip reads as part of the user's
+  // own message, exactly where the result payload sits.
+  //
+  // Not for our own system turns (bootstrap/reminder): those must keep the
+  // whole turn masked with the status chip pinned at turn level, otherwise the
+  // giant CONTEXT prompt would survive as a visible bubble.
+  const BUBBLE_SEL = ".user-query-bubble-with-background, .query-content";
+  const BUBBLE_TEXT_SEL = ".query-text, .query-text-line, .query-text-line p";
+
+  function userBubble(item) {
+    if (!isUserItem(item)) return null;
+    const b = item.querySelector(BUBBLE_SEL);
+    if (!b || b === item) return null;
+    // Mask target must exist, otherwise masking would hide the bubble that now
+    // holds our chip (chip invisible + rebuild loop).
+    if (!b.querySelector(BUBBLE_TEXT_SEL)) return null;
+    const txt = itemText(item);
+    if (typeof ZS !== "undefined" && ZS.isSysPromptText && ZS.isSysPromptText(txt)) return null;
+    return b;
+  }
+  // Chip goes into the bubble's inner flex row, next to where the text was.
+  const chipAnchor = (item) => {
+    const b = userBubble(item);
+    return b ? (b.querySelector(".horizontal-container") || b) : null;
+  };
+  // Mask only the injected text line inside the bubble - never the bubble.
+  const injectedHideNode = (item) => {
+    const b = userBubble(item);
+    return b ? b.querySelector(BUBBLE_TEXT_SEL) : null;
+  };
+
   return {
     id: "gemini",
     displayName: "Gemini",
@@ -673,6 +1049,11 @@ const ZSProvider = (() => {
     // wiping any chip placed inside it. Tell the core to anchor chips at the
     // turn-element level instead, where they survive those re-renders.
     chipAtItemLevel: true,
+    // Result chips live inside the user's bubble (see chipAnchor above) and
+    // only the injected text line is masked (injectedHideNode), so the bubble
+    // frame keeps the chip visible.
+    chipAnchor,
+    injectedHideNode,
     // The "Working…" input cover overshoots the editor box by this many px on
     // each side. Gemini's Quill keeps typed text near the rounded corners, so a
     // few px of bleed hides the slivers that would otherwise peek (see placeBar /
@@ -686,12 +1067,15 @@ const ZSProvider = (() => {
     // watcher uses this to refuse finalizing before this send's reply turn
     // exists (fixes premature loop.end on the previous turn's stable text).
     reliableCounts: true,
-    // Shown as a permanent, non-intrusive notice in the snapgentV3 panel.
-    // Gemini drifts away from emitting tool blocks after a while in long
-    // sessions - observed live, model behavior, not something the prompt fixes.
-    unstableWarning:
-      "Gemini may stop using tools in long sessions. Remind it to use the commands, or start a new chat",
-    init({ diag: d } = {}) { if (d) diag = d; },
+    init({ diag: d } = {}) {
+      if (d) diag = d;
+      // Keep our chip turns on Gemini's readable column (publishChipColumn).
+      try {
+        installChipColumnWatch();
+      } catch (_) {
+        /* no DOM yet (unit test harness); harmless */
+      }
+    },
     // turns
     allItems, isUserItem, isAssistantItem, itemText, classifyText,
     assistantCount, userCount, lastAssistant, readAssistant,
@@ -706,5 +1090,9 @@ const ZSProvider = (() => {
     // actions
     attachImages, clearAttachments, conversationKey,
     installSendHooks, findToolBlockSpot,
+    // Exported for live probes/tests: re-measure the readable column now, and
+    // read which pass answered (markdown box vs text lines) plus the numbers.
+    publishChipColumn,
+    chipColumnDebug: () => window.__zsGemColDebug || null,
   };
 })();

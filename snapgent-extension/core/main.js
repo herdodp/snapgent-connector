@@ -2423,7 +2423,7 @@
       const txt = P.classifyText(it, ".zs-chip");
       // The bootstrap turn and every rider both carry the marker - either one
       // means the rules were fully stated here, so stop counting.
-      if (txt.includes(ZS.SYS_MARKER)) break;
+      if (ZS.isSysPromptText(txt)) break;
       if (!P.isUserItem(it)) continue;
       if (ZSParse.isInjectedFeedback(txt)) results++;
       else users++;
@@ -2916,7 +2916,20 @@
         // Fully injected turn (result / sys) → hide what carries the injected
         // text. On a dual-side turn that is only the user bubble, so the
         // model's answer in the same container survives (see injectedHidePart).
-        if (chip.parentElement !== item) item.insertBefore(chip, item.firstChild);
+        // A provider may ALSO supply chipAnchor(item) for these turns: Gemini's
+        // injected result turn IS the user's own message bubble, and the user
+        // asked for the result chip to sit inside that bubble (so it reads as
+        // part of their message) instead of floating above it as a sticker.
+        // Same anchor the non-whole branch uses; default remains the turn root.
+        const anchor = (P.chipAnchor && P.chipAnchor(item)) || item;
+        const wantLast = !!P.chipAppend && anchor === item;
+        const trailRef = wantLast && P.chipTrailRef ? P.chipTrailRef(item) : null;
+        const inPlace = chip.parentElement === anchor &&
+          (wantLast ? chip.nextElementSibling === trailRef : anchor.firstElementChild === chip);
+        if (!inPlace) {
+          if (wantLast) anchor.insertBefore(chip, trailRef);
+          else anchor.insertBefore(chip, anchor.firstChild);
+        }
         hideInjectedWhole(item);
       } else {
         unhideInjectedWhole(item);
@@ -3063,7 +3076,7 @@
       }
 
       // 1. System-prompt bootstrap turn → animated while starting, gear when done.
-      if (txt.includes(ZS.SYS_MARKER)) {
+      if (ZS.isSysPromptText(txt)) {
         const phase = A.starting ? "run" : "sys";
         if (item.dataset.zs !== "sys" || item.dataset.zphase !== phase || chipGone) {
           this.chip(item, { label: "Starting Up", category: "tool", phase, cls: "sys", whole: true });
@@ -3491,7 +3504,7 @@
   const ui = (() => {
     let root, bar, stateEl, actionBtn, stopBtn, targetSelect, switchBtn, menuEl, unstableEl, hideBtn, dotBtn;
     let hudHidden = false; // collapsed status card → round blue button (persisted)
-    let targetBtn, targetMenuEl;
+    let targetBtn, targetMenuEl, targetNameEl;
     let cover, coverRaf, barRaf;
     let openMenuFn = null; // set by build(); lets the popup force the panel open via runtime message
     let bridgeOk = false, workspaceReady = false, workspaceProbePending = false, workspaceProbeAt = 0;
@@ -3559,6 +3572,10 @@
       stopBtn = root.querySelector("#zs-stop");
       targetSelect = root.querySelector("#zs-target");
       targetBtn = root.querySelector("#zs-target-btn");
+      // Cached at build: a provider's barMount() can re-parent #zs-bar into the
+      // site's own container (Gemini does), after which root.querySelector()
+      // no longer reaches the label and it would freeze on the first value.
+      targetNameEl = root.querySelector("#zs-target-name");
       targetMenuEl = root.querySelector("#zs-target-menu");
       switchBtn = root.querySelector("#zs-switch");
       hideBtn = root.querySelector("#zs-bar-hide");
@@ -3788,7 +3805,7 @@
       }
       targetSelect.value = id;
       targetSelect.disabled = false; // never locked: the user may switch MCP target at any time
-      const nameEl = root && root.querySelector("#zs-target-name");
+      const nameEl = targetNameEl || (root && root.querySelector("#zs-target-name"));
       if (nameEl) nameEl.textContent = (options.find((option) => option.id === id) || { name: id }).name;
       if (targetMenuEl && !targetMenuEl.hidden) renderTargetMenu();
     }
@@ -5481,6 +5498,7 @@
   function isZsSignalText(txt) {
     if (!txt) return false;
     if (txt.includes(ZS.SYS_MARKER)) return true;
+    if (typeof ZS.isSysPromptText === "function" && ZS.isSysPromptText(txt)) return true;
     // The injected result caption used to be matched only at a line start. But
     // ChatGPT's 2026-11 turn container glues the chip label into the SAME
     // textContent ("list_commands · resultOutput of 'list_commands': …"), so
@@ -5642,7 +5660,7 @@
         continue;
       }
       const txt = P.classifyText(item, ".zs-chip");
-      if (txt.includes(ZS.SYS_MARKER) ||
+      if (ZS.isSysPromptText(txt) ||
           (P.isUserItem(item) && ZSParse.isInjectedFeedback(txt))) {
         hideInjectedWhole(item);
       }

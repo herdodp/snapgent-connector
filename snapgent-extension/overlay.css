@@ -10,6 +10,11 @@
 /* ── status bar (anchored above the composer; left/top/width set inline) ──── */
 #zs-bar {
   position: fixed;
+  /* Gemini mounts the bar INSIDE .input-area-container, which the site styles
+     with pointer-events:none (measured live 2026-11-25: bar computed pe=none and
+     elementFromPoint over Start hit Gemini's input-container). The bar is our own
+     interactive UI, so restore hit-testing here even under such an ancestor. */
+  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -1091,6 +1096,123 @@ html.zs-light.zs-site-chatgpt .zs-chip.run .zs-spin {
   border-top-color: #a16207;
 }
 
+/* Gemini: the tool row follows GEMINI'S OWN MATERIAL SURFACES, not Snapgent's
+   yellow/black theme and not a copy of ChatGPT's cream card. The earlier pass
+   copied ChatGPT's metrics (12px radius, cream/amber) and the user rejected it
+   on a screenshot (2026-11-23: "masih kurang, sesuaikan sama css gemini") -
+   gold chips read as a foreign element inside a Google Material page.
+   Every token below was measured live on gemini.google.com (signed-out dark
+   theme, 2026-11-23) instead of guessed:
+     - composer/input surface  rgb(30, 31, 32)  = #1e1f20
+     - tonal chip surface      rgb(23, 23, 23)  = #171717  (e.g. "Agent on.")
+     - body text               rgb(227, 227, 227) = #e3e3e3
+     - secondary text / icons  rgb(196, 199, 197) = #c4c7c5
+     - page background         rgb(15, 15, 15)  = #0f0f0f
+     - composer shadow         rgba(0, 0, 0, 0.16) 0 2px 8px -2px
+     - UI font                 "Google Sans Flex", "Google Sans", Helvetica...
+   Radii: Gemini pills are fully round (9999px) and its composer is 32px, so a
+   20px card radius sits between the two and stays a Gemini shape without the
+   stadium look an expanded body would get from a pill.
+   Width defaults to 100% of the HOST turn; a result chip overrides that to
+   Gemini's own user-bubble geometry (right-aligned pill, 452px) further down -
+   see "the two SIDES of one exchange". */
+html.zs-site-gemini .zs-chip {
+  --cat: #c4c7c5;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 20px;
+  background: #1e1f20;
+  border: 1px solid #2c2e30;
+  color: #e3e3e3;
+  box-shadow: rgba(0, 0, 0, 0.16) 0 2px 8px -2px;
+  font-family: "Google Sans Flex", "Google Sans", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+html.zs-site-gemini .zs-chip:hover { background: #26282a; border-color: #3c4043; }
+html.zs-site-gemini .zs-chip-head { gap: 10px; padding: 9px 16px; }
+html.zs-site-gemini .zs-chip-tx {
+  font-size: 14px; font-weight: 500; letter-spacing: 0.1px; color: #e3e3e3;
+}
+/* Gemini does not use a monospace face for metadata; keep the detail sans so the
+   card matches the surrounding Google Material type scale. */
+html.zs-site-gemini .zs-chip-dt {
+  font-size: 12.5px; font-weight: 400; font-family: inherit;
+  color: #c4c7c5; opacity: 1; margin-left: 4px;
+}
+html.zs-site-gemini .zs-chip:not(.result) .zs-chip-ic { color: #9aa0a6; }
+html.zs-site-gemini .zs-chip-cv { color: #c4c7c5; opacity: 0.7; }
+html.zs-site-gemini .zs-chip.run .zs-spin {
+  width: 14px; height: 14px;
+  border-color: rgba(138, 180, 248, 0.25);
+  border-top-color: #8ab4f8;
+}
+/* Running sweep in Gemini's primary blue (Google dark-theme #a8c7fa), never the
+   Snapgent amber: the shimmer must not reintroduce the gold the user rejected. */
+html.zs-site-gemini .zs-chip.run {
+  background-color: rgba(168, 199, 250, 0.06);
+  background-image: linear-gradient(90deg,
+    transparent 0%, rgba(168, 199, 250, 0.14) 50%, transparent 100%);
+}
+/* State colours from the Material 3 dark palette Gemini itself uses. */
+html.zs-site-gemini .zs-chip.done { --cat: #81c995; }
+html.zs-site-gemini .zs-chip.done .zs-chip-ic { color: #81c995; }
+html.zs-site-gemini .zs-chip.err {
+  --cat: #f28b82; border-color: rgba(242, 139, 130, 0.4); color: #f2b8b5;
+}
+html.zs-site-gemini .zs-chip.err .zs-chip-ic { color: #f28b82; }
+html.zs-site-gemini .zs-chip.result,
+html.zs-site-gemini .zs-chip.sys {
+  --cat: #c4c7c5; color: #e3e3e3;
+}
+html.zs-site-gemini .zs-chip.idle { --cat: #9aa0a6; color: #c4c7c5; }
+/* The result chip lives in <user-query>, whose own bubble is display:none'd by
+   .zs-hidden. Paint it as Gemini's TONAL chip surface (#171717, the same tone as
+   the "Agent on." pill) so a request and its result read as one exchange instead
+   of a stray amber card indented under the reply. */
+html.zs-site-gemini user-query .zs-chip,
+html.zs-site-gemini user-query .zs-chip.result {
+  background: #171717;
+  border-color: #2c2e30;
+  color: #e3e3e3;
+}
+html.zs-site-gemini user-query .zs-chip:hover { background: #1f2021; border-color: #3c4043; }
+html.zs-site-gemini .zs-chip.open .zs-chip-body { border-top-color: #2c2e30; }
+html.zs-site-gemini .zs-chip-body pre {
+  font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; color: #e3e3e3;
+}
+/* Gemini's light theme (body loses .dark-theme): Material light surfaces. Kept
+   last and more specific so it wins over the dark defaults above. */
+html.zs-site-gemini body:not(.dark-theme) .zs-chip {
+  --cat: #444746;
+  background: #f0f4f9;
+  border-color: #dde3ea;
+  color: #1f1f1f;
+  box-shadow: rgba(0, 0, 0, 0.08) 0 1px 4px -1px;
+}
+html.zs-site-gemini body:not(.dark-theme) .zs-chip:hover { background: #e9eef6; border-color: #c4c7c5; }
+html.zs-site-gemini body:not(.dark-theme) .zs-chip-tx { color: #1f1f1f; }
+html.zs-site-gemini body:not(.dark-theme) .zs-chip-dt { color: #444746; }
+html.zs-site-gemini body:not(.dark-theme) .zs-chip.run {
+  background-color: rgba(11, 87, 208, 0.05);
+  background-image: linear-gradient(90deg,
+    transparent 0%, rgba(11, 87, 208, 0.12) 50%, transparent 100%);
+}
+html.zs-site-gemini body:not(.dark-theme) .zs-chip.run .zs-spin {
+  border-color: rgba(11, 87, 208, 0.25); border-top-color: #0b57d0;
+}
+html.zs-site-gemini body:not(.dark-theme) .zs-chip.done .zs-chip-ic { color: #1e8e3e; }
+html.zs-site-gemini body:not(.dark-theme) .zs-chip.err { border-color: rgba(179, 38, 30, 0.35); color: #b3261e; }
+html.zs-site-gemini body:not(.dark-theme) .zs-chip.err .zs-chip-ic { color: #b3261e; }
+html.zs-site-gemini body:not(.dark-theme) user-query .zs-chip,
+html.zs-site-gemini body:not(.dark-theme) user-query .zs-chip.result {
+  background: #ffffff; border-color: #dde3ea; color: #1f1f1f;
+}
+html.zs-site-gemini body:not(.dark-theme) .zs-chip.open .zs-chip-body { border-top-color: #dde3ea; }
+html.zs-site-gemini body:not(.dark-theme) .zs-chip-body pre { color: #1f1f1f; }
+/* Gemini no longer renders the "⚠ unstable" pill (the provider stopped
+   declaring unstableWarning), so the tonal overrides that existed only to
+   de-yellow it inside Gemini are gone with it. */
+
 /* Injected RESULT → sit in the user's blue bubble.
    ChatGPT delivers the tool feedback AS a user message, so hiding it and
    painting a standalone dark card made the result read as the assistant's own
@@ -1488,3 +1610,184 @@ html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result).err .zs-chip-ic,
 html.zs-site-chatgpt.dark .zs-chip:not(.result).err .zs-chip-ic { color: #ef6b6b; }
 html.zs-site-chatgpt[data-theme="dark"] .zs-chip:not(.result).err,
 html.zs-site-chatgpt.dark .zs-chip:not(.result).err { border-color: rgba(239, 68, 68, 0.45); }
+
+/* Gemini: the two SIDES of one exchange, each where it belongs.
+   Requested 2026-11-23: "chip command taruh di atas agent chat gemini, result
+   command taruh di chat user ke gemini".
+
+   Measured live (CDP, Chrome 157, 2026-11-23) instead of assumed:
+     - <model-response>      left 300, width 911   → the AGENT column.
+     - <user-query>          left 300, width 911, but its own bubble
+                             `span.user-query-bubble-with-background` is
+                             right-aligned inside it, bg #171717, radius 40px,
+                             max-width 452px, padding 20px/28px.
+   So the command chip (host: <model-response>) is pinned to the top of the
+   agent column, and a RESULT chip (host: <user-query>, i.e. the turn that
+   carries `Output of '…'` back to Gemini) is painted as the user's own
+   message bubble on the right - not as a second agent card on the left, which
+   is what made the loop read as one endless column of grey bars.
+
+   Only OUR turns that are NOT user content (the bootstrap "Starting Up" / the
+   Reminder rider) keep the full-width left card: they are system prompts we
+   type, not something the user said.
+
+   The raw command wrapper (`div:has(message-content.zs-cmd-mask)`) used to
+   stay visible as a 40px "Gemini berkata …" strip with a copy button and an
+   ellipsis under each masked block — exactly the stray `⧉ …` rows. Gemini's
+   chat history also spaces turns with `row-gap:52px`; 10px keeps one loop
+   readable without the giant holes between tool calls. */
+html.zs-site-gemini .conversation-container { align-items: stretch !important; }
+
+/* Agent side. Content-sized, not column-sized: a 40-character label stretched
+   across 911px left its chevron ~700px away from the text, which is the other
+   half of the "kurang rapih" in the 23 Nov screenshot. 620px keeps a long tool
+   path readable while the whole card still hugs its own content.
+   The left/right margin is the MEASURED inset of Gemini's readable column
+   (--zs-gem-col-*): on a wide window the reply markdown is capped and centered
+   inside the turn, so a card pinned at the turn edge floats far outside the
+   text the user reads. The provider publishes the inset; 0px (the common case,
+   where the column already fills the turn) leaves the old geometry untouched. */
+html.zs-site-gemini model-response .zs-chip {
+  width: fit-content !important;
+  max-width: min(100%, 620px) !important;
+  margin: 6px var(--zs-gem-col-r, 0px) 0 var(--zs-gem-col-l, 0px) !important;
+}
+html.zs-site-gemini model-response > div:has(message-content.zs-cmd-mask) {
+  display: none !important;
+}
+
+/* Our system turns (bootstrap / reminder): full turn width, left like before.
+   The horizontal padding is Gemini's own readable-column inset (measured by the
+   provider, see --zs-gem-col-*), so a system card and a result pill both stop
+   where the reply text stops instead of hugging the window edge. box-sizing is
+   pinned because width:100% + padding would otherwise overflow. */
+html.zs-site-gemini user-query:has(.zs-chip) {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 var(--zs-gem-col-r, 0px) 0 var(--zs-gem-col-l, 0px) !important;
+  box-sizing: border-box !important;
+  min-height: 0 !important;
+  justify-content: flex-start !important;
+}
+html.zs-site-gemini user-query:has(.zs-chip) .zs-chip {
+  width: fit-content !important;
+  max-width: min(100%, 620px) !important;
+  margin: 6px 0 0 0 !important;
+}
+
+/* User side: a result / error / image feedback chip IS the user's message to
+   Gemini, so it takes Gemini's own user-bubble geometry (see the live numbers
+   above): right-aligned, tonal #171717, pill 40px, capped at 452px. */
+html.zs-site-gemini user-query:has(.zs-chip.result),
+html.zs-site-gemini user-query:has(.zs-chip.err),
+html.zs-site-gemini user-query:has(.zs-chip.screen) {
+  justify-content: flex-end !important;
+}
+html.zs-site-gemini user-query .zs-chip.result,
+html.zs-site-gemini user-query .zs-chip.err,
+html.zs-site-gemini user-query .zs-chip.screen {
+  width: auto !important;
+  max-width: 452px !important;
+  flex: 0 1 auto !important;
+  margin: 6px 0 0 auto !important;
+  background: #171717 !important;
+  border-color: transparent !important;
+  border-radius: 40px !important;
+  box-shadow: none !important;
+}
+/* An expanded card is not a pill: square the corners once its body is open. */
+html.zs-site-gemini user-query .zs-chip.result.open,
+html.zs-site-gemini user-query .zs-chip.err.open,
+html.zs-site-gemini user-query .zs-chip.screen.open { border-radius: 24px !important; }
+
+/* Result chip sits INSIDE the user bubble (provider chipAnchor): the bubble
+   already paints the tonal pill, so the chip drops its own surface and simply
+   occupies the bubble's row - exactly where the result payload was. Two pills
+   stacked (bubble + chip) would read as a stray floating card, which is the
+   thing being fixed. */
+html.zs-site-gemini user-query .user-query-bubble-with-background .zs-chip,
+html.zs-site-gemini user-query .query-content .zs-chip {
+  background: transparent !important;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  width: auto !important;
+  max-width: 100% !important;
+  flex: 0 1 auto !important;
+}
+html.zs-site-gemini user-query .user-query-bubble-with-background .zs-chip-head,
+html.zs-site-gemini user-query .query-content .zs-chip-head {
+  padding: 0 !important;
+  gap: 8px;
+}
+html.zs-site-gemini user-query .user-query-bubble-with-background .zs-chip:hover,
+html.zs-site-gemini user-query .query-content .zs-chip:hover {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+/* The bubble itself is the pill now. Gemini's own bubble numbers, measured
+   live: #171717, radius 40px, capped at 452px, right-aligned. */
+html.zs-site-gemini user-query .user-query-bubble-with-background {
+  max-width: 452px !important;
+  background: #171717 !important;
+  border-radius: 40px !important;
+}
+html.zs-site-gemini body:not(.dark-theme) user-query .user-query-bubble-with-background {
+  background: #e9eef6 !important;
+}
+/* Gemini draws two "collapsed prompt" decorations over the bubble's right end:
+   `div.luminous-expand-fade` (a transparent -> #171717 gradient, measured live
+   at x1091..1183) and the chevron `div.luminous-toggle-pill` + its 40px
+   `button.mdc-icon-button`. Both exist to fade a truncated user prompt and
+   reveal it; on a bubble whose text we already mask they only paint a scrim
+   over our chip - the badge read "· resul" with the tail and our own chevron
+   buried under the gradient. There is nothing to expand in these bubbles, so
+   drop both, scoped to turns that contain a chip. */
+html.zs-site-gemini user-query:has(.zs-chip) .luminous-expand-fade,
+html.zs-site-gemini user-query:has(.zs-chip) button:has(> .luminous-toggle-pill) {
+  display: none !important;
+}
+/* Compact rhythm for chip turns (2026-11-23, measured live on CDP 9231).
+   The screenshot the user sent still read "kurang rapih" because a masked turn
+   left two holes nobody could explain from the CSS alone:
+     - `div.luminous-actions-container` (the copy/edit toolbar belonging to the
+       user bubble) stays rendered underneath a masked prompt: the turn measured
+       112px while its bubble was 60px, actions row 36px tall at top 44 - the
+       extra 52px is exactly the gap that made a tool call and its result look
+       unrelated.
+     - the bubble kept Gemini's 20px/28px padding plus a 52px left inset for
+       text that no longer exists, so the result pill floated far from its row.
+   Both are decorations of a prompt nobody can read, so they go away only on
+   turns that carry a chip; a prompt typed by the user keeps toolbar, padding
+   and full width. */
+html.zs-site-gemini user-query:has(.zs-chip) .luminous-actions-container,
+html.zs-site-gemini model-response:has(.zs-chip) .luminous-actions-container {
+  display: none !important;
+}
+html.zs-site-gemini user-query:has(.zs-chip) :is(user-query-content, .user-query-container) {
+  min-height: 0 !important;
+  height: auto !important;
+}
+html.zs-site-gemini user-query:has(.zs-chip) .query-content {
+  padding-left: 0 !important;
+  margin-right: 0 !important;
+}
+html.zs-site-gemini user-query:has(.zs-chip) .user-query-bubble-with-background {
+  padding: 10px 18px !important;
+}
+/* One tool loop reads as one block: 6px between the cards of a chip exchange
+   instead of Gemini's 52px history gap. */
+html.zs-site-gemini .conversation-container:has(.zs-chip) { row-gap: 6px !important; }
+/* Scoped to a chat that actually carries a chip: an unscoped rule tightened the
+   turn spacing of every Gemini conversation. */
+html.zs-site-gemini infinite-scroller.chat-history:has(.zs-chip) { row-gap: 10px !important; }
+/* Stray "⧉ …" row between cards: the masked code wrapper's header (copy +
+   overflow) can sit one level deeper than the direct child the rule above
+   targets after Gemini re-renders. Hide any masked wrapper that carries the
+   header but no code. */
+html.zs-site-gemini .zs-cmd-mask div:has(> button[aria-label*="opy"]):not(:has(pre)),
+html.zs-site-gemini .zs-cmd-mask div:has(> button[aria-label*="Copy"]):not(:has(pre)) {
+  display: none !important;
+}

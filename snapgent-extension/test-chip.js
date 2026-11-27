@@ -15,6 +15,7 @@ const fs = require("fs");
 
 const src = fs.readFileSync(__dirname + "/core/main.js", "utf8");
 const css = fs.readFileSync(__dirname + "/overlay.css", "utf8");
+const gem = fs.readFileSync(__dirname + "/providers/gemini.js", "utf8");
 
 let pass = 0;
 let fail = 0;
@@ -189,6 +190,121 @@ ok("expanded state is mirrored on the turn element",
   /else delete item\.dataset\.zopen/.test(src));
 ok("a recycled turn drops the expanded state with the rest",
   /delete item\.dataset\.zopen/.test(src));
+
+// ── 13. Gemini's collapsed-prompt scrim never paints over our chip ─────────
+// Measured live on the real gemini.google.com tab (CDP, 2026-11-23): Gemini
+// overlays a `div.luminous-expand-fade` gradient (x1091..1183, #171717 solid
+// from 56px) plus a 40px `button.mdc-icon-button`/`.luminous-toggle-pill` over
+// the right end of a user bubble. On a bubble whose prompt we already mask
+// they turned "list_commands · result" into "· resul" and buried our chevron.
+// Both must be dropped - but ONLY inside our chip turns: a user's own long
+// prompt still needs its fade/expand chevron.
+ok("Gemini's expand fade is hidden inside chip turns",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \.luminous-expand-fade[^{]*\{[^}]*display: none !important/.test(css));
+ok("Gemini's collapse toggle is hidden inside chip turns",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) button:has\(> \.luminous-toggle-pill\)[^{]*\{[^}]*display: none !important/.test(css));
+// Mutation check: an unscoped rule would also kill the fade on the user's own
+// truncated prompts, so the `:has(.zs-chip)` scope is part of the behaviour.
+ok("the scrim rules stay scoped to chip turns",
+  !/html\.zs-site-gemini user-query \.luminous-expand-fade[^{]*\{[^}]*display: none/.test(css) &&
+  !/html\.zs-site-gemini user-query button:has\(> \.luminous-toggle-pill\)[^{]*\{[^}]*display: none/.test(css));
+
+// ── 14. Chip turns stay compact; the agent card hugs its own label ─────────
+// Measured live (CDP 9231, 2026-11-23): a masked user turn was 112px tall while
+// its bubble was 60px - the leftover `div.luminous-actions-container` (36px at
+// top 44) was the 52px hole between a tool call and its result. The agent card
+// was also stretched to the full 911px column, leaving its chevron ~700px from
+// the label. Both rules are scoped to chip turns so a real prompt keeps its
+// toolbar, padding and full width.
+ok("the empty action toolbar is dropped on chip turns",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \.luminous-actions-container,\s*html\.zs-site-gemini model-response:has\(\.zs-chip\) \.luminous-actions-container\s*\{[^}]*display: none !important/.test(css));
+ok("a chip turn collapses to its bubble height",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) :is\(user-query-content, \.user-query-container\)\s*\{[^}]*min-height: 0 !important/.test(css));
+ok("the agent card is sized by its content, not the column",
+  /html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*width: fit-content !important/.test(css) &&
+  /html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*max-width: min\(100%, 620px\) !important/.test(css));
+// Mutation check: forcing the card back to the full column must fail this.
+ok("the agent card no longer stretches to the agent column",
+  !/html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*\n\s*width: 100% !important/.test(css));
+
+// ── 15. Chips sit on Gemini's readable column, both sides ──────────────────
+// Screenshot from the user, 2026-11-23 16:57: command cards hugged the far left
+// of the window and the "· result" pills ran past the right edge of the reply
+// text. Cause measured live on the real page: Gemini caps the READABLE column
+// and centers it inside the turn (the reply markdown stops well short of the
+// turn box on a wide window), while the turn itself keeps the full scroller
+// width. Our chips hang off the TURN edges, so they end up outside the text.
+// The cap is a Gemini-side layout preference and its width depends on the
+// window, so the inset is measured at runtime and published as
+// --zs-gem-col-l / --zs-gem-col-r; a hardcoded px value would break at the next
+// window size.
+ok("the agent card starts where Gemini's reply text starts",
+  /html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*margin: 6px var\(--zs-gem-col-r, 0px\) 0 var\(--zs-gem-col-l, 0px\) !important/.test(css));
+ok("a chip turn is padded by the measured column inset",
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \{[^}]*padding: 0 var\(--zs-gem-col-r, 0px\) 0 var\(--zs-gem-col-l, 0px\) !important/.test(css) &&
+  /html\.zs-site-gemini user-query:has\(\.zs-chip\) \{[^}]*box-sizing: border-box !important/.test(css));
+// Mutation check: any fixed inset would satisfy the look on ONE window size and
+// break the alignment on the next, which is exactly the report being fixed.
+ok("the column inset is measured, never hardcoded in px",
+  !/html\.zs-site-gemini model-response \.zs-chip\s*\{[^}]*margin: 6px 0 0 \d+px/.test(css) &&
+  !/html\.zs-site-gemini user-query:has\(\.zs-chip\) \{[^}]*padding: 0 \d+px 0 \d+px/.test(css));
+ok("the provider measures the readable column from the reply itself",
+  /const COL_L = "--zs-gem-col-l"/.test(gem) &&
+  /const COL_R = "--zs-gem-col-r"/.test(gem) &&
+  /function currentColumnTurn\(\)/.test(gem) &&
+  /if \(!t\.closest\("\.conversation-container"\)\) continue/.test(gem) &&
+  /st\.setProperty\(COL_L, `\$\{m\.l\}px`\)/.test(gem) &&
+  /st\.setProperty\(COL_R, `\$\{m\.r\}px`\)/.test(gem));
+ok("the provider re-measures on resize and on later re-layout",
+  /addEventListener\("resize", \(\) => publishChipColumn\(true\)/.test(gem) &&
+  /setInterval\(kick, 1500\)/.test(gem) &&
+  /installChipColumnWatch\(\);/.test(gem));
+
+// ── 16. The inset is measured from text lines when .markdown spans the turn ──
+// Reported 2026-11-23 17:44 by the user AFTER reloading the extension: chips
+// still sat at the window edge while the reply text started ~340px further in.
+// Cause: their Gemini build keeps `.markdown` as wide as the turn and caps the
+// blocks INSIDE it, so the first measurement pass answered 0/0. The provider now
+// falls back to measuring the rendered prose lines and mirrors the right inset,
+// because Gemini centres that column inside the turn.
+ok("the provider measures the readable column from text lines when the box spans the turn",
+  /function textColumnInset\(t, text\)/.test(gem) &&
+  /document\.createTreeWalker\(text, NodeFilter\.SHOW_TEXT, null\)/.test(gem) &&
+  /if \(l0 >= 4 \|\| r0 >= 4\) return \{ l: l0, r: r0, source: "markdown", lines: 0 \}/.test(gem));
+ok("the text-line pass ignores blocks that legitimately run wider",
+  /el\.closest\("pre, table, code, img, svg, \.code-block"\)/.test(gem));
+ok("the text-line pass takes the most common line start, not the first one",
+  /const buckets = new Map\(\)/.test(gem) && /Math\.round\(v \/ 4\) \* 4/.test(gem));
+ok("the right inset mirrors the left one because the column is centred",
+  /return \{ l, r: l, source: "text", lines: lefts\.length \}/.test(gem));
+ok("a miss is debuggable from the page itself",
+  /window\.__zsGemColDebug = \{/.test(gem) && /chipColumnDebug: \(\) => window\.__zsGemColDebug \|\| null/.test(gem) &&
+  /dataset\.zsGemCol/.test(gem));
+
+// ── 17. Gemini carries no "⚠ unstable" label ───────────────────────────────
+// The pill described Gemini dropping tool blocks in long sessions. It no longer
+// reflected live behavior and the user asked for it to go, so the provider must
+// stop declaring unstableWarning - while providers that still need the notice
+// keep theirs, since the core renders the pill only when a provider opts in.
+ok("gemini no longer declares an unstable warning",
+  !/unstableWarning\s*:/.test(gem));
+ok("the pill still has a renderer for providers that declare it",
+  /P\.unstableWarning \? `<button id="zs-unstable"/.test(src));
+const glmTs = fs.readFileSync(__dirname + "/providers/glm.js", "utf8");
+ok("providers that still need the warning keep theirs",
+  /unstableWarning\s*:/.test(glmTs));
+
+// ── 18. Chat spacing stays Gemini's own unless a chip is present ────────────
+// Reviewer catch on PR #14: an unscoped
+// `infinite-scroller.chat-history { row-gap: 10px }` retightened the turn gap
+// of EVERY Gemini conversation, chip or not. Only a chat that actually carries
+// a chip may be respaced, so each such rule has to be scoped with :has(.zs-chip).
+const chatHistoryRules = [...css.matchAll(/[^{}]*infinite-scroller\.chat-history[^{}]*\{[^}]*\}/g)]
+  .map((m) => m[0]);
+ok("the chip-turn chat-history rule exists", chatHistoryRules.length > 0);
+ok("chat-history spacing is scoped to chats that carry a chip",
+  chatHistoryRules.every((rule) => rule.split("{")[0].includes(":has(.zs-chip)")),
+  chatHistoryRules.map((r) => r.split("{")[0].trim()));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

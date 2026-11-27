@@ -10,6 +10,27 @@ const ZS = (() => {
   // content script can reliably recognise (and camouflage) the bootstrap turn.
   const APP_NAME = "snapgentV3";
   const SYS_MARKER = "⟦ZS-SYS⟧";
+  // Marker-independent signature for the SAME bootstrap turn. Gemini's Angular
+  // renderer DROPS the ⟦ZS-SYS⟧ marker from the rendered user turn (measured
+  // live 2026-11-23: both textContent and the collapsed 4-line preview start at
+  // "CONTEXT:"), so a marker-only test never recognised the bootstrap there -
+  // the whole system prompt stayed on screen as a giant framed bubble, and
+  // reopening such a chat read as "No agent". Anchored to the START of the
+  // turn, AND to the prompt's own opening words: matching their exact anchored
+  // opening makes a stripped marker degrade to "still hidden" instead of
+  // "raw prompt visible". `CONTEXT:` alone is not a signature: the two bootstrap
+  // prompts we fabricate open with one of exactly two prefixes, so anything
+  // else after `CONTEXT:` is a user sentence, not our turn. Allowing arbitrary text between the two words
+  // (the previous `[^\n]{0,100}`) meant a normal message like
+  // "CONTEXT: I am discussing the snapgentV3 extension, not sending its prompt."
+  // was classified as a system turn and hidden by the core across providers
+  // (owner review 2026-11-25).
+  const SYS_TEXT_RE =
+    /^\s*CONTEXT:\s*(?:snapgentV3 is a browser extension|the user has installed a browser extension called snapgentV3)/i;
+  function isSysPromptText(txt) {
+    if (!txt) return false;
+    return txt.includes(SYS_MARKER) || SYS_TEXT_RE.test(txt);
+  }
   // A re-statement of the system prompt mid-session (see withSysResend in
   // core/main.js). It carries SYS_MARKER TOO - that is what drives camouflage
   // and session detection, and neither should change - plus this second marker,
@@ -388,6 +409,8 @@ IMPORTANT: Your very first action is to write \`list_commands\` with no params (
   return {
     APP_NAME,
     SYS_MARKER,
+    SYS_TEXT_RE,
+    isSysPromptText,
     RESEND_MARKER,
     FEEDBACK,
     toolCategory,

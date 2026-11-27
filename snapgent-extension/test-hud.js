@@ -79,5 +79,18 @@ ok("the placeholder comes back when the loop ends",
 ok("it also comes back while the cover is scroll-hidden",
   /if \(on && scrollSuppressed\(\)\) \{[\s\S]{0,60}cover\.style\.display = "none";[\s\S]{0,320}remove\("zs-cover-on"\)/.test(src));
 
+// ── 5. The target label survives the bar being re-parented ─────────────────
+//       (report 2026-11-25: "pas VS Code di pilih masih None itu tulisanya")
+//       A provider's barMount() moves #zs-bar into the site's container
+//       (Gemini: fieldset.input-area-container), so a fresh
+//       root.querySelector("#zs-target-name") stops resolving and the label
+//       freezes on whatever was written before the move.
+ok("the target label element is cached at build",
+  /targetNameEl\s*=\s*root\.querySelector\("#zs-target-name"\)/.test(src));
+ok("setTarget writes through the cached label, not a fresh root lookup",
+  /const nameEl = targetNameEl \|\| \(root && root\.querySelector\("#zs-target-name"\)\);/.test(src));
+ok("the bar really can leave #zs-root (the reason the cache is needed)",
+  /mount\.parent\.insertBefore\(bar, mount\.before \|\| null\)/.test(src));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
