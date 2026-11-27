@@ -156,7 +156,7 @@ function makeEnv(opts) {
   const inputArea = {
     querySelector() { return null; }, // no pending attachment preview
     querySelectorAll(sel) {
-      if (sel !== "button") return [];
+      if (sel !== "button" || o.noSendButton) return [];
       return state.buffer.trim() ? [sendBtn] : [];
     },
   };
@@ -289,6 +289,18 @@ async function main() {
     ok(env.state.sent === 1, "send button was clicked once", env.state.sent);
     ok(!env.diags.some((d) => d.name === "send.insertMiss"),
       "no false insertMiss on text-node \\n", env.diags.map((d) => d.name));
+  }
+
+  console.log("\n# send.retype uses editorHolds on multi-line (no false retype)");
+  {
+    const env = makeEnv({ noSendButton: true });
+    // Even if the send button never renders, a multi-line message whose line
+    // structure already matches must NOT trigger send.retype (previously
+    // `editorText() !== text` always retyped multi-line messages).
+    const ret = await env.ZS.typeAndSend("line one\nline two", []);
+    ok(ret === true, "typeAndSend falls back to Enter when send button stays absent", ret);
+    ok(!env.diags.some((d) => d.name === "send.retype"),
+      "no false send.retype when editorHolds(ed, text) is true", env.diags.map((d) => d.name));
   }
 
   // ── 5. no usable composer at all → report, never a phantom send ──────────
@@ -450,6 +462,41 @@ async function main() {
     // turn-level sticker + whole-turn mask (the reported behaviour).
     ok(env.ZS.chipAnchor(buildTurn("plain user text")) !== null,
       "ordinary user turn is unaffected by the sys guard", true);
+
+    // Trailing <br> inside a non-empty <p> is a contenteditable sentinel, not a
+    // second blank line, whereas <p>line one<br><br></p> is two lines.
+    const trailingBrP = {
+      nodeType: 1,
+      tagName: "P",
+      childNodes: [{ nodeType: 3, nodeValue: "line one" }, { nodeType: 1, tagName: "BR", childNodes: [] }],
+    };
+    const doubleBrP = {
+      nodeType: 1,
+      tagName: "P",
+      childNodes: [
+        { nodeType: 3, nodeValue: "line one" },
+        { nodeType: 1, tagName: "BR", childNodes: [] },
+        { nodeType: 1, tagName: "BR", childNodes: [] },
+      ],
+    };
+    const edTrailing = { childNodes: [trailingBrP] };
+    const edDouble = { childNodes: [doubleBrP] };
+    const trailingCheck = new Function(
+      "document", "window", "MouseEvent", "KeyboardEvent", "InputEvent", "Event",
+      src.replace("publishChipColumn,", "publishChipColumn, editorHolds, composerLines,") + "\n;return ZSProvider;"
+    )(
+      { hidden: false, querySelector: () => null, querySelectorAll: () => [] },
+      {}, StubEvent, StubEvent, StubEvent, StubEvent
+    );
+    ok(trailingCheck.editorHolds(edTrailing, "line one") === true,
+      "single trailing <br> in <p> matches single-line text", trailingCheck.composerLines(edTrailing));
+    ok(trailingCheck.editorHolds(edDouble, "line one\n") === true,
+      "double trailing <br> in <p> preserves trailing blank line", trailingCheck.composerLines(edDouble));
+
+    // In-flow bar lives inside host containers that set pointer-events: none.
+    const overlayCss = readSource(__dirname + "/overlay.css");
+    ok(/#zs-bar\s*\{[^}]*pointer-events:\s*auto\s*;/s.test(overlayCss),
+      "#zs-bar explicitly sets pointer-events: auto in overlay.css", true);
   }
 
   console.log(failures ? `\nFAILED (${failures})` : "\nall Gemini send checks passed");

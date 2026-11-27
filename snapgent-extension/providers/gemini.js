@@ -421,6 +421,12 @@ const ZSProvider = (() => {
       }
     };
     walk(node);
+    // A single trailing <br> inside a non-empty <p> is contenteditable's
+    // line-end sentinel, not an extra blank line (an intentional trailing
+    // newline is <p>…</p><p><br></p> or <p>…<br><br></p>).
+    if (kids.length > 1 && isBrEl(kids[kids.length - 1]) && lines.length > 1 && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
     return lines;
   }
   // Every block element is its own line. Inline nodes at the editor root join
@@ -622,7 +628,7 @@ const ZSProvider = (() => {
       // an empty editor and therefore no send button - the "Start did nothing,
       // the system prompt was never sent" report. Retyping now that the stop is
       // cleared is safe: the editor is either empty or holds our own text.
-      if (!sendButton() && editorText() !== text) {
+      if (!sendButton() && !editorHolds(ed, text)) {
         diag("send.retype", {});
         if ((await setEditorText(ed, text)) === false) {
           diag("send.emptyComposer", { why: "retype no-op" });
