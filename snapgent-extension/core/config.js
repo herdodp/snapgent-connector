@@ -16,6 +16,14 @@ const ZS = (() => {
   // purely so the chip can say "Reminder" instead of inheriting the bootstrap's
   // "Starting Up". Same content, different label: a re-injection is not a start.
   const RESEND_MARKER = "⟦ZS-RE⟧";
+  // Gemini strips SYS_MARKER / RESEND_MARKER from rendered turns, so
+  // sinceLastSysInDom() also matches the rider's own opening sentence.
+  const RESEND_NOTE_RE =
+    /\(System note from snapgentV3 - an automatic re-statement of your operating instructions/i;
+  function isResendNoteText(txt) {
+    if (!txt) return false;
+    return txt.includes(SYS_MARKER) || txt.includes(RESEND_MARKER) || RESEND_NOTE_RE.test(txt);
+  }
 
   // ── Tool → visual category (icon + colour theme for the chips) ─────────
   // Roblox Studio MCP only. Returns one of:
@@ -89,6 +97,12 @@ const ZS = (() => {
           "ERROR: you wrote that call in your own internal tool-call markup (the DSML invoke/parameter " +
           "tags). snapgentV3 cannot read that format, so the command did not run. Never use those tags " +
           "here. Write the call as a single plain-text JSON object instead, exactly like " +
+          '{"command": "name", "params": { ...your parameters... }} - one command per reply. ' +
+          "Please retry.",
+        nativeCall:
+          "ERROR: you wrote that call in your own native function-call syntax instead of a snapgentV3 " +
+          "command, so it was not recognised and did not run. Never use native tool_code or default_api " +
+          "calls here. Write the call as a single plain-text JSON object instead, exactly like " +
           '{"command": "name", "params": { ...your parameters... }} - one command per reply. ' +
           "Please retry.",
       };
@@ -389,6 +403,7 @@ IMPORTANT: Your very first action is to write \`list_commands\` with no params (
     APP_NAME,
     SYS_MARKER,
     RESEND_MARKER,
+    isResendNoteText,
     FEEDBACK,
     toolCategory,
     buildSystemPrompt,

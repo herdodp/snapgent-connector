@@ -926,6 +926,29 @@
         diag("cmd.wrongKey", { name: wk, known: hit, catalogue: A.toolNames.size });
         if (hit) return { kind: "parse_error", reason: "toolKey", raw: r, item: d.item };
       }
+      // Gemini sometimes falls back to its own native tool_code / default_api
+      // call syntax (e.g. `call:default_api:read_file{...}` or
+      // `default_api.read_file(...)`) instead of {"command": ..., "params": ...}.
+      // Only inspect lines that START with a native call (so prose examples like
+      // "Please call:read_file{x}" are ignored) and scan all matches on the
+      // line so an unknown tool first does not hide a real tool later on.
+      if (!/"command"\s*:/.test(r)) {
+        const nativeLineRe =
+          /^[ \t]*(?:```[^\n]*[ \t]*)?(?:call:(?:default_api:)?[A-Za-z0-9_.\/-]+\s*\{|default_api\.[A-Za-z0-9_]+\s*\()/;
+        const nativeCallRe =
+          /\bcall:(?:default_api:)?([A-Za-z0-9_.\/-]+)\s*\{|\bdefault_api\.([A-Za-z0-9_]+)\s*\(/g;
+        for (const line of r.split(/\r?\n/)) {
+          if (!nativeLineRe.test(line)) continue;
+          nativeCallRe.lastIndex = 0;
+          let m;
+          while ((m = nativeCallRe.exec(line)) !== null) {
+            const nk = m[1] || m[2];
+            const hit = knownTool(nk);
+            diag("cmd.nativeCall", { name: nk, known: hit, catalogue: A.toolNames.size });
+            if (hit) return { kind: "parse_error", reason: "nativeCall", raw: r, item: d.item };
+          }
+        }
+      }
       // NOTE: a site "server busy / something went wrong" notice is deliberately
       // NOT special-cased. It falls through to kind:"text" below and simply ENDS
       // the loop as a final answer - no auto-retry. Retrying risked an infinite
@@ -1721,7 +1744,7 @@
               // DSML is not JSON at all - it is DeepSeek's own markup - so the
               // default "bad JSON" would send the user (and anyone reading a bug
               // report) looking for a syntax slip that does not exist.
-              : res.reason === "dsml" ? "wrong format"
+              : res.reason === "dsml" || res.reason === "nativeCall" ? "wrong format"
               : "bad JSON";
             decorate.toolBox(res.item, failName, "err", detail, true, "", ZS.toolCategory(failName));
           }
@@ -2421,9 +2444,10 @@
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       const txt = P.classifyText(it, ".zs-chip");
-      // The bootstrap turn and every rider both carry the marker - either one
-      // means the rules were fully stated here, so stop counting.
-      if (txt.includes(ZS.SYS_MARKER)) break;
+      // The bootstrap turn carries SYS_MARKER and every rider carries
+      // RESEND_MARKER / the System-note sentence (even if a site strips markers
+      // on render) - either one means the rules were stated here, so stop.
+      if (ZS.isResendNoteText(txt)) break;
       if (!P.isUserItem(it)) continue;
       if (ZSParse.isInjectedFeedback(txt)) results++;
       else users++;
