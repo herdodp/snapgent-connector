@@ -22,6 +22,29 @@ All notable changes to snapgentV3 Free are documented here.
   pass the control token through LaunchServices. On Linux, a desktop the user opened
   by hand can still be attached: the helper reads the token from the running app's
   `/proc` environment.
+- **FilmCraft guide MCP (`filmcraft_guide`).** A second, dependency-free MCP server
+  ships beside the FilmCraft entry on every platform (`filmcraft_guide.py` for
+  macOS/Linux via the setup interpreter, `filmcraft_guide.ps1` for Windows via
+  `powershell.exe`, both registered automatically). It exposes one tool,
+  `filmcraft_guide`, that teaches the agent how to drive FilmCraft: the tool surface
+  (`command_list`, `command_run`, `command_batch`, `doc_inspect`, `sequence_inspect`,
+  `media_import`, `render_frame`, the bridge-only `ui_*` tools), the
+  inspect-edit-verify loop, command discovery, media/timeline/effects/export recipes
+  and troubleshooting. `topic: "status"` live-probes `config.json` and the control
+  channel, so the agent can tell BRIDGE mode (attached to the running app) apart from
+  HEADLESS mode (a separate empty project) by itself.
+- **FilmCraft doctor.** `powershell -File start-filmcraft.ps1 -Doctor` (Windows)
+  verifies the CLI, the desktop app, the running process and its control port, the
+  stored token and the configured MCP mode in one run, including an authenticated
+  live probe of the control channel.
+- **FilmCraft agent skill.** `.snapgent/skills/filmcraft/SKILL.md` gives chat agents
+  the same playbook: confirm bridge mode first, inspect before editing, discover
+  command ids with `command_list`, verify renders visually, and undo or troubleshoot.
+
+### Changed
+- Headless fallbacks in `start-filmcraft.ps1` now explain what headless means (the AI
+  edits a separate empty project, not the app window) and how to attach the real app,
+  instead of only saying the entry "will run headless".
 
 ### Notes
 - An already-running FilmCraft attaches only when its access token is known

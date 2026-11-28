@@ -848,6 +848,14 @@ def main(
                 "https://github.com/storytold/filmcraft/releases to enable its MCP."
             )
 
+        # The FilmCraft guide MCP teaches the agent how to drive FilmCraft and
+        # lets it probe bridge-vs-headless status by itself. Registered whenever
+        # the script ships next to this setup, using this interpreter.
+        filmcraft_guide = ROOT / "filmcraft_guide.py"
+        if filmcraft_guide.is_file():
+            _set_server(servers, "filmcraft_guide", sys.executable, [str(filmcraft_guide)])
+            print(f"FilmCraft guide MCP configured: {filmcraft_guide}")
+
         uvx_path = shutil.which("uvx")
         if uvx_path:
             _set_server(

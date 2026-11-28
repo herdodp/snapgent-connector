@@ -1,5 +1,6 @@
 param(
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$Doctor
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +53,9 @@ function Save-Configuration {
 function Set-HeadlessConfiguration {
     $server.args = @($baseArgs.ToArray())
     Save-Configuration
+    Write-Host "NOTE: without --bridge the FilmCraft MCP runs HEADLESS: the AI edits a separate"
+    Write-Host "      empty project, NOT your FilmCraft window. Run"
+    Write-Host "      Open-FilmCraft-for-Snapgent.bat to attach the AI to the real app."
 }
 
 function Set-BridgeConfiguration {
@@ -107,6 +111,46 @@ function Test-LoopbackPort {
     }
 }
 
+function Invoke-ControlProbe {
+    param([string]$TargetHost, [int]$Port, [string]$Token)
+    $request = @{ id = 1; token = $Token; method = "ui.inspect"; params = @{} } | ConvertTo-Json -Compress -Depth 4
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connect = $client.BeginConnect($TargetHost, $Port, $null, $null)
+        if (-not $connect.AsyncWaitHandle.WaitOne(3000)) {
+            return @{ Ok = $false; Error = "control channel unreachable on ${TargetHost}:${Port} (timeout)" }
+        }
+        $client.EndConnect($connect)
+        $client.ReceiveTimeout = 3000
+        $client.SendTimeout = 3000
+        $stream = $client.GetStream()
+        $writer = New-Object System.IO.StreamWriter($stream, (New-Object System.Text.UTF8Encoding($false)))
+        $writer.NewLine = "`n"
+        $writer.WriteLine($request)
+        $writer.Flush()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $line = $reader.ReadLine()
+        if (-not $line) {
+            return @{ Ok = $false; Error = "control channel on ${TargetHost}:${Port} closed without a reply" }
+        }
+        try {
+            $reply = $line | ConvertFrom-Json
+        } catch {
+            return @{ Ok = $false; Error = "control channel on ${TargetHost}:${Port} sent a non-JSON reply" }
+        }
+        if ($reply.ok -eq $true) {
+            return @{ Ok = $true }
+        }
+        $detail = [string]$reply.error
+        if (-not $detail) { $detail = $line }
+        return @{ Ok = $false; Error = $detail }
+    } catch {
+        return @{ Ok = $false; Error = "control channel unreachable on ${TargetHost}:${Port}: $($_.Exception.Message)" }
+    } finally {
+        $client.Dispose()
+    }
+}
+
 function Get-FreeLoopbackPort {
     $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
     try {
@@ -141,6 +185,95 @@ $appPath = Join-Path (Split-Path -Parent $cliPath) "filmcraft.exe"
 if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
     Write-Host "FilmCraft app was not found next to its MCP CLI; its MCP entry will run headless."
     Set-HeadlessConfiguration
+    exit 0
+}
+
+if ($Doctor) {
+    Write-Host "=== FilmCraft doctor ==="
+    Write-Host "CLI entry   : $($server.command)"
+    if (Test-Path -LiteralPath $cliPath -PathType Leaf) {
+        Write-Host "CLI file    : found"
+    }
+    elseif (Get-Command $cliPath -ErrorAction SilentlyContinue) {
+        Write-Host "CLI file    : found on PATH"
+    }
+    else {
+        Write-Host "CLI file    : MISSING ($cliPath)"
+    }
+    if (Test-Path -LiteralPath $appPath -PathType Leaf) {
+        Write-Host "Desktop app : found ($appPath)"
+    }
+    else {
+        Write-Host "Desktop app : MISSING next to the CLI ($appPath)"
+    }
+    $bridgeTarget = $null
+    $serverArgs = @($server.args)
+    for ($i = 0; $i -lt $serverArgs.Count; $i++) {
+        $argument = [string]$serverArgs[$i]
+        if ($argument -eq "--bridge" -and ($i + 1) -lt $serverArgs.Count) {
+            $bridgeTarget = [string]$serverArgs[$i + 1]
+            break
+        }
+        if ($argument.StartsWith("--bridge=")) {
+            $bridgeTarget = $argument.Substring(9)
+            break
+        }
+    }
+    if ($bridgeTarget) {
+        Write-Host "MCP mode    : BRIDGE -> $bridgeTarget"
+        $storedToken = [string]$server.env.FILMCRAFT_CONTROL_TOKEN
+        if (-not (Test-KnownToken $storedToken)) {
+            Write-Host "Token       : missing or malformed in mcpServers.filmcraft.env"
+            Write-Host "              Run Open-FilmCraft-for-Snapgent.bat to regenerate it."
+        }
+        else {
+            $parts = $bridgeTarget.Split(":")
+            $probeHost = $parts[0]
+            if (-not $probeHost) { $probeHost = "127.0.0.1" }
+            $probePort = 0
+            if ([int]::TryParse($parts[-1], [ref]$probePort)) {
+                $probe = Invoke-ControlProbe -TargetHost $probeHost -Port $probePort -Token $storedToken
+                if ($probe.Ok) {
+                    Write-Host "Live probe  : ATTACHED - the control channel answers with the stored token."
+                    Write-Host "              The AI drives the real running app (650+ commands + UI tools)."
+                }
+                else {
+                    Write-Host "Live probe  : FAILED - $($probe.Error)"
+                    Write-Host "              Save your work, close FilmCraft, run Open-FilmCraft-for-Snapgent.bat."
+                }
+            }
+            else {
+                Write-Host "Live probe  : target unparseable ($bridgeTarget)"
+            }
+        }
+    }
+    else {
+        Write-Host "MCP mode    : HEADLESS - the AI edits a separate empty project, not the app window."
+        Write-Host "              Fix: close FilmCraft, run Open-FilmCraft-for-Snapgent.bat."
+    }
+    try {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+            Where-Object { $_.Name -ieq "filmcraft.exe" })
+        if ($processes.Count -eq 0) {
+            Write-Host "App process : not running"
+        }
+        else {
+            foreach ($process in $processes) {
+                $controlPort = Get-ControlPort ([string]$process.CommandLine)
+                if ($controlPort) {
+                    Write-Host "App process : running with control channel on port $controlPort (pid $($process.ProcessId))"
+                }
+                else {
+                    Write-Host "App process : running WITHOUT a control channel (pid $($process.ProcessId))"
+                    Write-Host "              Save your work, close FilmCraft, run Open-FilmCraft-for-Snapgent.bat."
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "App process : could not inspect ($($_.Exception.Message))"
+    }
+    Write-Host "=== doctor done ==="
     exit 0
 }
 

@@ -243,8 +243,30 @@ when the matching token is known: on Linux it reads the token from the running
 app's environment, and on Windows/macOS it uses the token stored in
 `config.json` from a previous launch. Otherwise the MCP entry remains headless;
 save your work, close FilmCraft, run the helper, then restart the bridge
-launcher. Opening FilmCraft normally from its desktop icon does not enable the
-control channel.
+
+**Full agent control.** FilmCraft exposes 650+ engine commands over MCP
+(`command_list`, `command_run`, `command_batch`, `doc_inspect`,
+`sequence_inspect`, `media_import`, `render_frame` plus `ui_*` tools that
+drive the real window in bridge mode), so the AI can cut, trim, grade, mix
+and export exactly the way a person does. Two connector extras make that
+control reliable:
+
+- **FilmCraft guide MCP** (`mcpServers.filmcraft_guide`, registered
+  automatically by both setup scripts) teaches the agent the tool surface,
+  the inspect-edit-verify loop and recipes, and answers
+  `filmcraft_guide {"topic": "status"}` with a live probe that distinguishes
+  BRIDGE mode (attached to the running app) from HEADLESS mode (a separate
+  empty project).
+- **Doctor**: `powershell -File start-filmcraft.ps1 -Doctor` (Windows) prints
+  the CLI, app, control-channel, token and MCP-mode verdict in one run.
+
+A `.snapgent/skills/filmcraft/SKILL.md` ships the same playbook to the chat
+agent. If the AI seems connected but edits do nothing in the app window, the
+MCP entry is headless: close FilmCraft, run the Open FilmCraft launcher, and
+re-run the doctor until the live probe reports ATTACHED.
+
+Opening FilmCraft normally from its desktop icon does not enable the control
+channel.
 
 On macOS, install the separate `filmcraft-cli` release asset and put it on your
 `PATH` (the `FilmCraft.app` bundle holds only the desktop app). On Linux, the

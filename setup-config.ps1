@@ -275,6 +275,29 @@ else {
     Write-Host "FilmCraft not found; install it from https://github.com/storytold/filmcraft/releases to enable its MCP."
 }
 
+# The FilmCraft guide MCP teaches the agent how to drive FilmCraft and lets it
+# probe bridge-vs-headless status by itself. It needs no extra dependencies:
+# Windows PowerShell is always present.
+$filmcraftGuide = Join-Path $PSScriptRoot "filmcraft_guide.ps1"
+if (Test-Path -LiteralPath $filmcraftGuide -PathType Leaf) {
+    $powershellExe = Join-Path $PSHome "powershell.exe"
+    if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) {
+        $powershellExe = "powershell.exe"
+    }
+    $guideServer = [pscustomobject]@{
+        command = $powershellExe
+        args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $filmcraftGuide)
+        env = [pscustomobject]@{}
+    }
+    if ($configuration.mcpServers.PSObject.Properties["filmcraft_guide"]) {
+        $configuration.mcpServers.filmcraft_guide = $guideServer
+    }
+    else {
+        $configuration.mcpServers | Add-Member -MemberType NoteProperty -Name filmcraft_guide -Value $guideServer
+    }
+    Write-Host "FilmCraft guide MCP configured: $filmcraftGuide"
+}
+
 function Test-ReaNodeVersion {
     param([string]$NodePath)
     try { $raw = (& $NodePath --version) } catch { return $false }
