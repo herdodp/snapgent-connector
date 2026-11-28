@@ -2,6 +2,56 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.15] - 2026-11-28
+
+### Added
+- **Optional FilmCraft MCP support.** FilmCraft joins FigCraft and EffectCraft as an
+  optional craft-app target. `Open-FilmCraft-for-Snapgent.bat` and
+  `open-filmcraft-for-snapgent.sh` detect the FilmCraft CLI and desktop app, select an
+  available loopback port, and start the app with its control channel. FilmCraft's
+  control channel is token-protected, so the helper generates a fresh
+  `FILMCRAFT_CONTROL_TOKEN`, hands it to the desktop app through its environment, and
+  stores it in the FilmCraft MCP entry's `env` block so the bridge's MCP server
+  attaches with the same token. `start.bat` also re-detects a manually opened
+  FilmCraft control channel before the bridge starts.
+- **FilmCraft detection on every platform.** `setup-config.py` (macOS/Linux) detects
+  `filmcraft-cli` on PATH and common locations, and the desktop app or
+  `FilmCraft.app` bundle. `setup-config.ps1` (Windows) detects `filmcraft-cli.exe`
+  in the ArtCraft install folders and registry uninstall entries. On macOS the
+  launcher starts the binary inside the bundle directly, because `open -a` cannot
+  pass the control token through LaunchServices. On Linux, a desktop the user opened
+  by hand can still be attached: the helper reads the token from the running app's
+  `/proc` environment.
+- **FilmCraft guide MCP (`filmcraft_guide`).** A second, dependency-free MCP server
+  ships beside the FilmCraft entry on every platform (`filmcraft_guide.py` for
+  macOS/Linux via the setup interpreter, `filmcraft_guide.ps1` for Windows via
+  `powershell.exe`, both registered automatically). It exposes one tool,
+  `filmcraft_guide`, that teaches the agent how to drive FilmCraft: the tool surface
+  (`command_list`, `command_run`, `command_batch`, `doc_inspect`, `sequence_inspect`,
+  `media_import`, `render_frame`, the bridge-only `ui_*` tools), the
+  inspect-edit-verify loop, command discovery, media/timeline/effects/export recipes
+  and troubleshooting. `topic: "status"` live-probes `config.json` and the control
+  channel, so the agent can tell BRIDGE mode (attached to the running app) apart from
+  HEADLESS mode (a separate empty project) by itself.
+- **FilmCraft doctor.** `powershell -File start-filmcraft.ps1 -Doctor` (Windows)
+  verifies the CLI, the desktop app, the running process and its control port, the
+  stored token and the configured MCP mode in one run, including an authenticated
+  live probe of the control channel.
+- **FilmCraft agent skill.** `.snapgent/skills/filmcraft/SKILL.md` gives chat agents
+  the same playbook: confirm bridge mode first, inspect before editing, discover
+  command ids with `command_list`, verify renders visually, and undo or troubleshoot.
+
+### Changed
+- Headless fallbacks in `start-filmcraft.ps1` now explain what headless means (the AI
+  edits a separate empty project, not the app window) and how to attach the real app,
+  instead of only saying the entry "will run headless".
+
+### Notes
+- An already-running FilmCraft attaches only when its access token is known
+  (from the running app's environment on Linux, or from `config.json` on
+  Windows/macOS); otherwise the MCP entry runs headless and the helper asks you
+  to close FilmCraft and run it again.
+
 ## [V3.9.14] - 2026-11-22
 
 ### Added

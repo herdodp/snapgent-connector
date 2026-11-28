@@ -34,6 +34,12 @@ if exist "%~dp0start-figcraft.ps1" (
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-figcraft.ps1" -NoLaunch
 )
 
+if exist "%~dp0start-filmcraft.ps1" (
+    echo.
+    echo   Checking for a manually opened FilmCraft control channel...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-filmcraft.ps1" -NoLaunch
+)
+
 REM Free the bridge port if a previous instance is still listening.
 set "OLDPID="
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :17613 ^| findstr LISTENING 2^>nul') do (
