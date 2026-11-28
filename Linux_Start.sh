@@ -93,7 +93,7 @@ if ! "$PY" -c "import aiohttp" >/dev/null 2>&1; then
     log "WARN: aiohttp missing; live view and /status disabled."
 fi
 
-echo "  [3/4] Detecting VS Code, Roblox Studio, EffectCraft, and FigCraft..."
+echo "  [3/4] Detecting VS Code, Roblox Studio, EffectCraft, FigCraft, and FilmCraft..."
 if ! "$PY" "./setup-config.py"; then
     echo "  ERROR: MCP configuration failed. See the message above."
     log "MCP auto-configuration failed."

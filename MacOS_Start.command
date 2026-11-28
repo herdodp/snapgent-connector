@@ -119,7 +119,7 @@ fi
 
 # --- 3. Configure MCP servers -----------------------------------------------
 if [ -f "./setup-config.py" ]; then
-    echo "  [3/4] Detecting VS Code, Roblox Studio, EffectCraft, and FigCraft..."
+    echo "  [3/4] Detecting VS Code, Roblox Studio, EffectCraft, FigCraft, and FilmCraft..."
     if ! "$PY" "./setup-config.py"; then
         echo "  ERROR: MCP configuration failed. See the message above."
         log "MCP auto-configuration failed."

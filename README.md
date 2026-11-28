@@ -169,17 +169,17 @@ The MCP target starts as **None**. Choose the target in the chat bar before clic
 **③ Start the bridge**
 
 - **Windows** — double-click `start.bat`. It configures VS Code MCP and detects
-  installed FigCraft and EffectCraft targets automatically.
+  installed FigCraft, EffectCraft, and FilmCraft targets automatically.
   You can start the bridge before VS Code.
   Machine-specific settings are written to the ignored local `config.json`.
 - **macOS** — double-click `MacOS_Start.command`. It detects the bundled
-  VS Code MCP server, Roblox Studio's MCP executable, and installed FigCraft
-  and EffectCraft tools, then writes their machine-specific paths to the ignored
-  local `config.json`. This launcher uses `bridge.py`; it does not run the
-  Windows-only `bridge.exe`.
+  VS Code MCP server, Roblox Studio's MCP executable, and installed FigCraft,
+  EffectCraft, and FilmCraft tools, then writes their machine-specific paths to
+  the ignored local `config.json`. This launcher uses `bridge.py`; it does not
+  run the Windows-only `bridge.exe`.
 - **Linux** — open a terminal in the extracted release folder and run
   `bash Linux_Start.sh`. It detects the bundled VS Code MCP server and
-  installed FigCraft and EffectCraft tools, then writes
+  installed FigCraft, EffectCraft, and FilmCraft tools, then writes
   machine-specific paths to the ignored local `config.json`. It uses
   `bridge.py`; the first launch installs `websockets` for your user, or creates
   a local Python environment if your distribution blocks user installs.
@@ -219,6 +219,39 @@ reuses it. If it is open without a control channel, Snapgent will not close or
 restart it; the MCP entry remains headless. Save your work, close FigCraft, run
 the helper, then restart the bridge launcher. Opening FigCraft normally from
 its desktop icon does not enable the control channel.
+
+**Optional: connect FilmCraft**
+
+Starting the Snapgent bridge does not open FilmCraft. When you want to use it,
+run `Open-FilmCraft-for-Snapgent.bat` on Windows or
+`bash open-filmcraft-for-snapgent.sh` on macOS/Linux. This helper detects the
+FilmCraft CLI, selects an available loopback port, and opens FilmCraft with its
+control channel. FilmCraft's control channel is access-protected: the helper
+generates a fresh `FILMCRAFT_CONTROL_TOKEN`, passes it to the desktop app, and
+stores it in the FilmCraft MCP entry's `env` block in `config.json`, so the MCP
+bridge inherits it and can attach. Then run or restart the normal Snapgent
+bridge launcher so the MCP server attaches to the app. When connected, choose
+**FilmCraft** in the MCP target selector on the chat bar.
+
+The token stays local in the ignored `config.json`. Keep it private: anyone
+with the token can drive the open FilmCraft app. The helper regenerates it
+each time it starts FilmCraft, and it is never written into command lines or
+logs.
+
+If FilmCraft is already running with a `--control` port, the helper reuses it
+when the matching token is known: on Linux it reads the token from the running
+app's environment, and on Windows/macOS it uses the token stored in
+`config.json` from a previous launch. Otherwise the MCP entry remains headless;
+save your work, close FilmCraft, run the helper, then restart the bridge
+launcher. Opening FilmCraft normally from its desktop icon does not enable the
+control channel.
+
+On macOS, install the separate `filmcraft-cli` release asset and put it on your
+`PATH` (the `FilmCraft.app` bundle holds only the desktop app). On Linux, the
+deb/rpm packages install `filmcraft-cli` and `filmcraft` under `/usr/bin`. On
+Windows, the MSI installs `filmcraft-cli.exe` next to the desktop app under
+`%LOCALAPPDATA%\Programs\ArtCraft\FilmCraft` by default, and both are
+detected there automatically.
 
 On macOS, Roblox Studio MCP is detected at
 `/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP`; set

@@ -218,6 +218,63 @@ else {
     Write-Host "FigCraft not found; install it from https://github.com/storytold/figcraft/releases to enable its MCP."
 }
 
+$configuredFilmCraft = $configuration.mcpServers.filmcraft
+$filmcraftCandidates = @()
+if ($configuredFilmCraft -and -not [string]::IsNullOrWhiteSpace($configuredFilmCraft.command)) {
+    $filmcraftCandidates += $configuredFilmCraft.command
+}
+
+$filmcraftOnPath = Get-Command filmcraft-cli.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($filmcraftOnPath) {
+    $filmcraftCandidates += $filmcraftOnPath.Source
+}
+
+$filmcraftCandidates += @(
+    (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\FilmCraft\filmcraft-cli.exe"),
+    (Join-Path $env:ProgramFiles "ArtCraft\FilmCraft\filmcraft-cli.exe"),
+    (Join-Path $programFilesX86 "ArtCraft\FilmCraft\filmcraft-cli.exe"),
+    (Join-Path $env:ProgramFiles "FilmCraft\filmcraft-cli.exe"),
+    (Join-Path $programFilesX86 "FilmCraft\filmcraft-cli.exe")
+)
+
+foreach ($key in $uninstallKeys) {
+    $installations = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like "*FilmCraft*" -and $_.InstallLocation }
+    foreach ($installation in $installations) {
+        $filmcraftCandidates += Join-Path $installation.InstallLocation "filmcraft-cli.exe"
+        $filmcraftCandidates += Join-Path $installation.InstallLocation "FilmCraft\filmcraft-cli.exe"
+    }
+}
+
+$filmcraftCli = $filmcraftCandidates |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+    Select-Object -First 1
+
+if ($filmcraftCli) {
+    $keepFilmCraft = $configuredFilmCraft -and ($configuredFilmCraft.command -eq $filmcraftCli)
+    if (-not $keepFilmCraft) {
+        $filmcraftServer = [pscustomobject]@{
+            command = $filmcraftCli
+            args = @("mcp")
+            env = [pscustomobject]@{}
+        }
+        if ($configuration.mcpServers.PSObject.Properties["filmcraft"]) {
+            $configuration.mcpServers.filmcraft = $filmcraftServer
+        }
+        else {
+            $configuration.mcpServers | Add-Member -MemberType NoteProperty -Name filmcraft -Value $filmcraftServer
+        }
+    }
+    Write-Host "FilmCraft MCP detected: $filmcraftCli"
+}
+elseif ($configuredFilmCraft) {
+    Write-Host "Configured FilmCraft MCP executable was not found: $($configuredFilmCraft.command)"
+    Write-Host "Update mcpServers.filmcraft.command in config.json to match your installation."
+}
+else {
+    Write-Host "FilmCraft not found; install it from https://github.com/storytold/filmcraft/releases to enable its MCP."
+}
+
 function Test-ReaNodeVersion {
     param([string]$NodePath)
     try { $raw = (& $NodePath --version) } catch { return $false }

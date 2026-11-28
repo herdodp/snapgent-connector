@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -127,6 +128,74 @@ def _figcraft_app(cli: Path, cli_args: List[str]) -> Optional[Path]:
             if candidate.is_dir():
                 return candidate
     return None
+
+
+def _filmcraft_cli(configured: Optional[Dict[str, object]]) -> Optional[Path]:
+    candidates: List[Path] = []
+    configured_command = configured.get("command") if configured else None
+    if isinstance(configured_command, str) and configured_command:
+        configured_path = Path(configured_command).expanduser()
+        if configured_path.is_absolute():
+            candidates.append(configured_path)
+        else:
+            found = shutil.which(configured_command)
+            if found:
+                candidates.append(Path(found))
+
+    on_path = shutil.which("filmcraft-cli")
+    if on_path:
+        candidates.append(Path(on_path))
+
+    home = Path.home()
+    candidates.extend(
+        [
+            Path("/opt/homebrew/bin/filmcraft-cli"),
+            Path("/usr/local/bin/filmcraft-cli"),
+            Path("/usr/bin/filmcraft-cli"),
+            home / "bin" / "filmcraft-cli",
+            home / ".local" / "bin" / "filmcraft-cli",
+        ]
+    )
+    return _first_executable(candidates)
+
+
+def _filmcraft_app(cli: Path) -> Optional[Path]:
+    if sys.platform == "darwin":
+        for candidate in (
+            Path("/Applications/FilmCraft.app"),
+            Path.home() / "Applications" / "FilmCraft.app",
+        ):
+            if candidate.is_dir():
+                return candidate
+        return None
+    for command in ("filmcraft", "FilmCraft"):
+        found = shutil.which(command)
+        if found:
+            return Path(found).resolve()
+    return _first_executable(
+        [
+            Path.home() / "Applications" / "FilmCraft.AppImage",
+            Path.home() / "Applications" / "FilmCraft" / "FilmCraft",
+            Path("/opt/FilmCraft/FilmCraft"),
+        ]
+    )
+
+
+def _filmcraft_launch_target(app: Optional[Path]) -> Optional[Path]:
+    # The macOS bundle only carries the desktop app, and its control channel is
+    # only usable when the app inherits FILMCRAFT_CONTROL_TOKEN. `open -a` does
+    # not pass the caller's environment through LaunchServices, so Snapgent
+    # launches the binary inside the bundle directly instead.
+    if app is None:
+        return None
+    if app.suffix.lower() == ".app":
+        inner = app / "Contents" / "MacOS" / "filmcraft"
+        return inner if _is_executable(inner) else None
+    return app
+
+
+def _generate_control_token() -> str:
+    return secrets.token_hex(32)
 
 
 def _roblox_studio_mcp() -> Optional[Path]:
@@ -253,6 +322,22 @@ def _is_figcraft_process(command: str, app: Optional[Path] = None) -> bool:
     )
 
 
+def _is_filmcraft_process(command: str, app: Optional[Path] = None) -> bool:
+    lowered = command.lower().replace("\\", "/")
+    try:
+        arguments = shlex.split(command)
+    except ValueError:
+        arguments = command.split()
+    if "mcp" in arguments:
+        return False
+    if app and str(app).lower().replace("\\", "/") in lowered:
+        return True
+    return bool(
+        re.search(r"(?:^|[/\s])filmcraft(?:\.exe|\.appimage)?(?:$|[\s])", lowered)
+        or "filmcraft.app/contents/macos/" in lowered
+    )
+
+
 def _control_port(command: str) -> Optional[int]:
     try:
         arguments = shlex.split(command)
@@ -360,6 +445,125 @@ def _start_figcraft_control(app: Path, port: int) -> bool:
     return False
 
 
+def _filmcraft_token_from_process(pid: int) -> Optional[str]:
+    # FilmCraft's control listener only answers requests carrying the token it
+    # was started with. A Linux process can hand its own user that value from
+    # /proc, so a desktop the user opened by hand can still be attached.
+    if sys.platform != "linux":
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return None
+    for entry in raw.split(b"\0"):
+        if entry.startswith(b"FILMCRAFT_CONTROL_TOKEN="):
+            value = entry.split(b"=", 1)[1].decode("utf-8", "replace").strip()
+            if re.fullmatch(r"[0-9a-fA-F]{64}", value):
+                return value.lower()
+    return None
+
+
+def _filmcraft_processes(app: Optional[Path]) -> List[Tuple[int, str]]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise RuntimeError(f"Could not inspect running FilmCraft processes: {error}") from error
+    if result.returncode:
+        detail = result.stderr.strip() or "ps exited with a non-zero status"
+        raise RuntimeError(f"Could not inspect running FilmCraft processes: {detail}")
+
+    processes = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2:
+            continue
+        try:
+            pid = int(fields[0])
+        except ValueError:
+            continue
+        if pid != os.getpid() and _is_filmcraft_process(fields[1], app):
+            processes.append((pid, fields[1]))
+    return processes
+
+
+def _running_filmcraft_control(
+    app: Optional[Path], existing_server: Optional[Dict[str, object]]
+) -> Tuple[Optional[int], Optional[str], bool]:
+    processes = _filmcraft_processes(app)
+    if not processes:
+        return None, None, False
+
+    token = None
+    for pid, _ in processes:
+        token = _filmcraft_token_from_process(pid)
+        if token:
+            break
+    if token is None and existing_server:
+        existing_env = existing_server.get("env")
+        if isinstance(existing_env, dict):
+            candidate = existing_env.get("FILMCRAFT_CONTROL_TOKEN")
+            if isinstance(candidate, str) and re.fullmatch(r"[0-9a-fA-F]{64}", candidate):
+                token = candidate
+
+    ports = [
+        port
+        for _, command in processes
+        if (port := _control_port(command)) is not None
+    ]
+    if not ports:
+        return None, token, True
+
+    for _ in range(60):
+        for port in ports:
+            if _port_listening(port):
+                if token is None:
+                    print(
+                        "FilmCraft has a control channel, but Snapgent does not know its "
+                        "access token; its MCP entry will run headless."
+                    )
+                    return None, None, True
+                print(f"FilmCraft control channel is already listening on port {port}.")
+                return port, token, True
+        time.sleep(0.5)
+    print("FilmCraft was started with a control port, but the port is not responding.")
+    return None, token, True
+
+
+def _start_filmcraft_control(app: Path, port: int, token: str) -> bool:
+    target = _filmcraft_launch_target(app)
+    if target is None:
+        print("Could not pass FilmCraft its control token; its MCP entry will run headless.")
+        return False
+    print(f"Starting FilmCraft control channel on port {port}...")
+    environment = os.environ.copy()
+    environment["FILMCRAFT_CONTROL_TOKEN"] = token
+    try:
+        subprocess.Popen(
+            [str(target), "--control", str(port)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+            start_new_session=True,
+        )
+    except OSError as error:
+        print(f"Could not start FilmCraft control channel: {error}")
+        return False
+
+    for _ in range(60):
+        if _port_listening(port):
+            print(f"FilmCraft control channel is ready on port {port}.")
+            return True
+        time.sleep(0.5)
+    print(f"FilmCraft did not open its control channel on port {port}.")
+    return False
+
+
 def _figcraft_base_args(
     detected_args: List[str], existing_server: Optional[Dict[str, object]]
 ) -> List[str]:
@@ -378,6 +582,31 @@ def _figcraft_base_args(
         if argument == "--attach":
             index += 2
         elif argument.startswith("--attach="):
+            index += 1
+        else:
+            arguments.append(argument)
+            index += 1
+    return arguments if arguments[: len(detected_args)] == detected_args else list(detected_args)
+
+
+def _filmcraft_base_args(
+    detected_args: List[str], existing_server: Optional[Dict[str, object]]
+) -> List[str]:
+    existing_args = existing_server.get("args") if existing_server else None
+    if not isinstance(existing_args, list) or not all(
+        isinstance(argument, str) for argument in existing_args
+    ):
+        return list(detected_args)
+    if existing_args[: len(detected_args)] != detected_args:
+        return list(detected_args)
+
+    arguments = []
+    index = 0
+    while index < len(existing_args):
+        argument = existing_args[index]
+        if argument == "--bridge":
+            index += 2 if index + 1 < len(existing_args) else 1
+        elif argument.startswith("--bridge="):
             index += 1
         else:
             arguments.append(argument)
@@ -407,7 +636,9 @@ def _set_server(
 
 
 def main(
-    launch_figcraft: bool = False, launch_effectcraft: bool = False
+    launch_figcraft: bool = False,
+    launch_effectcraft: bool = False,
+    launch_filmcraft: bool = False,
 ) -> int:
     if sys.platform not in {"darwin", "linux"}:
         print("ERROR: setup-config.py supports macOS and Linux.", file=sys.stderr)
@@ -541,6 +772,82 @@ def main(
                 "https://github.com/storytold/figcraft/releases to enable its MCP."
             )
 
+        existing_filmcraft = servers.get("filmcraft")
+        existing_filmcraft_server = (
+            existing_filmcraft if isinstance(existing_filmcraft, dict) else None
+        )
+        filmcraft_cli = _filmcraft_cli(existing_filmcraft_server)
+        if filmcraft_cli:
+            filmcraft_app = _filmcraft_app(filmcraft_cli)
+            filmcraft_args = _filmcraft_base_args(
+                ["mcp"], existing_filmcraft_server
+            )
+            control_port, token, filmcraft_running = _running_filmcraft_control(
+                filmcraft_app, existing_filmcraft_server
+            )
+            if (
+                control_port is None
+                and not filmcraft_running
+                and filmcraft_app
+                and launch_filmcraft
+            ):
+                token = _generate_control_token()
+                candidate_port = _available_port()
+                if _start_filmcraft_control(filmcraft_app, candidate_port, token):
+                    control_port = candidate_port
+            elif control_port is None and not filmcraft_running and filmcraft_app:
+                print(
+                    "FilmCraft is not running and will stay closed. "
+                    "Use the Open FilmCraft for Snapgent launcher when you want to connect it."
+                )
+            elif control_port is None and filmcraft_running:
+                print(
+                    "FilmCraft is already open. It will not be restarted; "
+                    "its MCP entry will run headless."
+                )
+                print(
+                    "Save your work, close FilmCraft, then run the Open FilmCraft for "
+                    "Snapgent helper."
+                )
+            elif control_port is None:
+                print("FilmCraft desktop app was not found; its MCP entry will run headless.")
+
+            if control_port is not None and token:
+                filmcraft_args.extend(["--bridge", f"127.0.0.1:{control_port}"])
+
+            existing_env = (
+                existing_filmcraft_server.get("env")
+                if existing_filmcraft_server
+                else None
+            )
+            filmcraft_env = (
+                {str(key): str(value) for key, value in existing_env.items()}
+                if isinstance(existing_env, dict)
+                else {}
+            )
+            if control_port is not None and token:
+                filmcraft_env["FILMCRAFT_CONTROL_TOKEN"] = token
+
+            if existing_filmcraft_server:
+                existing_filmcraft_server["command"] = str(filmcraft_cli)
+                existing_filmcraft_server["args"] = filmcraft_args
+                existing_filmcraft_server["env"] = filmcraft_env
+            else:
+                _set_server(servers, "filmcraft", str(filmcraft_cli), filmcraft_args)
+                servers["filmcraft"]["env"] = filmcraft_env
+            print(f"FilmCraft MCP detected: {filmcraft_cli}")
+        elif isinstance(existing_filmcraft, dict):
+            print(
+                "Configured FilmCraft MCP executable was not found: "
+                f"{existing_filmcraft.get('command', '')}"
+            )
+            print("Update mcpServers.filmcraft.command in config.json to match your installation.")
+        else:
+            print(
+                "FilmCraft not found; install it from "
+                "https://github.com/storytold/filmcraft/releases to enable its MCP."
+            )
+
         uvx_path = shutil.which("uvx")
         if uvx_path:
             _set_server(
@@ -575,10 +882,16 @@ if __name__ == "__main__":
         action="store_true",
         help="start EffectCraft in control mode if it is not already running",
     )
+    parser.add_argument(
+        "--launch-filmcraft",
+        action="store_true",
+        help="start FilmCraft in control mode if it is not already running",
+    )
     arguments = parser.parse_args()
     raise SystemExit(
         main(
             launch_figcraft=arguments.launch_figcraft,
             launch_effectcraft=arguments.launch_effectcraft,
+            launch_filmcraft=arguments.launch_filmcraft,
         )
     )

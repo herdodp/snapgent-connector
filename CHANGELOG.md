@@ -2,6 +2,33 @@
 
 All notable changes to snapgentV3 Free are documented here.
 
+## [V3.9.15] - 2026-11-28
+
+### Added
+- **Optional FilmCraft MCP support.** FilmCraft joins FigCraft and EffectCraft as an
+  optional craft-app target. `Open-FilmCraft-for-Snapgent.bat` and
+  `open-filmcraft-for-snapgent.sh` detect the FilmCraft CLI and desktop app, select an
+  available loopback port, and start the app with its control channel. FilmCraft's
+  control channel is token-protected, so the helper generates a fresh
+  `FILMCRAFT_CONTROL_TOKEN`, hands it to the desktop app through its environment, and
+  stores it in the FilmCraft MCP entry's `env` block so the bridge's MCP server
+  attaches with the same token. `start.bat` also re-detects a manually opened
+  FilmCraft control channel before the bridge starts.
+- **FilmCraft detection on every platform.** `setup-config.py` (macOS/Linux) detects
+  `filmcraft-cli` on PATH and common locations, and the desktop app or
+  `FilmCraft.app` bundle. `setup-config.ps1` (Windows) detects `filmcraft-cli.exe`
+  in the ArtCraft install folders and registry uninstall entries. On macOS the
+  launcher starts the binary inside the bundle directly, because `open -a` cannot
+  pass the control token through LaunchServices. On Linux, a desktop the user opened
+  by hand can still be attached: the helper reads the token from the running app's
+  `/proc` environment.
+
+### Notes
+- An already-running FilmCraft attaches only when its access token is known
+  (from the running app's environment on Linux, or from `config.json` on
+  Windows/macOS); otherwise the MCP entry runs headless and the helper asks you
+  to close FilmCraft and run it again.
+
 ## [V3.9.14] - 2026-11-22
 
 ### Added
